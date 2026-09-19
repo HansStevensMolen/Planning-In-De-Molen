@@ -10,6 +10,7 @@ export interface ParsedEmployeeRow {
   experience: ExperienceLevel;
   phone: string;
   email: string;
+  birthDate?: string;
   facebookUrl?: string;
   contractDaysPerWeek?: number;
   active: boolean;
@@ -94,6 +95,7 @@ export function exportEmployeesToExcel(employees: Employee[], filename = 'person
     'Naam': emp.name,
     'Afdeling': emp.department,
     'Statuut': emp.statuut,
+    'Geboortedatum': emp.birthDate || '',
     'Ervaring': emp.experience,
     'GSM_Telefoon': emp.phone || '',
     'Email': emp.email || '',
@@ -110,6 +112,7 @@ export function exportEmployeesToExcel(employees: Employee[], filename = 'person
     { wch: 26 }, // Naam
     { wch: 12 }, // Afdeling
     { wch: 14 }, // Statuut
+    { wch: 15 }, // Geboortedatum
     { wch: 18 }, // Ervaring
     { wch: 16 }, // GSM
     { wch: 30 }, // Email
@@ -127,7 +130,7 @@ export function exportEmployeesToExcel(employees: Employee[], filename = 'person
  * Export current employees into a CSV with UTF-8 BOM and semicolon (Excel friendly)
  */
 export function exportEmployeesToCSV(employees: Employee[], filename = 'personeel_in_de_molen.csv') {
-  const headers = ['ID', 'Naam', 'Afdeling', 'Statuut', 'Ervaring', 'GSM_Telefoon', 'Email', 'Contractdagen_Vast', 'Facebook_URL', 'Actief'];
+  const headers = ['ID', 'Naam', 'Afdeling', 'Statuut', 'Geboortedatum', 'Ervaring', 'GSM_Telefoon', 'Email', 'Contractdagen_Vast', 'Facebook_URL', 'Actief'];
   const sorted = sortEmployeesByFirstName(employees);
   
   const rows = sorted.map(emp => [
@@ -135,6 +138,7 @@ export function exportEmployeesToCSV(employees: Employee[], filename = 'personee
     `"${(emp.name || '').replace(/"/g, '""')}"`,
     emp.department,
     emp.statuut,
+    `"${(emp.birthDate || '').replace(/"/g, '""')}"`,
     emp.experience,
     `"${(emp.phone || '').replace(/"/g, '""')}"`,
     `"${(emp.email || '').replace(/"/g, '""')}"`,
@@ -179,6 +183,7 @@ export function parseEmployeeDataRows(rawRows: any[][]): ParsedEmployeeRow[] {
     const nameIdx = headers.findIndex(h => h.includes('naam') || h.includes('name'));
     const deptIdx = headers.findIndex(h => h.includes('afdeling') || h.includes('dept') || h.includes('rol'));
     const statuutIdx = headers.findIndex(h => h.includes('statuut') || h.includes('status') || h.includes('type'));
+    const birthIdx = headers.findIndex(h => h.includes('geboorte') || h.includes('birth') || h.includes('geb') || h.includes('dob'));
     const expIdx = headers.findIndex(h => h.includes('ervaring') || h.includes('niveau') || h.includes('level') || h.includes('exp'));
     const phoneIdx = headers.findIndex(h => h.includes('gsm') || h.includes('telefoon') || h.includes('phone') || h.includes('tel') || h.includes('mobiel'));
     const emailIdx = headers.findIndex(h => h.includes('mail'));
@@ -201,6 +206,28 @@ export function parseEmployeeDataRows(rawRows: any[][]): ParsedEmployeeRow[] {
       const email = emailIdx !== -1 && row[emailIdx] ? String(row[emailIdx]).trim() : '';
       const daysVal = daysIdx !== -1 && row[daysIdx] ? parseInt(String(row[daysIdx]).replace(/[^0-9]/g, ''), 10) : undefined;
       const facebookUrl = fbIdx !== -1 && row[fbIdx] ? String(row[fbIdx]).trim() : undefined;
+
+      let birthDate: string | undefined;
+      if (birthIdx !== -1 && row[birthIdx]) {
+        const rawBirth = row[birthIdx];
+        if (typeof rawBirth === 'number') {
+          const date = XLSX.SSF.parse_date_code(rawBirth);
+          if (date) {
+            const y = date.y;
+            const m = String(date.m).padStart(2, '0');
+            const d = String(date.d).padStart(2, '0');
+            birthDate = `${y}-${m}-${d}`;
+          }
+        } else {
+          const bStr = String(rawBirth).trim();
+          const dmy = bStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+          if (dmy) {
+            birthDate = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+          } else if (/^\d{4}-\d{2}-\d{2}$/.test(bStr)) {
+            birthDate = bStr;
+          }
+        }
+      }
       
       let active = true;
       if (activeIdx !== -1 && row[activeIdx]) {
@@ -218,6 +245,7 @@ export function parseEmployeeDataRows(rawRows: any[][]): ParsedEmployeeRow[] {
         experience,
         phone,
         email,
+        birthDate: birthDate || undefined,
         contractDaysPerWeek: !isNaN(daysVal as number) ? daysVal : (statuut === 'Vast' ? 5 : undefined),
         facebookUrl: facebookUrl || undefined,
         active,
@@ -320,6 +348,9 @@ export function calculateEmployeeDiff(
       if (row.experience !== match.experience) changes.push(`Ervaring: "${match.experience}" ➔ "${row.experience}"`);
       if (row.phone && row.phone !== match.phone) changes.push(`GSM: "${match.phone || '-'}" ➔ "${row.phone}"`);
       if (row.email && row.email !== match.email) changes.push(`Email: "${match.email || '-'}" ➔ "${row.email}"`);
+      if (row.birthDate && row.birthDate !== match.birthDate) {
+        changes.push(`Geboortedatum: "${match.birthDate || '-'}" ➔ "${row.birthDate}"`);
+      }
       if (row.contractDaysPerWeek !== undefined && row.contractDaysPerWeek !== match.contractDaysPerWeek) {
         changes.push(`Dagen/week: "${match.contractDaysPerWeek ?? '-'}" ➔ "${row.contractDaysPerWeek}"`);
       }

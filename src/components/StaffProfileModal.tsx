@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, User, Phone, Mail, Facebook, Check, Sparkles, Building2, Briefcase, AlertCircle, ExternalLink, KeyRound, Eye, EyeOff, UserPlus } from 'lucide-react';
+import { X, User, Phone, Mail, Facebook, Check, Sparkles, Building2, Briefcase, AlertCircle, ExternalLink, KeyRound, Eye, EyeOff, UserPlus, Calendar, ShieldAlert } from 'lucide-react';
 import { Employee, Department, EmployeeStatuut, ExperienceLevel } from '../types';
+import { calculateAge } from '../utils/employeeAgeUtils';
 
 interface StaffProfileModalProps {
   isOpen: boolean;
@@ -28,11 +29,15 @@ export default function StaffProfileModal({
   const [facebook, setFacebook] = useState('');
   const [department, setDepartment] = useState<Department>('zaal');
   const [statuut, setStatuut] = useState<EmployeeStatuut>('Student');
+  const [birthDate, setBirthDate] = useState('');
   const [experience, setExperience] = useState<ExperienceLevel>('Beginner');
   const [email, setEmail] = useState('');
   const [pin, setPin] = useState('1234');
   const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const calculatedAge = calculateAge(birthDate);
+  const isMinor = calculatedAge !== null && calculatedAge < 18;
 
   useEffect(() => {
     if (employee) {
@@ -41,6 +46,7 @@ export default function StaffProfileModal({
       setFacebook(employee.facebookUrl || '');
       setDepartment(employee.department || 'zaal');
       setStatuut(employee.statuut || 'Student');
+      setBirthDate(employee.birthDate || '');
       setExperience(employee.experience || 'Beginner');
       setEmail(employee.email || '');
       setPin(employee.pin || '1234');
@@ -50,6 +56,7 @@ export default function StaffProfileModal({
       setFacebook('');
       setDepartment('zaal');
       setStatuut('Student');
+      setBirthDate('');
       setExperience('Beginner');
       setEmail('');
       setPin('1234');
@@ -77,6 +84,7 @@ export default function StaffProfileModal({
     const cleanName = name.trim();
     const cleanPhone = phone.trim();
     const cleanEmail = email.trim();
+    const cleanBirthDate = birthDate.trim();
     const cleanPin = pin.trim() || (employee?.pin ? employee.pin : '1234');
     const normalizedFacebook = normalizeFacebookUrl(facebook);
 
@@ -87,6 +95,12 @@ export default function StaffProfileModal({
 
     if (!cleanPhone) {
       setError('Vul a.u.b. een telefoonnummer (GSM) in zodat het team je kan bereiken.');
+      return;
+    }
+
+    // Mandatory Date of Birth check for students
+    if (statuut === 'Student' && !cleanBirthDate) {
+      setError('Geboortedatum is wettelijk verplicht voor studenten om de arbeidsregels voor minderjarigen (-18 jaar: max 23u en max 8u/dag) te kunnen controleren.');
       return;
     }
 
@@ -114,6 +128,7 @@ export default function StaffProfileModal({
         name: cleanName,
         department,
         statuut,
+        birthDate: cleanBirthDate || undefined,
         experience,
         color: chosenColor,
         textBgColor: `${parts[0]} ${parts[1]}`,
@@ -137,6 +152,7 @@ export default function StaffProfileModal({
         ...employee,
         name: cleanName,
         phone: cleanPhone,
+        birthDate: cleanBirthDate || undefined,
         facebookUrl: normalizedFacebook || undefined,
         department,
         statuut,
@@ -342,6 +358,72 @@ export default function StaffProfileModal({
                 <option value="Verantwoordelijke">Verantwoordelijke</option>
               </select>
             </div>
+          </div>
+
+          {/* 5b. Geboortedatum & Leeftijdscontrole (Wettelijk verplicht voor studenten) */}
+          <div className={`p-3.5 rounded-2xl border transition-all ${
+            statuut === 'Student' 
+              ? 'bg-amber-50/70 border-amber-300 shadow-xs' 
+              : 'bg-slate-50/80 border-slate-200'
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
+              <label htmlFor="staff-profile-birthdate" className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
+                <Calendar size={14} className={statuut === 'Student' ? 'text-amber-600' : 'text-slate-500'} />
+                <span>Geboortedatum</span>
+                {statuut === 'Student' ? (
+                  <span className="text-[10px] font-black text-amber-900 bg-amber-200/90 border border-amber-300 px-2 py-0.5 rounded-full">
+                    Verplicht voor studenten *
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-medium lowercase">(optioneel)</span>
+                )}
+              </label>
+
+              {calculatedAge !== null && (
+                <div className="flex items-center gap-1">
+                  {isMinor ? (
+                    <span className="text-[11px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                      <ShieldAlert size={12} className="text-rose-600" />
+                      <span>{calculatedAge} jaar • Minderjarig (-18)</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-lg">
+                      ✓ {calculatedAge} jaar • Meerderjarig (18+)
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <input
+              id="staff-profile-birthdate"
+              type="date"
+              value={birthDate}
+              onChange={(e) => setBirthDate(e.target.value)}
+              required={statuut === 'Student'}
+              className="w-full bg-white border-2 border-slate-300 text-slate-900 rounded-xl px-3.5 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 transition"
+            />
+
+            {statuut === 'Student' && (
+              <div className="mt-2 text-[11px] font-semibold leading-relaxed">
+                {isMinor ? (
+                  <div className="text-rose-900 bg-rose-50 border border-rose-200 p-2 rounded-xl flex items-start gap-1.5">
+                    <ShieldAlert size={15} className="text-rose-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Belgische wetgeving studenten &lt; 18 jaar:</strong> Mag <u>niet na 23u00</u> werken en <u>maximaal 8 uur per dag</u>. Het systeem blokkeert automatisch overtredingen bij de roosterplanning.
+                    </span>
+                  </div>
+                ) : calculatedAge !== null ? (
+                  <p className="text-emerald-800">
+                    ✓ Meerderjarig: mag na 23u00 werken en sluitdiensten draaien.
+                  </p>
+                ) : (
+                  <p className="text-amber-800">
+                    ℹ️ Vul je geboortedatum in zodat we weten of de regels voor -18 jaar (verbod op werk na 23u00 & max 8u/dag) van toepassing zijn.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 6. Persoonlijke 4-cijferige Pincode */}

@@ -1869,11 +1869,6 @@ export default function StaffPortal({
                               <div>
                                 <div className="flex items-center gap-1">
                                   <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{dayName}</span>
-                                  {isSunday && (
-                                    <span className="text-[8px] font-black text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
-                                      10u
-                                    </span>
-                                  )}
                                 </div>
                                 <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md mt-0.5 shadow-2xs">
                                   {getDayDateInfo(selectedWeek, dayIdx).shortDate}

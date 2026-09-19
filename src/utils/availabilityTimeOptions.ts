@@ -1,8 +1,13 @@
 /**
  * Availability time helpers for Eet-staminée In De Molen
- * Enforces standardized options:
- * - Start time (beginuur): 'Open' (or specific hours like 12u00, 14u00, 16u00, 17u00, 18u00)
- * - End time (einduur): 'Sluit', 'Hulpsluit' (or specific departure hours like 18u00, 21u00, 23u00)
+ * Openingsuren:
+ * - Maandag t/m Donderdag: 11u30 tot 01u00
+ * - Vrijdag en Zaterdag: 11u30 tot 02u00
+ * - Zondag: 10u00 tot 00u00
+ *
+ * Studenten < 18 jaar:
+ * - Mogen niet na 23u00 werken (geen Sluit / Hulpsluit)
+ * - Mogen niet langer dan 8u per dag werken
  */
 
 export interface QuickPreset {
@@ -18,22 +23,32 @@ export interface QuickPreset {
  * 0 = Monday, ..., 6 = Sunday.
  */
 export const getBeginTimes = (day: number): string[] => {
-  if (day === 6) { // Zondag / Feestdagen (opening va. 10:00)
-    return ['Open', 'Open (10u00)', '12u00', '14u00', '16u00', '17u00', '18u00'];
+  if (day === 6) { // Zondag (opening 10:00)
+    return ['Open', '10u00', '12u00', '14u00', '16u00', '17u00', '18u00'];
   }
-  return ['Open', '14u00', '16u00', '17u00', '18u00']; // Maandag t/m Zaterdag
+  // Maandag t/m Zaterdag (opening 11:30)
+  return ['Open', '11u30', '12u00', '14u00', '16u00', '17u00', '18u00'];
 };
 
 /**
  * Returns available end time options for a given day and start time.
- * Specifically provides 'Sluit' and 'Hulpsluit' as first-class options.
+ * If isMinorStudent is true, hides Sluit and Hulpsluit (since closing is 01:00/02:00/00:00).
  */
-export const getEndTimes = (day: number, startTime?: string): string[] => {
+export const getEndTimes = (day: number, startTime?: string, isMinorStudent = false): string[] => {
   const isSunday = day === 6;
   const start = (startTime || 'Open').toLowerCase();
   const times: string[] = [];
 
-  // Eindopties: Sluit en Hulpsluit vooraan voor snelle selectie
+  // Minor students (<18) may NOT work after 23:00!
+  if (isMinorStudent) {
+    times.push('23u00');
+    times.push('22u00');
+    times.push('21u00');
+    times.push('18u00');
+    return times;
+  }
+
+  // Eindopties voor meerderjarigen: Sluit en Hulpsluit vooraan voor snelle selectie
   times.push('Sluit');
   times.push('Hulpsluit');
 
@@ -69,15 +84,43 @@ export const normalizeAvailabilityTime = (val?: string): string => {
 /**
  * Common quick presets for fast 1-click availability filling
  */
-export const getQuickAvailabilityPresets = (day: number): QuickPreset[] => {
+export const getQuickAvailabilityPresets = (day: number, isMinor = false): QuickPreset[] => {
   const isSunday = day === 6;
+
+  if (isMinor) {
+    // Presets strictly within legal bounds: max 8h, ending at or before 23:00
+    return [
+      {
+        label: '16u00 - 23u00',
+        start: '16u00',
+        end: '23u00',
+        badge: '🌙 Avond (Max 23u)',
+        description: '7 uur avonddienst (conform -18 wetgeving)'
+      },
+      {
+        label: '17u00 - 23u00',
+        start: '17u00',
+        end: '23u00',
+        badge: '⚡ Kort Avond',
+        description: '6 uur avonddienst (tot 23u00)'
+      },
+      {
+        label: isSunday ? '10u00 - 18u00' : '11u30 - 18u00',
+        start: isSunday ? '10u00' : '11u30',
+        end: '18u00',
+        badge: '☀️ Dagdienst',
+        description: isSunday ? '8 uur dagdienst (10:00 tot 18:00)' : '6.5 uur dagdienst (11:30 tot 18:00)'
+      }
+    ];
+  }
+
   return [
     {
       label: 'Open - Sluit',
       start: 'Open',
       end: 'Sluit',
       badge: '✨ Volledig',
-      description: isSunday ? 'Vanaf 10u00 tot sluit' : 'Vanaf opening tot sluit'
+      description: isSunday ? 'Vanaf 10u00 tot sluit' : 'Vanaf 11u30 tot sluit'
     },
     {
       label: 'Open - Hulpsluit',
@@ -101,11 +144,18 @@ export const getQuickAvailabilityPresets = (day: number): QuickPreset[] => {
       description: 'Vanaf 16:00 tot hulpsluiting'
     },
     {
-      label: isSunday ? 'Open - 18u00' : 'Open - 18u00',
-      start: 'Open',
+      label: '16u00 - 23u00',
+      start: '16u00',
+      end: '23u00',
+      badge: '🕐 Tot 23u',
+      description: 'Vaste avondshift tot 23:00'
+    },
+    {
+      label: isSunday ? '10u00 - 18u00' : '11u30 - 18u00',
+      start: isSunday ? '10u00' : '11u30',
       end: '18u00',
       badge: '☀️ Dagshift',
-      description: isSunday ? '10:00 tot 18:00 dagdienst' : 'Opening tot 18:00 dagdienst'
+      description: isSunday ? '10:00 tot 18:00 dagdienst' : '11:30 tot 18:00 dagdienst'
     },
     {
       label: '18u00 - Sluit',

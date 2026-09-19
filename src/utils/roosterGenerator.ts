@@ -1,4 +1,5 @@
 import { Shift, Employee, EmployeeAvailability, Department } from '../types';
+import { isMinorStudent, isShiftEndingAfter23, calculateShiftDurationHours } from './employeeAgeUtils';
 
 export interface RequiredSlot {
   period: 'overdag' | 'avond';
@@ -294,6 +295,12 @@ export function generateSmartAutoPlan(
           continue;
         }
 
+        const isEmpMinor = isMinorStudent(emp);
+        // Wettelijke regel: Minderjarige studenten (<18) mogen NOOIT sluit- of hulpsluitdiensten draaien (werk na 23u00 verboden)
+        if (isEmpMinor && (slot.roleType === 'sluit' || slot.roleType === 'hulpsluit')) {
+          continue;
+        }
+
         let score = 100; // Base score
         let candidateStart = slot.defaultStart;
         let candidateEnd = slot.defaultEnd;
@@ -341,6 +348,17 @@ export function generateSmartAutoPlan(
         } else {
           // No availability submitted for this week: neutral priority
           score += 50;
+        }
+
+        // Wetgeving controle voor minderjarigen (<18): mag niet na 23u00 & max 8u/dag
+        if (isEmpMinor) {
+          if (isShiftEndingAfter23(candidateEnd, day)) {
+            candidateEnd = '23u00';
+          }
+          const duration = calculateShiftDurationHours(candidateStart, candidateEnd, day);
+          if (duration > 8) {
+            continue; // Overschrijdt 8 uur per dag limiet
+          }
         }
 
         // 2. Department matching
@@ -409,10 +427,22 @@ export function generateSmartAutoPlan(
 
       // If no valid candidate was found (e.g. extreme shortage), fallback to any employee not working today
       if (!bestCandidate) {
-        bestCandidate = pool.find(e => !assignedToday.has(e.id)) || pool[0];
+        const isClosingRole = slot.roleType === 'sluit' || slot.roleType === 'hulpsluit';
+        bestCandidate = pool.find(e => {
+          if (assignedToday.has(e.id)) return false;
+          if (isClosingRole && isMinorStudent(e)) return false;
+          return true;
+        }) || pool.find(e => !isClosingRole || !isMinorStudent(e)) || pool[0];
       }
 
       if (bestCandidate) {
+        // Double-check: If candidate is minor student, never end past 23:00
+        if (isMinorStudent(bestCandidate)) {
+          if (isShiftEndingAfter23(matchedEndTime, day)) {
+            matchedEndTime = '23u00';
+          }
+        }
+
         assignedToday.add(bestCandidate.id);
         shiftCounts[bestCandidate.id] = (shiftCounts[bestCandidate.id] || 0) + 1;
 

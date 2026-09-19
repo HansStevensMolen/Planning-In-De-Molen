@@ -35,6 +35,7 @@ export interface Employee {
   active: boolean;
   firstLoginComplete?: boolean;
   pin?: string; // Persoonlijke 4-cijferige pincode voor personeelslogin (standaard '1234')
+  birthDate?: string; // Geboortedatum (YYYY-MM-DD), wettelijk verplicht voor studenten
 }
 
 export interface Shift {

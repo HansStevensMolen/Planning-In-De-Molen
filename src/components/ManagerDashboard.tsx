@@ -40,7 +40,8 @@ import {
   CalendarPlus,
   Zap,
   Send,
-  ChevronDown
+  ChevronDown,
+  ShieldAlert
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department } from '../types';
 import NotificationModal from './NotificationModal';
@@ -53,6 +54,17 @@ import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import {
+  calculateAge,
+  formatBirthDate,
+  isStudent,
+  isMinorStudent,
+  isStudentMissingBirthDate,
+  validateMinorShift,
+  isShiftEndingAfter23,
+  calculateShiftDurationHours
+} from '../utils/employeeAgeUtils';
+import { CAFE_OPENING_HOURS, CAFE_SUMMARY_OPENING_HOURS } from '../utils/openingHours';
 
 interface ManagerDashboardProps {
   employees: Employee[];
@@ -157,9 +169,20 @@ export default function ManagerDashboard({
   const [showQuickNoticeModal, setShowQuickNoticeModal] = useState(false);
   const [isConfirmingDeleteShift, setIsConfirmingDeleteShift] = useState(false);
   const [selectedShift, setSelectedShift] = useState<Partial<Shift> & { isNew: boolean }>({ isNew: true });
+  const [shiftValidationError, setShiftValidationError] = useState<string | null>(null);
   
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
-  const [newEmp, setNewEmp] = useState({ name: '', department: 'zaal' as Department, statuut: 'Student' as EmployeeStatuut, experience: 'Beginner' as ExperienceLevel, email: '', phone: '', facebookUrl: '', pin: '1234' });
+  const [newEmp, setNewEmp] = useState({ 
+    name: '', 
+    department: 'zaal' as Department, 
+    statuut: 'Student' as EmployeeStatuut, 
+    birthDate: '',
+    experience: 'Beginner' as ExperienceLevel, 
+    email: '', 
+    phone: '', 
+    facebookUrl: '', 
+    pin: '1234' 
+  });
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [bulkNamesText, setBulkNamesText] = useState('');
   const [bulkDepartment, setBulkDepartment] = useState<Department>('zaal');
@@ -171,6 +194,7 @@ export default function ManagerDashboard({
   const [editEmpName, setEditEmpName] = useState('');
   const [editEmpDepartment, setEditEmpDepartment] = useState<Department>('zaal');
   const [editEmpStatuut, setEditEmpStatuut] = useState<EmployeeStatuut>('Student');
+  const [editEmpBirthDate, setEditEmpBirthDate] = useState('');
   const [editEmpExperience, setEditEmpExperience] = useState<ExperienceLevel>('Beginner');
   const [editEmpEmail, setEditEmpEmail] = useState('');
   const [editEmpPhone, setEditEmpPhone] = useState('');
@@ -402,6 +426,7 @@ export default function ManagerDashboard({
       status: 'draft',
       acknowledged: false
     });
+    setShiftValidationError(null);
     setShowShiftModal(true);
   };
 
@@ -412,6 +437,7 @@ export default function ManagerDashboard({
       ...shift,
       isNew: false
     });
+    setShiftValidationError(null);
     setShowShiftModal(true);
   };
 
@@ -421,6 +447,20 @@ export default function ManagerDashboard({
 
     const shiftDept = selectedShift.department || (employees.find(e => e.id === selectedShift.employeeId)?.department) || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
     const targetWeekNumber = selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek;
+    const assignedEmp = employees.find(e => e.id === selectedShift.employeeId);
+
+    // Controleer strikte arbeidswetgeving voor minderjarige studenten (< 18: max 23u00 en max 8u/dag)
+    const minorValidation = validateMinorShift(
+      assignedEmp,
+      { startTime: selectedShift.startTime, endTime: selectedShift.endTime, day: selectedShift.day },
+      shifts.filter(s => s.weekNumber === targetWeekNumber),
+      selectedShift.id
+    );
+
+    if (!minorValidation.valid) {
+      setShiftValidationError(minorValidation.error || 'Deze dienst is wettelijk niet toegestaan voor minderjarige studenten.');
+      return;
+    }
 
     if (selectedShift.isNew) {
       onAddShift({
@@ -449,6 +489,7 @@ export default function ManagerDashboard({
         updatedAt: Date.now()
       });
     }
+    setShiftValidationError(null);
     setShowShiftModal(false);
   };
 
@@ -463,6 +504,11 @@ export default function ManagerDashboard({
   const handleCreateEmployee = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newEmp.name) return;
+
+    if (newEmp.statuut === 'Student' && !newEmp.birthDate) {
+      alert('Geboortedatum is verplicht voor studenten om de wetgeving voor minderjarigen (-18 jaar: max tot 23u00 & max 8u/dag) te handhaven.');
+      return;
+    }
 
     // Direct color styling depending on index to match beautifully
     const colors = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
@@ -486,6 +532,7 @@ export default function ManagerDashboard({
       name: newEmp.name,
       department: newEmp.department || 'zaal',
       statuut: newEmp.statuut,
+      birthDate: newEmp.birthDate ? newEmp.birthDate : undefined,
       experience: newEmp.experience,
       color: chosenColor,
       textBgColor: `${parts[0]} ${parts[1]}`,
@@ -498,7 +545,7 @@ export default function ManagerDashboard({
       pin: newEmp.pin.trim() || '1234'
     });
 
-    setNewEmp({ name: '', department: 'zaal', statuut: 'Student', experience: 'Beginner', email: '', phone: '', facebookUrl: '', pin: '1234' });
+    setNewEmp({ name: '', department: 'zaal', statuut: 'Student', birthDate: '', experience: 'Beginner', email: '', phone: '', facebookUrl: '', pin: '1234' });
     setShowEmployeeModal(false);
   };
 
@@ -555,6 +602,7 @@ export default function ManagerDashboard({
     setEditEmpName(emp.name);
     setEditEmpDepartment(emp.department || 'zaal');
     setEditEmpStatuut(emp.statuut);
+    setEditEmpBirthDate(emp.birthDate || '');
     setEditEmpExperience(emp.experience);
     setEditEmpEmail(emp.email || '');
     setEditEmpPhone(emp.phone || '');
@@ -567,12 +615,17 @@ export default function ManagerDashboard({
       alert('Vul een naam in.');
       return;
     }
+    if (editEmpStatuut === 'Student' && !editEmpBirthDate) {
+      alert('Geboortedatum is verplicht voor studenten om de wetgeving voor minderjarigen (-18 jaar: max tot 23u00 & max 8u/dag) te handhaven.');
+      return;
+    }
     const cleanPin = editEmpPin.trim() || '1234';
     onUpdateEmployee({
       ...emp,
       name: editEmpName,
       department: editEmpDepartment,
       statuut: editEmpStatuut,
+      birthDate: editEmpBirthDate ? editEmpBirthDate : undefined,
       experience: editEmpExperience,
       email: editEmpEmail,
       phone: editEmpPhone,
@@ -1502,12 +1555,6 @@ export default function ManagerDashboard({
                               {dayDateInfo.shortDate}
                             </span>
                           </div>
-                          <div className="text-[10px] font-bold text-orange-700 flex items-center justify-between">
-                            <span>{dIdx === 6 ? 'va. 10u00 open' : 'va. 16u00 open'}</span>
-                            {dIdx === 6 && (
-                              <span className="text-[8px] font-black text-amber-900 bg-amber-200 px-1.5 py-0.2 rounded border border-amber-300">Zon</span>
-                            )}
-                          </div>
                           <div className="text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
                             2 overdag • {eveningTarget} avond
                           </div>
@@ -1958,13 +2005,7 @@ export default function ManagerDashboard({
                               <span className="px-2.5 py-0.5 rounded-lg bg-orange-100 text-orange-950 font-black text-xs border border-orange-200 shadow-2xs">
                                 {dayDateInfo.shortDate}
                               </span>
-                              {idx === 6 && (
-                                <span className="text-[8px] font-black text-amber-800 bg-amber-200/80 border border-amber-300 px-1 py-0.2 rounded">va. 10u</span>
-                              )}
                             </div>
-                            <span className="text-[9px] font-bold text-slate-500 block normal-case font-mono mt-0.5">
-                              {idx === 6 ? 'Zon/feestdag' : 'va. 16:00 open'}
-                            </span>
                           </th>
                         );
                       })}
@@ -2414,6 +2455,46 @@ export default function ManagerDashboard({
                         </div>
                       </div>
 
+                      {/* Geboortedatum (verplicht voor studenten) */}
+                      <div className="space-y-1 bg-amber-50/60 border border-amber-200/80 rounded-xl p-2.5">
+                        <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <span>🎂 Geboortedatum</span>
+                            {editEmpStatuut === 'Student' && (
+                              <span className="text-[8px] font-black text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded border border-rose-200 uppercase">
+                                Verplicht voor studenten
+                              </span>
+                            )}
+                          </span>
+                          {editEmpBirthDate && calculateAge(editEmpBirthDate) !== null && (
+                            <span className="text-[10px] font-black text-slate-800">
+                              {calculateAge(editEmpBirthDate)} jaar
+                            </span>
+                          )}
+                        </label>
+                        <input
+                          type="date"
+                          value={editEmpBirthDate}
+                          onChange={(e) => setEditEmpBirthDate(e.target.value)}
+                          className="w-full bg-white border border-slate-300 text-slate-850 rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold"
+                        />
+                        {editEmpBirthDate && calculateAge(editEmpBirthDate) !== null && (
+                          <div className="pt-0.5">
+                            {calculateAge(editEmpBirthDate)! < 18 ? (
+                              <p className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 flex items-center gap-1">
+                                <span>🔞</span>
+                                <span>Minderjarig (&lt;18 jaar): mag niet na 23u00 werken en max. 8 uur per dag.</span>
+                              </p>
+                            ) : (
+                              <p className="text-[10px] font-semibold text-emerald-700 flex items-center gap-1">
+                                <span>✓</span>
+                                <span>Meerderjarig (18+ jaar)</span>
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold text-slate-500 uppercase">E-mail</label>
@@ -2567,6 +2648,25 @@ export default function ManagerDashboard({
                                 {emp.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
                               </span>
                               {renderStatuutBadge(emp.statuut)}
+                              {emp.birthDate ? (
+                                <span 
+                                  className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight ${
+                                    isMinorStudent(emp)
+                                      ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                  }`}
+                                  title={isMinorStudent(emp) ? 'Minderjarige student: mag niet na 23u00 werken en max 8u per dag' : '18+ medewerker'}
+                                >
+                                  🎂 {calculateAge(emp.birthDate)}j {isMinorStudent(emp) ? '(-18 Jr: max 23u)' : ''}
+                                </span>
+                              ) : isStudent(emp) ? (
+                                <span 
+                                  className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-amber-100 text-amber-900 border border-amber-300 animate-pulse"
+                                  title="Geboortedatum is verplicht voor studenten om wettelijke -18 regels te controleren"
+                                >
+                                  ⚠️ Geboortedatum ontbreekt
+                                </span>
+                              ) : null}
                               {renderExperienceBadge(emp.experience)}
                               {hasAcceptedWeekly ? (
                                 <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-emerald-50 text-emerald-800 border border-emerald-200">
@@ -2714,217 +2814,308 @@ export default function ManagerDashboard({
 
 
       {/* SHIFT TOEVOEGEN/BEWERKEN MODAL */}
-      {showShiftModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-base font-bold text-slate-800">
-                {selectedShift.isNew ? 'Nieuwe Dienst Toevoegen' : 'Dienst Bewerken'}
-              </h3>
-              <button 
-                onClick={() => setShowShiftModal(false)}
-                className="text-slate-400 hover:text-slate-600 bg-slate-50 p-1.5 rounded-full transition"
-              >
-                <X size={16} />
-              </button>
-            </div>
+      {showShiftModal && (() => {
+        const currentAssignedEmp = employees.find(e => e.id === selectedShift.employeeId);
+        const currentEmpAge = currentAssignedEmp ? calculateAge(currentAssignedEmp.birthDate) : null;
+        const isSelectedEmpMinor = currentAssignedEmp ? isMinorStudent(currentAssignedEmp) : false;
+        const isSelectedEmpMissingDob = currentAssignedEmp ? isStudentMissingBirthDate(currentAssignedEmp) : false;
 
-            <form onSubmit={handleSaveShift} className="space-y-4">
-              
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-600">Weekrooster</label>
-                <select
-                  value={selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek}
-                  onChange={(e) => setSelectedShift({ ...selectedShift, weekNumber: parseInt(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+        const currentShiftValidation = selectedShift.employeeId && selectedShift.startTime && selectedShift.endTime && selectedShift.day !== undefined
+          ? validateMinorShift(
+              currentAssignedEmp,
+              { startTime: selectedShift.startTime, endTime: selectedShift.endTime, day: selectedShift.day },
+              shifts.filter(s => s.weekNumber === (selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek)),
+              selectedShift.id
+            )
+          : { valid: true, isMinor: false, age: null, shiftHours: 0, error: undefined };
+
+        const hasValidationError = !currentShiftValidation.valid || Boolean(shiftValidationError);
+        const activeErrorMessage = currentShiftValidation.error || shiftValidationError;
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center">
+                <h3 className="text-base font-bold text-slate-800">
+                  {selectedShift.isNew ? 'Nieuwe Dienst Toevoegen' : 'Dienst Bewerken'}
+                </h3>
+                <button 
+                  onClick={() => setShowShiftModal(false)}
+                  className="text-slate-400 hover:text-slate-600 bg-slate-50 p-1.5 rounded-full transition cursor-pointer"
                 >
-                  {activeWeeks.map(w => (
-                    <option key={w.weekNumber} value={w.weekNumber}>
-                      {w.label} ({w.dateRange}) {w.isUpcoming ? '• (Vanaf volgende week)' : ''}
-                    </option>
-                  ))}
-                </select>
+                  <X size={16} />
+                </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Medewerker</label>
-                  <select
-                    required
-                    value={selectedShift.employeeId || ''}
-                    onChange={(e) => {
-                      const empId = e.target.value;
-                      const emp = employees.find(x => x.id === empId);
-                      setSelectedShift({ 
-                        ...selectedShift, 
-                        employeeId: empId,
-                        department: emp?.department || selectedShift.department || 'zaal'
-                      });
-                    }}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="" disabled>Kies medewerker...</option>
-                    {sortEmployeesByFirstName(employees).map(e => (
-                      <option key={e.id} value={e.id}>{e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Afdeling (Tabblad)</label>
-                  <select
-                    required
-                    value={selectedShift.department || 'zaal'}
-                    onChange={(e) => setSelectedShift({ ...selectedShift, department: e.target.value as Department })}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
-                  >
-                    <option value="zaal">🍽️ Zaal (IDM Zaal)</option>
-                    <option value="keuken">🍳 Keuken (IDM Keuken)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Dag van de week</label>
-                  <select
-                    required
-                    value={selectedShift.day !== undefined ? selectedShift.day : ''}
-                    onChange={(e) => setSelectedShift({ ...selectedShift, day: parseInt(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    {DAYS_OF_WEEK.map((d, idx) => (
-                      <option key={idx} value={idx}>{d}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Dienststatus</label>
-                  <select
-                    required
-                    value={selectedShift.status || 'draft'}
-                    onChange={(e) => setSelectedShift({ ...selectedShift, status: e.target.value as any })}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="draft">Ontwerp (Geheim)</option>
-                    <option value="published">Gepubliceerd (Zichtbaar)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Begintijd</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Bijv. Open, 16u00, 17u00"
-                    value={selectedShift.startTime || ''}
-                    onChange={(e) => setSelectedShift({ ...selectedShift, startTime: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                  />
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {['Open', '10u00', '15u30', '16u00', '16u30', '17u00'].map((time) => (
-                      <button
-                        type="button"
-                        key={time}
-                        onClick={() => setSelectedShift({ ...selectedShift, startTime: time })}
-                        className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition ${
-                          selectedShift.startTime === time ? 'bg-orange-500 text-white border-orange-600' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-                        }`}
-                      >
-                        {time}
-                      </button>
-                    ))}
+              {/* Wettelijke waarschuwingen voor minderjarigen & studenten */}
+              {isSelectedEmpMissingDob && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 text-xs text-amber-900 flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold">Geboortedatum ontbreekt voor {currentAssignedEmp?.name}</p>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      Studenten &lt; 18 jaar mogen niet na 23u00 werken en maximaal 8u per dag. Vul de geboortedatum in via Medewerkers om de regels automatisch te handhaven.
+                    </p>
                   </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Eindtijd</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Bijv. 18u00, Sluit, Hulpsluit"
-                    value={selectedShift.endTime || ''}
-                    onChange={(e) => setSelectedShift({ ...selectedShift, endTime: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                  />
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {['18u00', '23u00', '23u30', 'Sluit', 'Hulpsluit'].map((time) => (
-                      <button
-                        type="button"
-                        key={time}
-                        onClick={() => setSelectedShift({ ...selectedShift, endTime: time })}
-                        className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition ${
-                          selectedShift.endTime === time ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-                        }`}
-                      >
-                        {time}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-600">Speciale instructies of opmerkingen</label>
-                <textarea
-                  rows={2}
-                  placeholder="Bijv: Inclusief sluiting en terras opruimen"
-                  value={selectedShift.notes || ''}
-                  onChange={(e) => setSelectedShift({ ...selectedShift, notes: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none animate-none"
-                />
-              </div>
-
-              {!selectedShift.isNew && (
-                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Bevestigd door medewerker:</span>
-                  {selectedShift.acknowledged ? (
-                    <span className="text-emerald-700 font-bold flex items-center bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100"><Check size={12} className="mr-0.5 inline" /> Ja</span>
-                  ) : (
-                    <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-medium">Nee</span>
-                  )}
                 </div>
               )}
 
-              <div className="flex space-x-2 pt-2">
+              {isSelectedEmpMinor && (
+                <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3 text-xs text-rose-950 flex items-start gap-2">
+                  <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black flex items-center gap-1.5">
+                      <span>🔞 Minderjarige student ({currentAssignedEmp?.name}, {currentEmpAge} jaar)</span>
+                    </p>
+                    <p className="text-[11px] text-rose-800 mt-0.5 font-medium">
+                      Arbeidswetgeving: verboden te werken na <strong>23u00</strong> (geen Sluit/Hulpsluit) en maximaal <strong>8 uur per dag</strong>.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {hasValidationError && (
+                <div className="bg-red-50 border-2 border-red-500 rounded-2xl p-3 text-xs text-red-900 flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-650 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black text-red-700 uppercase tracking-tight">Wettelijke Arbeidsbeperking (-18 Jaar)</p>
+                    <p className="text-[11px] font-bold text-red-800 mt-0.5">{activeErrorMessage}</p>
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveShift} className="space-y-4">
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Weekrooster</label>
+                  <select
+                    value={selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek}
+                    onChange={(e) => {
+                      setShiftValidationError(null);
+                      setSelectedShift({ ...selectedShift, weekNumber: parseInt(e.target.value) });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                  >
+                    {activeWeeks.map(w => (
+                      <option key={w.weekNumber} value={w.weekNumber}>
+                        {w.label} ({w.dateRange}) {w.isUpcoming ? '• (Vanaf volgende week)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Medewerker</label>
+                    <select
+                      required
+                      value={selectedShift.employeeId || ''}
+                      onChange={(e) => {
+                        setShiftValidationError(null);
+                        const empId = e.target.value;
+                        const emp = employees.find(x => x.id === empId);
+                        setSelectedShift({ 
+                          ...selectedShift, 
+                          employeeId: empId,
+                          department: emp?.department || selectedShift.department || 'zaal'
+                        });
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="" disabled>Kies medewerker...</option>
+                      {sortEmployeesByFirstName(employees).map(e => (
+                        <option key={e.id} value={e.id}>
+                          {e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut}{e.birthDate && calculateAge(e.birthDate) ? ` - ${calculateAge(e.birthDate)}j` : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Afdeling (Tabblad)</label>
+                    <select
+                      required
+                      value={selectedShift.department || 'zaal'}
+                      onChange={(e) => setSelectedShift({ ...selectedShift, department: e.target.value as Department })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                    >
+                      <option value="zaal">🍽️ Zaal (IDM Zaal)</option>
+                      <option value="keuken">🍳 Keuken (IDM Keuken)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Dag van de week</label>
+                    <select
+                      required
+                      value={selectedShift.day !== undefined ? selectedShift.day : ''}
+                      onChange={(e) => {
+                        setShiftValidationError(null);
+                        setSelectedShift({ ...selectedShift, day: parseInt(e.target.value) });
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {DAYS_OF_WEEK.map((d, idx) => (
+                        <option key={idx} value={idx}>{d}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Dienststatus</label>
+                    <select
+                      required
+                      value={selectedShift.status || 'draft'}
+                      onChange={(e) => setSelectedShift({ ...selectedShift, status: e.target.value as any })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="draft">Ontwerp (Geheim)</option>
+                      <option value="published">Gepubliceerd (Zichtbaar)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Begintijd</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Bijv. Open, 16u00, 17u00"
+                      value={selectedShift.startTime || ''}
+                      onChange={(e) => {
+                        setShiftValidationError(null);
+                        setSelectedShift({ ...selectedShift, startTime: e.target.value });
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                    />
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {['Open', '10u00', '15u30', '16u00', '16u30', '17u00'].map((time) => (
+                        <button
+                          type="button"
+                          key={time}
+                          onClick={() => {
+                            setShiftValidationError(null);
+                            setSelectedShift({ ...selectedShift, startTime: time });
+                          }}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition cursor-pointer ${
+                            selectedShift.startTime === time ? 'bg-orange-500 text-white border-orange-600' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600 flex items-center justify-between">
+                      <span>Eindtijd</span>
+                      {isSelectedEmpMinor && (
+                        <span className="text-[9px] font-black text-rose-600">Max. 23u00</span>
+                      )}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder={isSelectedEmpMinor ? "Bijv. 18u00, 22u00, 23u00" : "Bijv. 18u00, Sluit, Hulpsluit"}
+                      value={selectedShift.endTime || ''}
+                      onChange={(e) => {
+                        setShiftValidationError(null);
+                        setSelectedShift({ ...selectedShift, endTime: e.target.value });
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                    />
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {(isSelectedEmpMinor 
+                        ? ['18u00', '20u00', '21u00', '22u00', '23u00'] 
+                        : ['18u00', '23u00', '23u30', 'Sluit', 'Hulpsluit']
+                      ).map((time) => (
+                        <button
+                          type="button"
+                          key={time}
+                          onClick={() => {
+                            setShiftValidationError(null);
+                            setSelectedShift({ ...selectedShift, endTime: time });
+                          }}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition cursor-pointer ${
+                            selectedShift.endTime === time ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Speciale instructies of opmerkingen</label>
+                  <textarea
+                    rows={2}
+                    placeholder="Bijv: Inclusief opruimen"
+                    value={selectedShift.notes || ''}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, notes: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none animate-none"
+                  />
+                </div>
+
                 {!selectedShift.isNew && (
+                  <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                    <span>Bevestigd door medewerker:</span>
+                    {selectedShift.acknowledged ? (
+                      <span className="text-emerald-700 font-bold flex items-center bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100"><Check size={12} className="mr-0.5 inline" /> Ja</span>
+                    ) : (
+                      <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-medium">Nee</span>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex space-x-2 pt-2">
+                  {!selectedShift.isNew && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteShiftClick(selectedShift.id!)}
+                      className={`px-3 py-2.5 rounded-xl transition flex items-center justify-center border font-bold text-xs gap-1 cursor-pointer ${
+                        isConfirmingDeleteShift 
+                          ? 'bg-red-650 hover:bg-red-800 text-white border-red-700 animate-pulse' 
+                          : 'bg-red-50 hover:bg-red-100 text-red-650 border-red-100'
+                      }`}
+                      title={isConfirmingDeleteShift ? "Nogmaals klikken om DEFINITIEF te verwijderen" : "Verwijder Dienst"}
+                    >
+                      <Trash2 size={16} className="stroke-[2.5]" />
+                      {isConfirmingDeleteShift && <span>Zeker?</span>}
+                    </button>
+                  )}
+                  
                   <button
                     type="button"
-                    onClick={() => handleDeleteShiftClick(selectedShift.id!)}
-                    className={`px-3 py-2.5 rounded-xl transition flex items-center justify-center border font-bold text-xs gap-1 cursor-pointer ${
-                      isConfirmingDeleteShift 
-                        ? 'bg-red-650 hover:bg-red-800 text-white border-red-700 animate-pulse' 
-                        : 'bg-red-50 hover:bg-red-100 text-red-650 border-red-100'
-                    }`}
-                    title={isConfirmingDeleteShift ? "Nogmaals klikken om DEFINITIEF te verwijderen" : "Verwijder Dienst"}
+                    onClick={() => setShowShiftModal(false)}
+                    className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition cursor-pointer"
                   >
-                    <Trash2 size={16} className="stroke-[2.5]" />
-                    {isConfirmingDeleteShift && <span>Zeker?</span>}
+                    Annuleren
                   </button>
-                )}
-                
-                <button
-                  type="button"
-                  onClick={() => setShowShiftModal(false)}
-                  className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition"
-                >
-                  Annuleren
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition"
-                >
-                  Opslaan
-                </button>
-              </div>
+                  <button
+                    type="submit"
+                    disabled={!currentShiftValidation.valid}
+                    className={`flex-1 py-2.5 text-white text-xs font-semibold rounded-xl shadow-sm transition ${
+                      !currentShiftValidation.valid
+                        ? 'bg-slate-400 cursor-not-allowed opacity-60'
+                        : 'bg-indigo-600 hover:bg-indigo-700 cursor-pointer'
+                    }`}
+                    title={!currentShiftValidation.valid ? currentShiftValidation.error : 'Dienst opslaan'}
+                  >
+                    Opslaan
+                  </button>
+                </div>
 
-            </form>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
 
       {/* MEDEWERKER TOEVOEGEN MODAL */}
@@ -3032,6 +3223,51 @@ export default function ManagerDashboard({
                       <option value="Verantwoordelijke">Verantwoordelijke</option>
                     </select>
                   </div>
+                </div>
+
+                {/* Geboortedatum (verplicht voor studenten) */}
+                <div className="space-y-1 bg-amber-50/60 border border-amber-200/80 rounded-xl p-2.5">
+                  <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <span>🎂 Geboortedatum</span>
+                      {newEmp.statuut === 'Student' && (
+                        <span className="text-[9px] font-black text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded border border-rose-200 uppercase">
+                          Verplicht voor student
+                        </span>
+                      )}
+                    </span>
+                    {newEmp.birthDate && calculateAge(newEmp.birthDate) !== null && (
+                      <span className="text-xs font-black text-slate-800">
+                        {calculateAge(newEmp.birthDate)} jaar
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="date"
+                    required={newEmp.statuut === 'Student'}
+                    value={newEmp.birthDate || ''}
+                    onChange={(e) => setNewEmp({ ...newEmp, birthDate: e.target.value })}
+                    className="w-full bg-white border border-slate-300 text-slate-800 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                  {newEmp.birthDate && calculateAge(newEmp.birthDate) !== null ? (
+                    <div className="pt-0.5">
+                      {calculateAge(newEmp.birthDate)! < 18 ? (
+                        <p className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 flex items-center gap-1">
+                          <span>🔞</span>
+                          <span>Minderjarig (&lt;18 jaar): mag niet na 23u00 werken en max. 8u/dag.</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] font-semibold text-emerald-700 flex items-center gap-1">
+                          <span>✓</span>
+                          <span>Meerderjarig (18+ jaar)</span>
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500">
+                      Wettelijk vereist voor studenten om arbeidstijden (&lt;18 regels) automatisch te beveiligen.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

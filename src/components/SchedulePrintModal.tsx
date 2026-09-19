@@ -660,8 +660,8 @@ export default function SchedulePrintModal({
                   {customNote}
                 </span>
               </div>
-              <div className="text-[10px] text-slate-600 font-black uppercase shrink-0">
-                Ma-Za open • Zon & Feestdag vanaf <strong>10u00</strong>
+              <div className="text-[10px] text-slate-600 font-bold shrink-0">
+                Elke dag open van 11u30-01u00 • Vr & Za tot 02u00 • Zo van 10u00-00u00
               </div>
             </div>
 
@@ -672,17 +672,11 @@ export default function SchedulePrintModal({
                   <tr className="bg-slate-950 text-white">
                     {DAYS_OF_WEEK.map((dayName, idx) => {
                       const dayShifts = weekShifts.filter(s => s.day === idx);
-                      const isSunday = idx === 6;
                       const dayDateInfo = getDayDateInfo(selectedWeek, idx);
                       return (
                         <th key={dayName} className="border border-slate-700 p-2 text-center w-[14.28%] align-top">
                           <div className="font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1">
                             <span>{dayName}</span>
-                            {isSunday && (
-                              <span className="text-[8px] bg-amber-400 text-slate-950 px-1 py-0.2 rounded font-black">
-                                10u
-                              </span>
-                            )}
                           </div>
                           <div className="text-[11px] font-black text-amber-300 mt-0.5">
                             {dayDateInfo.shortDate}
