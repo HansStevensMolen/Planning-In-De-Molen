@@ -1,0 +1,3844 @@
+import React, { useState } from 'react';
+import { 
+  Calendar as CalendarIcon, 
+  UserPlus, 
+  Plus, 
+  Trash2, 
+  Check, 
+  Clock, 
+  AlertTriangle, 
+  Megaphone, 
+  Users, 
+  FileText, 
+  ArrowLeftRight, 
+  FileCheck, 
+  Sparkles, 
+  CircleAlert, 
+  CheckCheck, 
+  X,
+  Mail,
+  Phone,
+  Tag,
+  Share2,
+  UtensilsCrossed,
+  Utensils,
+  Copy,
+  ExternalLink,
+  MessageCircle,
+  Download,
+  Database,
+  HardDrive,
+  RotateCcw,
+  Facebook,
+  FileSpreadsheet,
+  Bot,
+  Printer,
+  Archive,
+  Camera,
+  Lock,
+  KeyRound,
+  CalendarPlus,
+  Zap,
+  Send
+} from 'lucide-react';
+import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department } from '../types';
+import NotificationModal from './NotificationModal';
+import BackupManagerModal from './BackupManagerModal';
+import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
+import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
+import { GeminiRoosterModal } from './GeminiRoosterModal';
+import SchedulePrintModal from './SchedulePrintModal';
+import { EmployeeAvatarModal } from './EmployeeAvatarModal';
+import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER } from '../utils/weekUtils';
+import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
+import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+
+interface ManagerDashboardProps {
+  employees: Employee[];
+  shifts: Shift[];
+  notices: Notice[];
+  swapRequests: SwapRequest[];
+  logs: ChangeLog[];
+  availabilities: EmployeeAvailability[];
+  onAddShift: (shift: Omit<Shift, 'id' | 'updatedAt'>) => void;
+  onUpdateShift: (shift: Shift) => void;
+  onDeleteShift: (id: string) => void;
+  onPublishAllDrafts: (targetWeek?: number) => void;
+  onAddEmployee: (employee: Omit<Employee, 'id'>) => void;
+  onUpdateEmployee: (employee: Employee) => void;
+  onDeleteEmployee?: (id: string) => void;
+  onBulkSyncEmployees?: (newEmployees: Employee[], removedIds: string[]) => void;
+  onAddNotice: (notice: Omit<Notice, 'id' | 'date'>) => void;
+  onApproveSwap: (requestId: string) => void;
+  onDeclineSwap: (requestId: string) => void;
+  onUpdateAvailability?: (availability: EmployeeAvailability, notes?: string) => void;
+  onBulkUpdateAvailability?: (
+    updatedAvailabilities: { employeeId: string; weekNumber: number; days: DayAvailability[]; notes?: string }[]
+  ) => void;
+  onMarkNotified?: (employeeIds: string[], type: 'email' | 'whatsapp' | 'both') => void;
+  onRestoreSchedule?: (restoredShifts: Shift[], weekNumber: number) => void;
+  onBatchUpdateShifts?: (newShifts: Shift[], logDetails?: string) => void;
+  onOpenShareModal?: () => void;
+}
+
+const DAYS_OF_WEEK = [
+  'Maandag',
+  'Dinsdag',
+  'Woensdag',
+  'Donderdag',
+  'Vrijdag',
+  'Zaterdag',
+  'Zondag'
+];
+
+const CATEGORY_COLORS = {
+  planning: 'bg-blue-100 text-blue-800 border-blue-200',
+  wijziging: 'bg-amber-100 text-amber-800 border-amber-200',
+  belangrijk: 'bg-red-100 text-red-800 border-red-200',
+  algemeen: 'bg-slate-100 text-slate-800 border-slate-200'
+};
+
+export default function ManagerDashboard({
+  employees,
+  shifts,
+  notices,
+  swapRequests,
+  logs,
+  availabilities,
+  onAddShift,
+  onUpdateShift,
+  onDeleteShift,
+  onPublishAllDrafts,
+  onAddEmployee,
+  onUpdateEmployee,
+  onDeleteEmployee,
+  onBulkSyncEmployees,
+  onAddNotice,
+  onApproveSwap,
+  onDeclineSwap,
+  onUpdateAvailability,
+  onBulkUpdateAvailability,
+  onMarkNotified,
+  onRestoreSchedule,
+  onBatchUpdateShifts,
+  onOpenShareModal
+}: ManagerDashboardProps) {
+  // Tabs within manager dashboard: Zaal (IDM zaal), Keuken (IDM keuken), Beschikbaarheden (alleen beheerder!), etc.
+  const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team'>('zaal');
+
+  // Availability overview state for managers
+  const [selectedManagerWeek, setSelectedManagerWeek] = useState<number>(NEXT_WEEK_NUMBER);
+  const [managerAvailSearch, setManagerAvailSearch] = useState<string>('');
+  const [managerAvailDeptFilter, setManagerAvailDeptFilter] = useState<'all' | Department>('all');
+  const [managerAvailStatuutFilter, setManagerAvailStatuutFilter] = useState<'all' | EmployeeStatuut>('all');
+  const [managerAvailExperienceFilter, setManagerAvailExperienceFilter] = useState<'all' | ExperienceLevel>('all');
+
+  // Six-weeks horizon states
+  const [showSixWeeksModal, setShowSixWeeksModal] = useState(false);
+  const [sixWeeksSuccessMsg, setSixWeeksSuccessMsg] = useState<string | null>(null);
+
+  // Dynamic active weeks and archive management
+  const [extraWeekNumbers, setExtraWeekNumbers] = useState<number[]>([]);
+  const [showArchiveMenu, setShowArchiveMenu] = useState(false);
+
+  // In-app confirmation dialog states (no window.confirm or alert)
+  const [showClearWeekModal, setShowClearWeekModal] = useState(false);
+  const [showCopyWeekModal, setShowCopyWeekModal] = useState(false);
+  const [showPublishSixWeeksConfirmModal, setShowPublishSixWeeksConfirmModal] = useState(false);
+
+  // Modals state
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [showBackupModal, setShowBackupModal] = useState(false);
+  const [showExcelSyncModal, setShowExcelSyncModal] = useState(false);
+  const [showExcelAvailabilityModal, setShowExcelAvailabilityModal] = useState(false);
+  const [showShiftModal, setShowShiftModal] = useState(false);
+  const [showQuickNoticeModal, setShowQuickNoticeModal] = useState(false);
+  const [isConfirmingDeleteShift, setIsConfirmingDeleteShift] = useState(false);
+  const [selectedShift, setSelectedShift] = useState<Partial<Shift> & { isNew: boolean }>({ isNew: true });
+  
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
+  const [newEmp, setNewEmp] = useState({ name: '', department: 'zaal' as Department, statuut: 'Student' as EmployeeStatuut, experience: 'Beginner' as ExperienceLevel, email: '', phone: '', facebookUrl: '', pin: '1234' });
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [bulkNamesText, setBulkNamesText] = useState('');
+  const [bulkDepartment, setBulkDepartment] = useState<Department>('zaal');
+  const [bulkStatuut, setBulkStatuut] = useState<EmployeeStatuut>('Student');
+  const [bulkExperience, setBulkExperience] = useState<ExperienceLevel>('Beginner');
+
+  // Employee Edit States
+  const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
+  const [editEmpName, setEditEmpName] = useState('');
+  const [editEmpDepartment, setEditEmpDepartment] = useState<Department>('zaal');
+  const [editEmpStatuut, setEditEmpStatuut] = useState<EmployeeStatuut>('Student');
+  const [editEmpExperience, setEditEmpExperience] = useState<ExperienceLevel>('Beginner');
+  const [editEmpEmail, setEditEmpEmail] = useState('');
+  const [editEmpPhone, setEditEmpPhone] = useState('');
+  const [editEmpFacebook, setEditEmpFacebook] = useState('');
+  const [editEmpPin, setEditEmpPin] = useState('1234');
+  const [selectedAvatarEmployee, setSelectedAvatarEmployee] = useState<Employee | null>(null);
+
+  const [newNotice, setNewNotice] = useState({ title: '', content: '', category: 'planning' as Notice['category'] });
+
+  // Filter for roster grid
+  const [selectedStatuutFilter, setSelectedStatuutFilter] = useState<'all' | EmployeeStatuut>('all');
+  const [selectedExperienceFilter, setSelectedExperienceFilter] = useState<'all' | ExperienceLevel>('all');
+
+  // Auto-planner state
+  const [autoPlanWeek, setAutoPlanWeek] = useState<number>(NEXT_WEEK_NUMBER);
+  const [showAutoPlanConfirmModal, setShowAutoPlanConfirmModal] = useState(false);
+  const [showNoTeamModal, setShowNoTeamModal] = useState(false);
+  const [showGeminiModal, setShowGeminiModal] = useState(false);
+  const [showSchedulePrintModal, setShowSchedulePrintModal] = useState(false);
+
+  // Active weeks dynamically generated: default horizon + extra weeks + any future week with shifts
+  const activeWeeks = Array.from(new Set([
+    ...AVAILABLE_WEEKS.map(w => w.weekNumber),
+    ...extraWeekNumbers,
+    ...shifts.map(s => s.weekNumber).filter((w): w is number => typeof w === 'number' && w >= CURRENT_WEEK_NUMBER)
+  ])).sort((a, b) => a - b).map(w => getWeekMeta(w));
+
+  // Archived older weeks (all weeks prior to CURRENT_WEEK_NUMBER)
+  const archivedWeeks = Array.from(new Set([
+    ...HISTORICAL_WEEKS.map(w => w.weekNumber),
+    ...shifts.map(s => s.weekNumber).filter((w): w is number => typeof w === 'number' && w < CURRENT_WEEK_NUMBER)
+  ])).sort((a, b) => b - a).map(w => getWeekMeta(w));
+
+  const isCurrentWeekSelectedArchived = isWeekArchived(selectedManagerWeek, CURRENT_WEEK_NUMBER);
+
+  // Calculated statistics for the selected active week
+  const activeWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+  const loggedDraftShiftsCount = activeWeekShifts.filter(s => s.status === 'draft').length;
+  const totalDraftShiftsCount = shifts.filter(s => s.status === 'draft').length;
+  const loggedPendingSwapsCount = swapRequests.filter(sr => sr.status === 'pending').length;
+
+  const totalShiftsCount = activeWeekShifts.length;
+  const confirmedShiftsCount = activeWeekShifts.filter(s => s.acknowledged && s.status === 'published').length;
+  const publishedShiftsCount = activeWeekShifts.filter(s => s.status === 'published').length;
+  const confirmationRate = publishedShiftsCount > 0 ? Math.round((confirmedShiftsCount / publishedShiftsCount) * 100) : 0;
+
+  // Action: Add Next Week dynamically
+  const handleAddNewWeek = () => {
+    const allActiveNums = activeWeeks.map(w => w.weekNumber);
+    const maxWeek = Math.max(...allActiveNums, CURRENT_WEEK_NUMBER + 6);
+    const nextW = maxWeek + 1;
+    setExtraWeekNumbers(prev => [...prev, nextW]);
+    setSelectedManagerWeek(nextW);
+    setAutoPlanWeek(nextW);
+    setSixWeeksSuccessMsg(`Week ${nextW} (${getWeekMeta(nextW).dateRange}) is automatisch toegevoegd aan de planningstool!`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Action: Copy previous week's schedule to current week
+  const handleCopyPreviousWeekRoster = () => {
+    const previousWeek = selectedManagerWeek - 1;
+    const sourceShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === previousWeek);
+    if (sourceShifts.length === 0) {
+      setSixWeeksSuccessMsg(`Er zijn geen diensten gevonden in Week ${previousWeek} om te kopiëren naar Week ${selectedManagerWeek}.`);
+      setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+      return;
+    }
+    const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+    if (currentWeekShifts.length > 0) {
+      setShowCopyWeekModal(true);
+      return;
+    }
+    executeCopyPreviousWeek();
+  };
+
+  const executeCopyPreviousWeek = () => {
+    const previousWeek = selectedManagerWeek - 1;
+    const sourceShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === previousWeek);
+    sourceShifts.forEach(s => {
+      onAddShift({
+        employeeId: s.employeeId,
+        department: s.department,
+        weekNumber: selectedManagerWeek,
+        day: s.day,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        notes: s.notes ? `${s.notes} (Kopie W${previousWeek})` : `Kopie uit Week ${previousWeek}`,
+        status: 'draft',
+        acknowledged: false
+      });
+    });
+    setShowCopyWeekModal(false);
+    setSixWeeksSuccessMsg(`Succes! ${sourceShifts.length} diensten uit Week ${previousWeek} zijn gekopieerd naar Week ${selectedManagerWeek} als concept!`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Action: Clear active week's schedule (Wis knop)
+  const handleClearWeekRoster = () => {
+    const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+    if (currentWeekShifts.length === 0) {
+      setSixWeeksSuccessMsg(`Er zijn momenteel geen ingevulde diensten in Week ${selectedManagerWeek} om te wissen.`);
+      setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+      return;
+    }
+    setShowClearWeekModal(true);
+  };
+
+  const confirmClearWeekRoster = () => {
+    const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+    const count = currentWeekShifts.length;
+    if (onBatchUpdateShifts) {
+      const remainingShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== selectedManagerWeek);
+      onBatchUpdateShifts(remainingShifts, `Alle ${count} diensten voor Week ${selectedManagerWeek} gewist`);
+    } else {
+      currentWeekShifts.forEach(s => onDeleteShift(s.id));
+    }
+    setShowClearWeekModal(false);
+    setSixWeeksSuccessMsg(`Succes! Alle ${count} diensten voor Week ${selectedManagerWeek} zijn gewist.`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // 6-Weken Horizon Management: Prepare/Fill and Publish
+  const handlePrepareSixWeeksHorizon = (forceOverwrite = false, publishDirectly = false) => {
+    const targetWeeks = UPCOMING_SIX_WEEKS_FROM_NEXT;
+    let updatedShifts = [...shifts];
+    let totalAdded = 0;
+
+    targetWeeks.forEach(wk => {
+      const existingInWeek = updatedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk);
+      if (forceOverwrite || existingInWeek.length < 15) {
+        if (forceOverwrite) {
+          updatedShifts = updatedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== wk);
+        }
+        const generated = generateSmartAutoPlan(wk, employees, availabilities, publishDirectly);
+        updatedShifts.push(...generated);
+        totalAdded += generated.length;
+      } else if (publishDirectly) {
+        updatedShifts = updatedShifts.map(s => {
+          if ((s.weekNumber || CURRENT_WEEK_NUMBER) === wk && s.status === 'draft') {
+            return { ...s, status: 'published' };
+          }
+          return s;
+        });
+      }
+    });
+
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(
+        updatedShifts,
+        `6-weken planning klaargezet (W${targetWeeks[0]} t/m W${targetWeeks[targetWeeks.length - 1]}): ${totalAdded} diensten gegenereerd/aangevuld`
+      );
+    } else if (onRestoreSchedule) {
+      onRestoreSchedule(updatedShifts, NEXT_WEEK_NUMBER);
+    }
+
+    setSixWeeksSuccessMsg(
+      publishDirectly
+        ? `Geweldig! Alle planningen voor de komende 6 weken (Week ${targetWeeks[0]} t/m ${targetWeeks[targetWeeks.length - 1]}) zijn klaargezet én direct gepubliceerd voor het personeel!`
+        : `Succes! De planningshorizon voor de komende 6 weken (Week ${targetWeeks[0]} t/m ${targetWeeks[targetWeeks.length - 1]}) is volledig voorbereid met evenwichtige bezetting voor Zaal en Keuken!`
+    );
+    setTimeout(() => setSixWeeksSuccessMsg(null), 8000);
+  };
+
+  const handlePublishAllSixWeeks = () => {
+    const targetWeeks = UPCOMING_SIX_WEEKS_FROM_NEXT;
+    const draftCount = shifts.filter(s => targetWeeks.includes(s.weekNumber || CURRENT_WEEK_NUMBER) && s.status === 'draft').length;
+    if (draftCount === 0) {
+      setSixWeeksSuccessMsg('Alle diensten voor de komende 6 weken zijn al definitief gepubliceerd!');
+      setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+      return;
+    }
+    setShowPublishSixWeeksConfirmModal(true);
+  };
+
+  const executePublishAllSixWeeks = () => {
+    const targetWeeks = UPCOMING_SIX_WEEKS_FROM_NEXT;
+    const draftCount = shifts.filter(s => targetWeeks.includes(s.weekNumber || CURRENT_WEEK_NUMBER) && s.status === 'draft').length;
+    const updatedShifts = shifts.map(s => {
+      if (targetWeeks.includes(s.weekNumber || CURRENT_WEEK_NUMBER) && s.status === 'draft') {
+        return { ...s, status: 'published' as const };
+      }
+      return s;
+    });
+
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(updatedShifts, `Alle 6 weken (W${targetWeeks[0]} t/m W${targetWeeks[targetWeeks.length - 1]}) definitief gepubliceerd (${draftCount} diensten)`);
+    }
+
+    onAddNotice({
+      title: `📢 6 Weken Planningen Gepubliceerd (Week ${targetWeeks[0]} t/m ${targetWeeks[targetWeeks.length - 1]})!`,
+      content: 'Het management heeft de roosters voor de komende 6 weken definitief gepubliceerd. Controleer al je diensten in het portaal en sync ze naar je Google, Apple of Outlook agenda!',
+      category: 'planning',
+      author: 'Hans Stevens (Beheerder)'
+    });
+
+    setShowPublishSixWeeksConfirmModal(false);
+    setSixWeeksSuccessMsg(`Succes! ${draftCount} concept-diensten over de komende 6 weken zijn nu gepubliceerd en direct zichtbaar voor het personeel!`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 8000);
+  };
+
+  // Handle open shift modal for adding
+  const handleOpenAddShift = (employeeId: string, day: number) => {
+    setIsConfirmingDeleteShift(false);
+    const emp = employees.find(e => e.id === employeeId);
+    const defaultDept = emp?.department || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
+    setSelectedShift({
+      isNew: true,
+      employeeId,
+      department: defaultDept,
+      weekNumber: selectedManagerWeek,
+      day,
+      startTime: '16:00',
+      endTime: '23:00',
+      notes: '',
+      status: 'draft',
+      acknowledged: false
+    });
+    setShowShiftModal(true);
+  };
+
+  // Snelle Actie: Direct nieuw formulier openen voor actieve week
+  const handleOpenCreateShiftQuickAction = () => {
+    setIsConfirmingDeleteShift(false);
+    const sorted = sortEmployeesByFirstName(employees);
+    const firstEmp = sorted[0] || employees[0];
+    const defaultDept = activeSubTab === 'keuken' ? 'keuken' : (firstEmp?.department || 'zaal');
+    setSelectedShift({
+      isNew: true,
+      employeeId: firstEmp?.id || '',
+      department: defaultDept,
+      weekNumber: selectedManagerWeek,
+      day: 0,
+      startTime: '16:00',
+      endTime: '23:00',
+      notes: '',
+      status: 'draft',
+      acknowledged: false
+    });
+    setShowShiftModal(true);
+  };
+
+  // Handle open shift modal for editing
+  const handleOpenEditShift = (shift: Shift) => {
+    setIsConfirmingDeleteShift(false);
+    setSelectedShift({
+      ...shift,
+      isNew: false
+    });
+    setShowShiftModal(true);
+  };
+
+  const handleSaveShift = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedShift.employeeId || selectedShift.day === undefined || !selectedShift.startTime || !selectedShift.endTime) return;
+
+    const shiftDept = selectedShift.department || (employees.find(e => e.id === selectedShift.employeeId)?.department) || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
+    const targetWeekNumber = selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek;
+
+    if (selectedShift.isNew) {
+      onAddShift({
+        employeeId: selectedShift.employeeId,
+        department: shiftDept,
+        weekNumber: targetWeekNumber,
+        day: selectedShift.day,
+        startTime: selectedShift.startTime,
+        endTime: selectedShift.endTime,
+        notes: selectedShift.notes || '',
+        status: (selectedShift.status as 'draft' | 'published') || 'draft',
+        acknowledged: false
+      });
+    } else {
+      onUpdateShift({
+        id: selectedShift.id!,
+        employeeId: selectedShift.employeeId,
+        department: shiftDept,
+        weekNumber: targetWeekNumber,
+        day: selectedShift.day,
+        startTime: selectedShift.startTime,
+        endTime: selectedShift.endTime,
+        notes: selectedShift.notes || '',
+        acknowledged: selectedShift.acknowledged || false,
+        status: (selectedShift.status as 'draft' | 'published') || 'draft',
+        updatedAt: Date.now()
+      });
+    }
+    setShowShiftModal(false);
+  };
+
+  const handleDeleteShiftClick = (id: string) => {
+    onDeleteShift(id);
+    setIsConfirmingDeleteShift(false);
+    setShowShiftModal(false);
+    setSixWeeksSuccessMsg('Dienst succesvol verwijderd');
+    setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+  };
+
+  const handleCreateEmployee = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmp.name) return;
+
+    // Direct color styling depending on index to match beautifully
+    const colors = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
+    const chosenColor = colors[employees.length % colors.length];
+    
+    // Choose light border backgrounds
+    const bgs = [
+      'bg-indigo-50 border-indigo-200 text-indigo-700',
+      'bg-pink-50 border-pink-200 text-pink-700',
+      'bg-amber-50 border-amber-200 text-amber-700',
+      'bg-emerald-50 border-emerald-200 text-emerald-700',
+      'bg-cyan-50 border-cyan-200 text-cyan-700',
+      'bg-violet-50 border-violet-200 text-violet-700',
+      'bg-rose-50 border-rose-200 text-rose-700',
+      'bg-teal-50 border-teal-200 text-teal-700'
+    ];
+    const bgStyles = bgs[employees.length % bgs.length];
+    const parts = bgStyles.split(' ');
+
+    onAddEmployee({
+      name: newEmp.name,
+      department: newEmp.department || 'zaal',
+      statuut: newEmp.statuut,
+      experience: newEmp.experience,
+      color: chosenColor,
+      textBgColor: `${parts[0]} ${parts[1]}`,
+      textColor: parts[2],
+      email: newEmp.email || '',
+      phone: newEmp.phone || '',
+      facebookUrl: newEmp.facebookUrl.trim() || undefined,
+      active: true,
+      firstLoginComplete: true,
+      pin: newEmp.pin.trim() || '1234'
+    });
+
+    setNewEmp({ name: '', department: 'zaal', statuut: 'Student', experience: 'Beginner', email: '', phone: '', facebookUrl: '', pin: '1234' });
+    setShowEmployeeModal(false);
+  };
+
+  const handleBulkCreateEmployees = (e: React.FormEvent) => {
+    e.preventDefault();
+    const names = bulkNamesText
+      .split('\n')
+      .map(name => name.trim())
+      .filter(name => name.length > 0);
+
+    if (names.length === 0) return;
+
+    const colors = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
+    const bgs = [
+      'bg-indigo-50 border-indigo-200 text-indigo-700',
+      'bg-pink-50 border-pink-200 text-pink-700',
+      'bg-amber-50 border-amber-200 text-amber-700',
+      'bg-emerald-50 border-emerald-200 text-emerald-700',
+      'bg-cyan-50 border-cyan-200 text-cyan-700',
+      'bg-violet-50 border-violet-200 text-violet-700',
+      'bg-rose-50 border-rose-200 text-rose-700',
+      'bg-teal-50 border-teal-200 text-teal-700'
+    ];
+
+    names.forEach((name, idx) => {
+      const globalIndex = employees.length + idx;
+      const chosenColor = colors[globalIndex % colors.length];
+      const bgStyles = bgs[globalIndex % bgs.length];
+      const parts = bgStyles.split(' ');
+
+      onAddEmployee({
+        name,
+        department: bulkDepartment || 'zaal',
+        statuut: bulkStatuut,
+        experience: bulkExperience,
+        color: chosenColor,
+        textBgColor: `${parts[0]} ${parts[1]}`,
+        textColor: parts[2],
+        email: '',
+        phone: '',
+        active: true,
+        firstLoginComplete: true,
+        pin: '1234'
+      });
+    });
+
+    setBulkNamesText('');
+    setIsBulkMode(false);
+    setShowEmployeeModal(false);
+  };
+
+  const handleStartEmployeeEdit = (emp: Employee) => {
+    setEditingEmployeeId(emp.id);
+    setEditEmpName(emp.name);
+    setEditEmpDepartment(emp.department || 'zaal');
+    setEditEmpStatuut(emp.statuut);
+    setEditEmpExperience(emp.experience);
+    setEditEmpEmail(emp.email || '');
+    setEditEmpPhone(emp.phone || '');
+    setEditEmpFacebook(emp.facebookUrl || '');
+    setEditEmpPin(emp.pin || '1234');
+  };
+
+  const handleSaveEmployeeEdit = (emp: Employee) => {
+    if (!editEmpName.trim()) {
+      alert('Vul een naam in.');
+      return;
+    }
+    const cleanPin = editEmpPin.trim() || '1234';
+    onUpdateEmployee({
+      ...emp,
+      name: editEmpName,
+      department: editEmpDepartment,
+      statuut: editEmpStatuut,
+      experience: editEmpExperience,
+      email: editEmpEmail,
+      phone: editEmpPhone,
+      facebookUrl: editEmpFacebook.trim() || undefined,
+      pin: cleanPin
+    });
+    setEditingEmployeeId(null);
+  };
+
+  const handleResetEmployeePin = (emp: Employee) => {
+    onUpdateEmployee({
+      ...emp,
+      pin: '1234'
+    });
+    setSixWeeksSuccessMsg(`De pincode van ${emp.name} is succesvol gereset naar 1234!`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+  };
+
+  const handleCreateNotice = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNotice.title || !newNotice.content) return;
+
+    onAddNotice({
+      title: newNotice.title,
+      content: newNotice.content,
+      category: newNotice.category,
+      author: 'Hans Stevens (Beheerder)'
+    });
+
+    setNewNotice({ title: '', content: '', category: 'planning' });
+    setShowQuickNoticeModal(false);
+    setSixWeeksSuccessMsg('Mededeling succesvol geplaatst! Je personeel ziet dit direct op hun portaal.');
+    setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+  };
+
+  // Smart Auto-scheduling algorithm enforcing the manager's exact staffing requirements:
+  // - Overdag: 2 personen per dag
+  // - Avond Ma & Di: 4 personen (waarvan 1 sluit en 1 hulpsluit)
+  // - Avond Wo & Do: 5 personen (waarvan 1 sluit en 1 hulpsluit)
+  // - Avond Vr, Za & Zo: 7 personen (waarvan 1 sluit en 1 hulpsluit)
+  const handleAutoPlanClick = () => {
+    // Check if there are employees to schedule
+    const activeStaff = employees.filter(e => e.active !== false);
+    if (!employees || employees.length === 0 || activeStaff.length === 0) {
+      setShowNoTeamModal(true);
+      return;
+    }
+    // Open in-app styled confirmation modal
+    setShowAutoPlanConfirmModal(true);
+  };
+
+  const handleExecuteAutoPlan = () => {
+    setShowAutoPlanConfirmModal(false);
+
+    const activeStaff = employees.filter(e => e.active !== false);
+    if (!employees || employees.length === 0 || activeStaff.length === 0) {
+      setShowNoTeamModal(true);
+      return;
+    }
+
+    // Generate the smart shifts for the week
+    const newPlannedShifts = generateSmartAutoPlan(autoPlanWeek, employees, availabilities, false);
+
+    if (newPlannedShifts.length === 0) {
+      setShowNoTeamModal(true);
+      return;
+    }
+
+    // Atomic update of shifts
+    const otherWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== autoPlanWeek);
+    const combinedShifts = [...otherWeekShifts, ...newPlannedShifts];
+
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(
+        combinedShifts,
+        `Slimme planning gegenereerd voor Week ${autoPlanWeek} (${newPlannedShifts.length} diensten: 2 overdag, 4/5/7 avond met sluit & hulpsluit)`
+      );
+    } else {
+      // Fallback
+      shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === autoPlanWeek).forEach(s => {
+        onDeleteShift(s.id);
+      });
+      newPlannedShifts.forEach(s => {
+        onAddShift(s);
+      });
+    }
+
+    // Switch view to the planned week
+    setSelectedManagerWeek(autoPlanWeek);
+    setSixWeeksSuccessMsg(`Slimme planning voor Week ${autoPlanWeek} succesvol gegenereerd (${newPlannedShifts.length} diensten)!`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Handler to apply schedule generated by Gemini AI
+  const handleApplyGeminiProposal = (
+    newShifts: Shift[],
+    publishImmediately: boolean,
+    targetWeek: number,
+    aiSummary?: string
+  ) => {
+    const otherShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== targetWeek);
+    const preparedShifts = newShifts.map(s => ({
+      ...s,
+      status: publishImmediately ? ('published' as const) : ('draft' as const)
+    }));
+    const combinedShifts = [...otherShifts, ...preparedShifts];
+
+    setSelectedManagerWeek(targetWeek);
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(
+        combinedShifts,
+        `Gemini AI roostervoorstel toegepast voor Week ${targetWeek} (${preparedShifts.length} diensten, ${publishImmediately ? 'gepubliceerd' : 'ontwerp'})${aiSummary ? ` • ${aiSummary.slice(0, 100)}...` : ''}`
+      );
+    } else {
+      shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek).forEach(s => onDeleteShift(s.id));
+      preparedShifts.forEach(s => onAddShift(s));
+    }
+  };
+
+  // Quick helper to populate standard sample team if the team list is currently empty
+  const handleLoadSampleTeam = () => {
+    setShowNoTeamModal(false);
+    const sampleStaff: Omit<Employee, 'id'>[] = [
+      { name: 'Pat', department: 'zaal', statuut: 'Vast', experience: 'Verantwoordelijke', contractDaysPerWeek: 4, color: '#3b82f6', textBgColor: 'bg-blue-50 border-blue-200', textColor: 'text-blue-700', email: 'pat@example.be', phone: '0471 11 22 33', active: true, firstLoginComplete: true },
+      { name: 'Matthias', department: 'zaal', statuut: 'Vast', experience: 'Verantwoordelijke', contractDaysPerWeek: 4, color: '#6366f1', textBgColor: 'bg-indigo-50 border-indigo-200', textColor: 'text-indigo-700', email: 'matthias@example.be', phone: '0472 22 33 44', active: true, firstLoginComplete: true },
+      { name: 'Sophie De Smet', department: 'zaal', statuut: 'Student', experience: 'Ervaren', color: '#ec4899', textBgColor: 'bg-pink-50 border-pink-200', textColor: 'text-pink-700', email: 'sophie@example.be', phone: '0473 33 44 55', active: true, firstLoginComplete: true },
+      { name: 'Thomas Janssen', department: 'zaal', statuut: 'Student', experience: 'Gemiddeld', color: '#10b981', textBgColor: 'bg-emerald-50 border-emerald-200', textColor: 'text-emerald-700', email: 'thomas@example.be', phone: '0474 44 55 66', active: true, firstLoginComplete: true },
+      { name: 'Emma Claes', department: 'zaal', statuut: 'Student', experience: 'Ervaren', color: '#f59e0b', textBgColor: 'bg-amber-50 border-amber-200', textColor: 'text-amber-700', email: 'emma@example.be', phone: '0475 55 66 77', active: true, firstLoginComplete: true },
+      { name: 'Lucas Wouters', department: 'zaal', statuut: 'Flexi', experience: 'Gemiddeld', color: '#8b5cf6', textBgColor: 'bg-violet-50 border-violet-200', textColor: 'text-violet-700', email: 'lucas@example.be', phone: '0476 66 77 88', active: true, firstLoginComplete: true },
+      { name: 'Lotte Peeters', department: 'zaal', statuut: 'Student', experience: 'Beginner', color: '#06b6d4', textBgColor: 'bg-cyan-50 border-cyan-200', textColor: 'text-cyan-700', email: 'lotte@example.be', phone: '0477 77 88 99', active: true, firstLoginComplete: true },
+      { name: 'Noah Maes', department: 'zaal', statuut: 'Flexi', experience: 'Ervaren', color: '#ef4444', textBgColor: 'bg-rose-50 border-rose-200', textColor: 'text-rose-700', email: 'noah@example.be', phone: '0478 88 99 00', active: true, firstLoginComplete: true },
+      { name: 'Julie Jacobs', department: 'zaal', statuut: 'Student', experience: 'Beginner', color: '#14b8a6', textBgColor: 'bg-teal-50 border-teal-200', textColor: 'text-teal-700', email: 'julie@example.be', phone: '0479 99 00 11', active: true, firstLoginComplete: true },
+      { name: 'Milan Willems', department: 'zaal', statuut: 'Student', experience: 'Gemiddeld', color: '#f97316', textBgColor: 'bg-orange-50 border-orange-200', textColor: 'text-orange-700', email: 'milan@example.be', phone: '0470 12 34 56', active: true, firstLoginComplete: true },
+      { name: 'Amber Mertens', department: 'zaal', statuut: 'Extra', experience: 'Gemiddeld', color: '#64748b', textBgColor: 'bg-slate-50 border-slate-200', textColor: 'text-slate-700', email: 'amber@example.be', phone: '0471 23 45 67', active: true, firstLoginComplete: true },
+      { name: 'Sander Goossens', department: 'zaal', statuut: 'Student', experience: 'Beginner', color: '#a855f7', textBgColor: 'bg-purple-50 border-purple-200', textColor: 'text-purple-700', email: 'sander@example.be', phone: '0472 34 56 78', active: true, firstLoginComplete: true }
+    ];
+
+    sampleStaff.forEach(s => onAddEmployee(s));
+  };
+
+  // Helper to render statuut badge
+  const renderStatuutBadge = (statuut: EmployeeStatuut, emp?: Employee) => {
+    const is4Day = emp?.contractDaysPerWeek === 4 || (emp && (emp.name === "Pat" || emp.name.toLowerCase().includes("matthias") || emp.name.toLowerCase().includes("mathias")));
+    const stylings: Record<EmployeeStatuut, string> = {
+      Student: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+      Flexi: 'bg-amber-50 text-amber-800 border-amber-200',
+      Vast: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+      Extra: 'bg-rose-50 text-rose-800 border-rose-200'
+    };
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black uppercase border ${stylings[statuut]}`}>
+        {statuut} {is4Day ? '(4d)' : ''}
+      </span>
+    );
+  };
+
+  // Helper to render experience badge
+  const renderExperienceBadge = (experience: ExperienceLevel) => {
+    const stylings: Record<ExperienceLevel, string> = {
+      Beginner: 'bg-slate-50 text-slate-800 border-slate-200',
+      Gemiddeld: 'bg-cyan-50 text-cyan-800 border-cyan-200',
+      Ervaren: 'bg-pink-50 text-pink-800 border-pink-200',
+      Verantwoordelijke: 'bg-purple-50 text-purple-800 border-purple-200'
+    };
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black uppercase border ${stylings[experience]}`}>
+        {experience}
+      </span>
+    );
+  };
+
+  return (
+    <div className="space-y-6 font-sans">
+      
+      {/* ⚡ SNELLE ACTIES (QUICK ACTIONS) SECTIE */}
+      <section 
+        id="quick-actions-panel"
+        aria-label="Snelle Acties"
+        className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white rounded-3xl p-4 sm:p-5 shadow-lg border-2 border-slate-800 relative overflow-hidden"
+      >
+        <div className="absolute -right-10 -top-10 w-40 h-40 bg-orange-500/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 bg-orange-500 text-white rounded-xl shadow-sm">
+                <Zap size={16} className="fill-white" />
+              </span>
+              <h2 className="text-sm sm:text-base font-black uppercase tracking-tight text-white flex items-center gap-2">
+                <span>Snelle Acties</span>
+                <span className="bg-orange-500/20 text-orange-400 border border-orange-500/40 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  Snellere Workflow
+                </span>
+              </h2>
+            </div>
+            <p className="text-xs text-slate-300 font-medium">
+              Directe knoppen voor dagelijks beheer • Actieve week: <strong className="text-orange-400 font-bold">Week {selectedManagerWeek}</strong> ({getWeekMeta(selectedManagerWeek).dateRange})
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+            {/* 1. Directe knop: Nieuwe Dienst Aanmaken */}
+            <button
+              id="quick-action-create-shift-btn"
+              type="button"
+              onClick={handleOpenCreateShiftQuickAction}
+              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-orange-500/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
+              title="Open direct het venster om een nieuwe dienst aan te maken"
+            >
+              <CalendarPlus size={17} className="stroke-[2.5]" />
+              <span>Nieuwe Dienst Aanmaken</span>
+            </button>
+
+            {/* 2. Directe knop: Mededeling Plaatsen */}
+            <button
+              id="quick-action-post-notice-btn"
+              type="button"
+              onClick={() => setShowQuickNoticeModal(true)}
+              className="px-4 py-2.5 sm:py-3 bg-slate-800 hover:bg-slate-750 text-white font-black text-xs uppercase tracking-tight rounded-xl border border-slate-700 hover:border-orange-500/60 shadow-sm flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer"
+              title="Plaats direct een mededeling voor het personeelsteam"
+            >
+              <Megaphone size={17} className="text-orange-400 stroke-[2.5]" />
+              <span>Mededeling Plaatsen</span>
+            </button>
+
+            {/* Quick jump to notice board if there are active notices */}
+            {notices.length > 0 && (
+              <button
+                id="quick-action-view-board-btn"
+                type="button"
+                onClick={() => setActiveSubTab('berichten')}
+                className="px-3 py-2.5 sm:py-3 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-white font-bold text-xs rounded-xl border border-slate-700/60 transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                title="Bekijk alle actieve mededelingen op het prikbord"
+              >
+                <FileText size={14} />
+                <span className="hidden sm:inline">Prikbord ({notices.length})</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Overview Stat Cards - Vibrant Palette Theme */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
+          <div className="p-3 bg-orange-500 rounded-2xl text-white shadow-lg shadow-orange-100 shrink-0">
+            <CalendarIcon size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] text-orange-650 text-orange-600 font-extrabold uppercase tracking-wide">Aantal diensten</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-1">{totalShiftsCount}</h3>
+            <p className="text-xs text-slate-500">{publishedShiftsCount} gepubliceerd • {loggedDraftShiftsCount} draft</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
+          <div className="p-3 bg-emerald-500 rounded-2xl text-white shadow-lg shadow-emerald-100 shrink-0">
+            <FileCheck size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-wide">Gezien/Bevestigd</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-1">{confirmationRate}%</h3>
+            <p className="text-xs text-slate-500">{confirmedShiftsCount} van de {publishedShiftsCount} bevestigd</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
+          <div className="p-3 bg-amber-500 rounded-2xl text-white shadow-lg shadow-amber-100 relative shrink-0">
+            <ArrowLeftRight size={24} />
+            {loggedPendingSwapsCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-[10px] text-white font-black rounded-full flex items-center justify-center border border-white animate-pulse">!</span>
+            )}
+          </div>
+          <div>
+            <p className="text-[10px] text-amber-600 font-extrabold uppercase tracking-wide">Ruilverzoeken</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-1">{loggedPendingSwapsCount} openstaand</h3>
+            <p className="text-xs text-slate-500">Wacht op jouw actie</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
+          <div className="p-3 bg-pink-500 rounded-2xl text-white shadow-lg shadow-pink-100 shrink-0">
+            <Users size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] text-pink-600 font-extrabold uppercase tracking-wide">Actief Personeel</p>
+            <h3 className="text-2xl font-black text-slate-800 mt-1">{employees.length}</h3>
+            <p className="text-xs text-slate-500">Aantal medewerkers</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Draft shifts bar - Vibrant Palette Theme */}
+      {loggedDraftShiftsCount > 0 ? (
+        <div className="bg-orange-100 rounded-3xl border-2 border-orange-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center space-x-3 text-orange-950">
+            <CircleAlert size={20} className="shrink-0 text-orange-600" />
+            <div>
+              <p className="font-extrabold text-sm uppercase tracking-tight">
+                Je hebt {loggedDraftShiftsCount} niet-gepubliceerde diensten in ontwerp voor Week {selectedManagerWeek}
+              </p>
+              <p className="text-xs text-orange-850">
+                Je medewerkers kunnen deze diensten pas zien zodra je ze officieel publiceert.
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={() => onPublishAllDrafts(selectedManagerWeek)}
+            className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
+          >
+            <CheckCheck size={16} />
+            <span>Publiceer Week {selectedManagerWeek} Rooster ({loggedDraftShiftsCount})</span>
+          </button>
+        </div>
+      ) : totalDraftShiftsCount > 0 ? (
+        <div className="bg-amber-50 rounded-3xl border-2 border-amber-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center space-x-3 text-amber-950">
+            <CircleAlert size={20} className="shrink-0 text-amber-600" />
+            <div>
+              <p className="font-extrabold text-sm uppercase tracking-tight">
+                Week {selectedManagerWeek} is up-to-date! Er zijn nog {totalDraftShiftsCount} concepten in andere weken.
+              </p>
+              <p className="text-xs text-amber-850">
+                Wil je alle resterende ontwerp-diensten over alle weken tegelijk publiceren?
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={() => onPublishAllDrafts()}
+            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
+          >
+            <CheckCheck size={16} />
+            <span>Publiceer Alle Concepten ({totalDraftShiftsCount})</span>
+          </button>
+        </div>
+      ) : null}
+
+      {/* Sub Navigation Tabs - Named exactly according to official instructions */}
+      <div className="bg-white rounded-2xl shadow-sm border-2 border-orange-100 p-1 flex flex-wrap gap-1 md:gap-0">
+        <button
+          onClick={() => setActiveSubTab('zaal')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
+            activeSubTab === 'zaal' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <UtensilsCrossed size={16} />
+          <span>Zaal</span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab('keuken')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
+            activeSubTab === 'keuken' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Utensils size={16} />
+          <span>Keuken</span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab('beschikbaarheid')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
+            activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Sparkles size={16} className="text-amber-500 fill-amber-300" />
+          <span>Beschikbaarheden</span>
+          <span className="hidden xl:inline-block text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-900 border border-amber-300 rounded-full font-black">Alleen Beheerder</span>
+        </button>
+        <button
+          onClick={() => setShowNotificationModal(true)}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer text-slate-700 hover:bg-emerald-50 hover:text-emerald-800`}
+          title="Verstuur diensten via WhatsApp of exporteer naar Outlook"
+        >
+          <Share2 size={16} className="text-emerald-600" />
+          <span>Notificaties & Delen</span>
+        </button>
+        <button
+          onClick={() => setShowBackupModal(true)}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer text-slate-700 hover:bg-orange-50 hover:text-orange-850`}
+          title="Bekijk de cloud backup van alle beschikbaarheden en definitieve planningen"
+        >
+          <Database size={16} className="text-orange-600" />
+          <span>Backups & Archief</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab('verzoeken')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition relative active:scale-95 cursor-pointer ${
+            activeSubTab === 'verzoeken' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <ArrowLeftRight size={16} />
+          <span>Ruilverzoeken</span>
+          {loggedPendingSwapsCount > 0 && (
+            <span className="shrink-0 ml-1.5 px-2 py-0.5 text-[10px] rounded-full bg-rose-500 text-white font-black">
+              {loggedPendingSwapsCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveSubTab('berichten')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
+            activeSubTab === 'berichten' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Megaphone size={16} />
+          <span>Meldingsbord</span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab('team')}
+          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
+            activeSubTab === 'team' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Users size={16} />
+          <span>Personeel</span>
+        </button>
+      </div>
+
+      {/* Content Areas */}
+
+      {/* 1. PLANNING TAB: ZAAL (IDM) EN KEUKEN (IDM KEUKEN) */}
+      {(activeSubTab === 'zaal' || activeSubTab === 'keuken') && (() => {
+        const activeDept: Department = activeSubTab === 'keuken' ? 'keuken' : 'zaal';
+        const isZaal = activeDept === 'zaal';
+        const deptEmployees = sortEmployeesByFirstName(
+          employees.filter(emp => {
+            const matchDept = isZaal ? (emp.department || 'zaal') === 'zaal' : emp.department === 'keuken';
+            const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
+            const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
+            return matchDept && matchStatuut && matchExperience;
+          })
+        );
+
+        return (
+        <div className="space-y-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">
+                  {isZaal ? 'Planning Zaalpersoneel (Zaal)' : 'Planning Keukenpersoneel (Keuken)'}
+                </h2>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${isZaal ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-orange-100 text-orange-900 border border-orange-300'}`}>
+                  {isZaal ? '🍽️ Zaalpersoneel' : '🍳 Keukenpersoneel'}
+                </span>
+              </div>
+              <p className="text-xs text-orange-600 font-bold uppercase">
+                {isZaal 
+                  ? 'Planning voor zaalbediening, bar, terras en zaalverantwoordelijken • Klik op een vak om in te plannen'
+                  : 'Planning voor chef-koks, souschefs, koud/warm-bereiding en afwas • Klik op een vak om in te plannen'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+              <select
+                value={selectedStatuutFilter}
+                onChange={(e) => setSelectedStatuutFilter(e.target.value as any)}
+                className="bg-white border-2 border-orange-100 rounded-xl px-3 py-2 text-xs font-black uppercase text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+              >
+                <option value="all">Alle Statuten</option>
+                <option value="Student">Student</option>
+                <option value="Flexi">Flexi</option>
+                <option value="Vast">Vast</option>
+                <option value="Extra">Extra</option>
+              </select>
+
+              <select
+                value={selectedExperienceFilter}
+                onChange={(e) => setSelectedExperienceFilter(e.target.value as any)}
+                className="bg-white border-2 border-orange-100 rounded-xl px-3 py-2 text-xs font-black uppercase text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+              >
+                <option value="all">Alle Ervaring</option>
+                <option value="Beginner">Beginner</option>
+                <option value="Gemiddeld">Gemiddeld</option>
+                <option value="Ervaren">Ervaren</option>
+                <option value="Verantwoordelijke">Verantwoordelijke</option>
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setShowGeminiModal(true)}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-400 via-orange-500 to-amber-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title="Genereer een AI roostervoorstel via Gemini API op basis van beschikbaarheid"
+              >
+                <Bot size={16} className="text-slate-950" />
+                <span>Gemini AI Voorstel ✨</span>
+              </button>
+
+              {onOpenShareModal && (
+                <button
+                  type="button"
+                  onClick={onOpenShareModal}
+                  className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                  title="Deel de planning en link met het team via WhatsApp of directe URL"
+                >
+                  <Share2 size={15} />
+                  <span>Delen met Team 🔗</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setShowNotificationModal(true)}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title="Notificeer personeel via WhatsApp of exporteer naar Outlook"
+              >
+                <Share2 size={15} />
+                <span>📲 Personeel Notificeren</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSchedulePrintModal(true)}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title="Print het huidige weekrooster in een strak, print-vriendelijk formaat voor in de keuken van het café"
+              >
+                <Printer size={15} />
+                <span>Print PDF 🖨️</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSelectedShift({
+                    isNew: true,
+                    employeeId: deptEmployees[0]?.id || employees[0]?.id || '',
+                    department: activeDept,
+                    day: 0,
+                    startTime: activeDept === 'keuken' ? '15:00' : '17:00',
+                    endTime: activeDept === 'keuken' ? '23:00' : '01:00',
+                    notes: '',
+                    status: 'draft',
+                    acknowledged: false
+                  });
+                  setShowShiftModal(true);
+                }}
+                className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 tracking-tight cursor-pointer"
+              >
+                <Plus size={16} className="stroke-[3]" />
+                <span>Nieuwe Dienst +</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Success message banner for 6-weeks actions */}
+          {sixWeeksSuccessMsg && (
+            <div className="bg-emerald-50 border-2 border-emerald-400 text-emerald-900 rounded-3xl p-4 flex items-center justify-between gap-4 shadow-sm">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-emerald-500 text-white rounded-2xl shrink-0">
+                  <CheckCheck size={18} />
+                </div>
+                <p className="text-xs font-bold leading-relaxed">{sixWeeksSuccessMsg}</p>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setSixWeeksSuccessMsg(null)}
+                className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* 6-WEKEN HORIZON KAART: Telkens 6 weken vooruit klaargezet */}
+          <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-amber-500 rounded-3xl p-5 text-white shadow-lg border-2 border-orange-400">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="p-1.5 bg-white/20 rounded-xl text-lg">🗓️</span>
+                  <h3 className="text-sm font-black uppercase tracking-tight text-white flex items-center gap-2">
+                    <span>6-Weken Planning Horizon (W{UPCOMING_SIX_WEEKS_FROM_NEXT[0]} t/m W{UPCOMING_SIX_WEEKS_FROM_NEXT[UPCOMING_SIX_WEEKS_FROM_NEXT.length - 1]})</span>
+                    <span className="bg-white text-orange-700 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase">
+                      Telkens 6 Weken Vooruit
+                    </span>
+                  </h3>
+                </div>
+                <p className="text-xs text-orange-100 font-medium max-w-2xl leading-relaxed">
+                  Vanaf volgende week (Week {NEXT_WEEK_NUMBER}) zijn de werkplanningen 6 weken vooruit klaargezet en ingevuld voor zowel <strong>Zaal als Keuken</strong>. Personeel kan hun shifts vroegtijdig bekijken en beschikbaarheden tijdig doorgeven.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handlePrepareSixWeeksHorizon(false, false)}
+                  className="px-4 py-2.5 bg-white hover:bg-orange-50 text-orange-700 text-xs font-black uppercase rounded-2xl shadow-md transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  title="Controleer en vul alle 6 weken vooruit aan met complete, gebalanceerde roosters"
+                >
+                  <Sparkles size={15} className="text-amber-500" />
+                  <span>Bereid 6 Weken Voor</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePublishAllSixWeeks}
+                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-black uppercase rounded-2xl shadow-md transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  title="Publiceer alle concept-diensten in de 6-weken horizon direct voor het personeel"
+                >
+                  <Megaphone size={15} />
+                  <span>Publiceer 6 Weken</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSixWeeksModal(true)}
+                  className="px-3.5 py-2.5 bg-white/15 hover:bg-white/25 text-white border border-white/30 text-xs font-black uppercase rounded-2xl transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                  title="Bekijk de details en statistieken van alle 6 weken op een rij"
+                >
+                  <FileText size={15} />
+                  <span>Overzicht 6 Weken</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick mini-pills for each of the 6+ weeks */}
+            <div className="mt-4 pt-3 border-t border-white/20 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {UPCOMING_SIX_WEEKS_FROM_NEXT.map((wk) => {
+                const meta = getWeekMeta(wk);
+                const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk);
+                const draftCount = weekShifts.filter(s => s.status === 'draft').length;
+                const isSelected = selectedManagerWeek === wk;
+                const isPublished = weekShifts.length > 0 && draftCount === 0;
+
+                return (
+                  <button
+                    key={wk}
+                    type="button"
+                    onClick={() => {
+                      setSelectedManagerWeek(wk);
+                      setAutoPlanWeek(wk);
+                    }}
+                    className={`p-2.5 rounded-2xl text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      isSelected
+                        ? 'bg-white text-orange-900 shadow-md ring-2 ring-white scale-[1.03]'
+                        : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-[11px] font-black uppercase ${isSelected ? 'text-orange-600' : 'text-orange-200'}`}>
+                        W{wk}
+                      </span>
+                      {wk === NEXT_WEEK_NUMBER && (
+                        <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase ${
+                          isSelected ? 'bg-orange-500 text-white' : 'bg-white text-orange-700'
+                        }`}>
+                          Volgende
+                        </span>
+                      )}
+                    </div>
+                    <div className={`text-[10px] font-bold truncate ${isSelected ? 'text-slate-600' : 'text-orange-100'}`}>
+                      {meta.dateRange.split('–')[0]?.trim()}
+                    </div>
+                    <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-white/15">
+                      <span className={`text-[11px] font-black ${isSelected ? 'text-slate-900' : 'text-white'}`}>
+                        {weekShifts.length} shifts
+                      </span>
+                      <span className={`w-2 h-2 rounded-full ${isPublished ? 'bg-emerald-400' : 'bg-amber-300 animate-pulse'}`} title={isPublished ? 'Gepubliceerd' : `${draftCount} concepten`}></span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Week Selector Bar - "Vanaf volgende week" selector */}
+          <div className="bg-white rounded-3xl p-4 shadow-md border-2 border-orange-200 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-3 bg-orange-500 text-white rounded-2xl shadow-sm">
+                <CalendarIcon size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">
+                    Weekrooster Selectie
+                  </h3>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                    isCurrentWeekSelectedArchived
+                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  }`}>
+                    {isCurrentWeekSelectedArchived ? `📦 Week ${selectedManagerWeek} (Archief)` : `Week ${selectedManagerWeek} actief`}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-bold mt-0.5">
+                  {getWeekMeta(selectedManagerWeek).label} • {getWeekMeta(selectedManagerWeek).dateRange}
+                </p>
+              </div>
+            </div>
+
+            {/* Week pill buttons */}
+            <div className="flex flex-wrap items-center gap-1.5 w-full lg:w-auto">
+              {activeWeeks.map((w) => {
+                const isSelected = selectedManagerWeek === w.weekNumber;
+                const weekShiftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber).length;
+                const weekDraftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber && s.status === 'draft').length;
+
+                return (
+                  <button
+                    key={w.weekNumber}
+                    type="button"
+                    onClick={() => {
+                      setSelectedManagerWeek(w.weekNumber);
+                      setAutoPlanWeek(w.weekNumber);
+                    }}
+                    className={`px-3 py-2 rounded-2xl text-xs font-black uppercase transition-all duration-150 flex items-center gap-1.5 cursor-pointer ${
+                      isSelected
+                        ? 'bg-orange-500 text-white shadow-md ring-2 ring-orange-300 scale-[1.02]'
+                        : 'bg-orange-50/80 hover:bg-orange-100 text-slate-700 border border-orange-200'
+                    }`}
+                  >
+                    <span>{w.shortLabel}</span>
+                    {w.isUpcoming && (
+                      <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
+                        isSelected ? 'bg-white text-orange-600' : 'bg-orange-500 text-white'
+                      }`}>
+                        Vanaf volgend
+                      </span>
+                    )}
+                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
+                      isSelected ? 'bg-orange-600 text-white' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {weekShiftCount}
+                    </span>
+                    {weekDraftCount > 0 && (
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title={`${weekDraftCount} ontwerp-diensten`}></span>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Add Next Week Button */}
+              <button
+                type="button"
+                onClick={handleAddNewWeek}
+                className="px-3 py-2 rounded-2xl text-xs font-black uppercase bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1 transition cursor-pointer shadow-sm"
+                title="Voeg automatisch de volgende week toe aan de planning"
+              >
+                <Plus size={14} className="stroke-[3]" />
+                <span>+ Week</span>
+              </button>
+
+              {/* Archive Dropdown Toggle */}
+              {archivedWeeks.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowArchiveMenu(prev => !prev)}
+                    className="px-3 py-2 rounded-2xl text-xs font-black uppercase bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1.5 transition cursor-pointer"
+                    title="Bekijk oudere gearchiveerde weken"
+                  >
+                    <Archive size={14} className="text-slate-500" />
+                    <span>Archief ({archivedWeeks.length})</span>
+                  </button>
+
+                  {showArchiveMenu && (
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-2xl border-2 border-slate-200 p-2 z-50 animate-in fade-in slide-in-from-top-2">
+                      <div className="text-[10px] font-black uppercase text-slate-400 px-3 py-1.5 tracking-wider border-b border-slate-100">
+                        📦 Gearchiveerde Weken
+                      </div>
+                      <div className="max-h-56 overflow-y-auto py-1 space-y-1">
+                        {archivedWeeks.map((aw) => {
+                          const isSel = selectedManagerWeek === aw.weekNumber;
+                          const shiftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === aw.weekNumber).length;
+                          return (
+                            <button
+                              key={aw.weekNumber}
+                              type="button"
+                              onClick={() => {
+                                setSelectedManagerWeek(aw.weekNumber);
+                                setAutoPlanWeek(aw.weekNumber);
+                                setShowArchiveMenu(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer ${
+                                isSel ? 'bg-amber-100 text-amber-900 font-black' : 'hover:bg-slate-50 text-slate-700'
+                              }`}
+                            >
+                              <div>
+                                <div>Week {aw.weekNumber}</div>
+                                <div className="text-[10px] text-slate-400 font-normal">{aw.dateRange}</div>
+                              </div>
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                                {shiftCount} shifts
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Quick helper: copy previous week & clear week & print PDF */}
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowSchedulePrintModal(true)}
+                className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-xs active:scale-95"
+                title={`Print Week ${selectedManagerWeek} als strakke PDF voor in de keuken van het café`}
+              >
+                <Printer size={14} className="text-rose-600" />
+                <span>Print PDF (Keuken/Café)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyPreviousWeekRoster}
+                className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
+                title={`Kopieer diensten van Week ${selectedManagerWeek - 1} naar Week ${selectedManagerWeek}`}
+              >
+                <RotateCcw size={14} />
+                <span>Kopieer W{selectedManagerWeek - 1}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleClearWeekRoster}
+                className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer border border-rose-200"
+                title={`Wis alle ingevulde diensten in Week ${selectedManagerWeek}`}
+              >
+                <Trash2 size={14} className="text-rose-600" />
+                <span>Wis W{selectedManagerWeek}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Banner when viewing an archived week */}
+          {isCurrentWeekSelectedArchived && (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-200 text-amber-800 rounded-xl">
+                  <Archive size={18} />
+                </div>
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wide">
+                    📦 Je bekijkt een gearchiveerde week: Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
+                  </div>
+                  <div className="text-xs text-amber-700 font-medium">
+                    Oudere weken worden automatisch gearchiveerd. Je kunt de historie nog steeds inzien en exporteren.
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedManagerWeek(CURRENT_WEEK_NUMBER);
+                  setAutoPlanWeek(CURRENT_WEEK_NUMBER);
+                }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shrink-0"
+              >
+                Naar Huidige Week (W{CURRENT_WEEK_NUMBER})
+              </button>
+            </div>
+          )}
+
+          {/* Slimme Auto-Planner Control Card */}
+          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl border-2 border-orange-400">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl animate-pulse">⚡</span>
+                  <h3 className="text-base font-black uppercase tracking-tight">Slimme Auto-Planner</h3>
+                </div>
+                <p className="text-xs text-orange-100 font-bold max-w-3xl leading-relaxed">
+                  Genereer automatisch een optimaal werkschema: <strong>Overdag 2 personen</strong>, 's avonds <strong>Ma & Di: 4 pers.</strong>, <strong>Wo & Do: 5 pers.</strong>, <strong>Vr, Za & Zo: 7 pers.</strong> (waarvan <strong>1 sluit</strong> en <strong>1 hulpsluit</strong>). Respecteert ingediende beschikbaarheden, gewenste uren en contractlimieten.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 shrink-0">
+                <div className="flex flex-col text-left space-y-1">
+                  <label className="text-[10px] font-black uppercase text-orange-200">Gebruik Beschikbaarheid:</label>
+                  <select
+                    value={autoPlanWeek}
+                    onChange={(e) => setAutoPlanWeek(parseInt(e.target.value))}
+                    className="bg-white/10 hover:bg-white/25 border border-white/20 rounded-xl px-3 py-2 text-xs font-black text-white focus:outline-none cursor-pointer transition"
+                  >
+                    {activeWeeks.map((w) => (
+                      <option key={w.weekNumber} className="text-slate-800 font-bold" value={w.weekNumber}>
+                        Week {w.weekNumber} ({w.dateRange.split('–')[0]?.trim()}) {w.isNext ? '• Volgende week' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiModal(true)}
+                  className="px-5 py-3.5 bg-gradient-to-r from-amber-300 to-yellow-300 hover:from-amber-200 hover:to-yellow-200 text-slate-900 text-xs font-black uppercase rounded-2xl shadow-lg transition duration-100 active:scale-95 cursor-pointer mt-auto border-0 flex items-center gap-2"
+                  title="Genereer een slim voorstel voor het weekrooster via de server-side Gemini API"
+                >
+                  <Bot size={16} className="text-orange-700" />
+                  <span>Gemini AI Voorstel ✨</span>
+                </button>
+
+                <button
+                  onClick={handleAutoPlanClick}
+                  className="px-5 py-3.5 bg-white hover:bg-orange-50 text-orange-600 hover:text-orange-700 text-xs font-black uppercase rounded-2xl shadow-lg transition duration-100 active:scale-95 cursor-pointer mt-auto border-0"
+                >
+                  Genereer Planning 🪄
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Grid view - Vibrant Palette Style with Sticky Column (Names) and Sticky Row (Days) */}
+          <div className="bg-white rounded-3xl shadow-md border-2 border-orange-100 overflow-hidden flex flex-col">
+            <div className="overflow-auto max-h-[75vh] relative">
+              <table className="min-w-full table-fixed border-separate border-spacing-0">
+                <thead className="sticky top-0 z-20 bg-orange-50 shadow-xs">
+                  <tr>
+                    <th className="sticky left-0 top-0 z-30 w-52 min-w-[210px] max-w-[210px] px-4 py-3.5 text-left text-xs font-black text-slate-700 uppercase tracking-wider bg-orange-50 border-b-2 border-r-2 border-orange-200 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.08)]">
+                      <div className="flex items-center justify-between">
+                        <span>Medewerker ({isZaal ? 'Zaal' : 'Keuken'})</span>
+                        <span className="text-[9px] font-black text-orange-700 bg-orange-200/80 px-1.5 py-0.5 rounded-md normal-case">
+                          📌
+                        </span>
+                      </div>
+                    </th>
+                    {DAYS_OF_WEEK.map((day, dIdx) => {
+                      const currentMeta = getWeekMeta(selectedManagerWeek);
+                      const formattedDate = currentMeta?.daysFormatted?.[dIdx] || day;
+                      const eveningTarget = dIdx <= 1 ? 4 : dIdx <= 3 ? 5 : 7;
+                      return (
+                        <th key={day} className="px-3 py-3.5 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[135px] bg-orange-50">
+                          <div className="flex items-center gap-1">
+                            <span>{formattedDate}</span>
+                            {dIdx === 6 && (
+                              <span className="text-[8px] font-black text-amber-900 bg-amber-200 px-1 py-0.2 rounded">10u</span>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-bold text-orange-600">
+                            {dIdx === 6 ? 'Open va. 10u00' : 'Gewoon open'}
+                          </div>
+                          <div className="text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
+                            2 overdag • {eveningTarget} avond
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody className="bg-white">
+                  {deptEmployees.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-8 text-center text-xs font-bold text-slate-400 uppercase border-b border-orange-100">
+                        Geen medewerkers gevonden in afdeling {isZaal ? 'Zaal' : 'Keuken'} met de geselecteerde filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    deptEmployees.map((emp) => (
+                      <tr key={emp.id} className="hover:bg-orange-50/20 transition-colors group">
+                        {/* Employee Info Column - Sticky */}
+                        <td className="sticky left-0 z-10 w-52 min-w-[210px] max-w-[210px] px-4 py-4 whitespace-nowrap bg-white group-hover:bg-orange-50/90 border-r-2 border-b border-orange-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] transition-colors">
+                          <div className="flex items-center space-x-3">
+                            <div 
+                              className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shadow-sm text-white uppercase ring-2 ring-orange-200 border border-white shrink-0"
+                              style={{ backgroundColor: emp.color }}
+                            >
+                              {emp.avatarUrl ? (
+                                <img src={emp.avatarUrl} alt={emp.name} className="w-full h-full object-cover" />
+                              ) : (
+                                emp.name.split(' ').map(n => n[0]).join('')
+                              )}
+                            </div>
+                            <div className="truncate">
+                              <div className="text-xs font-black text-slate-800 truncate" title={emp.name}>{emp.name}</div>
+                              <div className="text-[10px] font-black text-orange-600 uppercase tracking-wide truncate">{emp.statuut} ({emp.experience})</div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Days columns */}
+                        {DAYS_OF_WEEK.map((day, dayIdx) => {
+                          const dayShifts = shifts.filter(s => 
+                            s.employeeId === emp.id && 
+                            s.day === dayIdx &&
+                            (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek
+                          );
+                          return (
+                            <td key={dayIdx} className="px-2 py-3 border-r border-b border-orange-100 align-top min-h-[96px] min-w-[135px]">
+                            <div className="space-y-2 min-h-[64px] flex flex-col justify-start">
+                              {dayShifts.map((sh) => (
+                                <div
+                                  key={sh.id}
+                                  onClick={() => handleOpenEditShift(sh)}
+                                  className={`p-2 rounded-xl text-left border cursor-pointer transition relative group/shift hover:shadow-md ${emp.textBgColor} ${
+                                    sh.status === 'draft' ? 'border-dashed border-slate-300 bg-slate-50/70 opacity-80' : ''
+                                  }`}
+                                >
+                                  {/* Shift times */}
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold flex items-center gap-1">
+                                      <Clock size={11} className="inline opacity-80" />
+                                      {sh.startTime} - {sh.endTime}
+                                    </span>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onDeleteShift(sh.id);
+                                          setSixWeeksSuccessMsg(`Dienst verwijderd voor ${emp.name}`);
+                                          setTimeout(() => setSixWeeksSuccessMsg(null), 3000);
+                                        }}
+                                        className="opacity-0 group-hover/shift:opacity-100 p-0.5 hover:bg-rose-200 text-rose-700 rounded transition cursor-pointer"
+                                        title="Dienst direct wissen"
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                      {sh.status === 'draft' ? (
+                                        <span className="text-[9px] font-medium px-1 bg-slate-200 text-slate-700 rounded-md">Draft</span>
+                                      ) : sh.acknowledged ? (
+                                        <span className="text-emerald-600" title="Gezien door medewerker">
+                                          <CheckCheck size={14} className="stroke-[3]" />
+                                        </span>
+                                      ) : (
+                                        <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping" title="Nog niet bevestigd door medewerker" />
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Role badge (Sluit, Hulpsluit, Overdag) */}
+                                  {(sh.endTime === 'Sluit' || (sh.notes?.toLowerCase().includes('sluit') && !sh.notes?.toLowerCase().includes('hulpsluit'))) && (
+                                    <div className="mt-1">
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                        🌙 Sluit
+                                      </span>
+                                    </div>
+                                  )}
+                                  {(sh.endTime === 'Hulpsluit' || sh.notes?.toLowerCase().includes('hulpsluit')) && (
+                                    <div className="mt-1">
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                        🌓 Hulpsluit
+                                      </span>
+                                    </div>
+                                  )}
+                                  {(sh.endTime === '18u00' || sh.notes?.toLowerCase().includes('overdag') || sh.notes?.toLowerCase().includes('dagdienst')) && (
+                                    <div className="mt-1">
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                        ☀️ Overdag
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Notes summary */}
+                                  {sh.notes && (
+                                    <p className="text-[10px] italic text-slate-500 truncate mt-1">
+                                      "{sh.notes}"
+                                    </p>
+                                  )}
+
+                                  {/* Visual decoration */}
+                                  <span 
+                                    className="absolute left-0 top-1/4 h-1/2 w-1 rounded-r-md" 
+                                    style={{ backgroundColor: emp.color }}
+                                  />
+                                </div>
+                              ))}
+
+                              {/* Create button shown on cell focus/hover */}
+                              <button
+                                onClick={() => handleOpenAddShift(emp.id, dayIdx)}
+                                className="w-full py-2 border-2 border-orange-100 border-dashed rounded-xl flex items-center justify-center text-orange-400 hover:text-orange-600 hover:border-orange-300 hover:bg-orange-50/40 transition text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 md:opacity-30 cursor-pointer"
+                              >
+                                <Plus size={14} className="stroke-[3]" />
+                              </button>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+            </div>
+          </div>
+
+          {/* Color hints - Vibrant Palette Style */}
+          <div className="flex flex-wrap gap-4 text-xs text-slate-500 pt-2 bg-orange-50/40 p-4 rounded-3xl border-2 border-orange-100">
+            <span className="font-extrabold text-orange-600 uppercase">Legenda:</span>
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
+              <span className="inline-block w-4 h-2.5 bg-slate-100 border-2 border-dashed border-slate-300 rounded" />
+              <span>Ontwerp (Concept)</span>
+            </span>
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
+              <span className="inline-block w-4 h-4 bg-emerald-100 border-2 border-emerald-300 rounded-full flex items-center justify-center text-emerald-600 font-extrabold text-[8px]"><CheckCheck size={10} /></span>
+              <span>Gezien & Bevestigd</span>
+            </span>
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
+              <span className="inline-block w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse" />
+              <span>Nog niet gelezen</span>
+            </span>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* 1b. BESCHIKBAARHEID TAB - STRICTLY ADMIN ONLY */}
+      {activeSubTab === 'beschikbaarheid' && (() => {
+        const filteredEmployees = sortEmployeesByFirstName(
+          employees.filter(emp => {
+            const matchSearch = emp.name.toLowerCase().includes(managerAvailSearch.toLowerCase());
+            const matchStatuut = managerAvailStatuutFilter === 'all' || emp.statuut === managerAvailStatuutFilter;
+            const matchExperience = managerAvailExperienceFilter === 'all' || emp.experience === managerAvailExperienceFilter;
+            return matchSearch && matchStatuut && matchExperience && emp.id !== 'emp1'; // Don't show lead manager (Hans Stevens)
+          })
+        );
+
+        const totalSubmittedThisWeek = employees.filter(emp => 
+          emp.id !== 'emp1' && availabilities.some(a => a.employeeId === emp.id && a.weekNumber === selectedManagerWeek)
+        ).length;
+
+        return (
+          <div className="space-y-6 font-sans text-left">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-black text-slate-800 tracking-tight uppercase">Personeels-Beschikbaarheden Overzicht 📅</h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
+                    🔒 Alleen Zichtbaar voor Beheerder
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Volg live welke personeelsleden hun beschikbaarheden wel of niet hebben doorgegeven via het online formulier. Personeel heeft geen toegang tot dit blad.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setShowExcelAvailabilityModal(true)}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-emerald-500"
+                  title="Excel bestand uploaden of sjabloon downloaden voor bulk beschikbaarheden"
+                >
+                  <FileSpreadsheet size={15} className="text-emerald-200" />
+                  <span>📊 Excel Uploaden / Downloaden</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBackupModal(true)}
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-slate-700"
+                  title="Bekijk de cloud backup van alle ingezonden formulieren"
+                >
+                  <Database size={15} className="text-orange-400" />
+                  <span>💾 Cloud Backups & Archief</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Cloud Backup Status Banner */}
+            <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                <div>
+                  <p className="text-xs font-black text-emerald-950 uppercase tracking-tight">
+                    Cloud Backup Actief & Beveiligd
+                  </p>
+                  <p className="text-xs text-emerald-800 font-medium">
+                    Elke ingediende beschikbaarheid van het personeel wordt automatisch en onuitwisbaar gearchiveerd in Google Cloud Firestore.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBackupModal(true)}
+                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+              >
+                Inzien in Archief →
+              </button>
+            </div>
+
+            {/* Stats Dashboard */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white border-2 border-orange-100 p-5 rounded-3xl flex items-center justify-between shadow-sm">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-wide">Status week {selectedManagerWeek}</p>
+                  <p className="text-2xl font-black text-slate-800 mt-1">
+                    {totalSubmittedThisWeek} <span className="text-xs font-semibold text-slate-550">/ {employees.filter(e => e.id !== 'emp1').length} ingediend</span>
+                  </p>
+                </div>
+                <span className="text-2xl bg-orange-50 p-3 rounded-2xl border-2 border-orange-100">📋</span>
+              </div>
+              <div className="bg-white border-2 border-emerald-100 p-5 rounded-3xl flex items-center justify-between shadow-sm">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-emerald-700 tracking-wide">Deelname Percentage</p>
+                  <p className="text-2xl font-black text-emerald-800 mt-1">
+                    {Math.round((totalSubmittedThisWeek / (employees.filter(e => e.id !== 'emp1').length || 1)) * 100)}%
+                  </p>
+                </div>
+                <span className="text-2xl bg-emerald-50 p-3 rounded-2xl border-2 border-emerald-100">📈</span>
+              </div>
+              <div className="bg-white border-2 border-blue-100 p-5 rounded-3xl flex items-center justify-between shadow-sm">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-blue-700 tracking-wide">Eerste login compleet</p>
+                  <p className="text-2xl font-black text-blue-800 mt-1">
+                    {employees.filter(e => e.firstLoginComplete && e.id !== 'emp1').length} <span className="text-xs font-semibold text-slate-550 font-sans">collega's</span>
+                  </p>
+                </div>
+                <span className="text-2xl bg-blue-50 p-3 rounded-2xl border-2 border-blue-100 border bg-slate-50">🔒</span>
+              </div>
+            </div>
+
+            {/* Control Filters Area */}
+            <div className="bg-white p-5 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+              
+              {/* Select Week selector */}
+              <div className="space-y-1.5 w-full md:w-auto text-left">
+                <span className="block text-[10px] font-black text-slate-600 uppercase tracking-widest">Selecteer Week:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {AVAILABLE_WEEKS.map(w => {
+                    const wk = w.weekNumber;
+                    const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER);
+                    const isSelected = selectedManagerWeek === wk;
+                    return (
+                      <button
+                        key={wk}
+                        type="button"
+                        onClick={() => {
+                          setSelectedManagerWeek(wk);
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
+                            : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
+                        }`}
+                      >
+                        <span>Week {wk}</span>
+                        {wk === CURRENT_WEEK_NUMBER && (
+                          <span className={`text-[8px] px-1 py-0.2 rounded font-black flex items-center gap-0.5 ${
+                            isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                          }`}>
+                            <Lock size={7} /> Huidig
+                          </span>
+                        )}
+                        {wk === NEXT_WEEK_NUMBER && (
+                          <span className={`text-[8px] px-1 py-0.2 rounded font-black flex items-center gap-0.5 ${
+                            isSelected ? 'bg-slate-200 text-slate-900' : 'bg-slate-200 text-slate-700 border border-slate-300'
+                          }`}>
+                            <Lock size={7} /> Volgende
+                          </span>
+                        )}
+                        {!isLocked && (
+                          <span className={`text-[8px] px-1 py-0.2 rounded font-bold ${
+                            isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          }`}>
+                            Open
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Filters Search and Role */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                {/* Search */}
+                <div className="w-full sm:w-60 relative">
+                  <input
+                    type="text"
+                    placeholder="Zoek medewerker..."
+                    value={managerAvailSearch}
+                    onChange={(e) => setManagerAvailSearch(e.target.value)}
+                    className="w-full bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-3.5 py-2 text-xs font-bold tracking-normal focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+
+                {/* Statuut select */}
+                <select
+                  value={managerAvailStatuutFilter}
+                  onChange={(e) => setManagerAvailStatuutFilter(e.target.value as any)}
+                  className="w-full sm:w-auto bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs font-black uppercase tracking-tight focus:outline-none cursor-pointer"
+                >
+                  <option value="all">Alle Statuten</option>
+                  <option value="Student">Student</option>
+                  <option value="Flexi">Flexi</option>
+                  <option value="Vast">Vast</option>
+                  <option value="Extra">Extra</option>
+                </select>
+
+                {/* Experience select */}
+                <select
+                  value={managerAvailExperienceFilter}
+                  onChange={(e) => setManagerAvailExperienceFilter(e.target.value as any)}
+                  className="w-full sm:w-auto bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs font-black uppercase tracking-tight focus:outline-none cursor-pointer"
+                >
+                  <option value="all">Alle Ervaring</option>
+                  <option value="Beginner">Beginner</option>
+                  <option value="Gemiddeld">Gemiddeld</option>
+                  <option value="Ervaren">Ervaren</option>
+                  <option value="Verantwoordelijke">Verantwoordelijke</option>
+                </select>
+              </div>
+
+            </div>
+
+            {/* Matrix Table with Sticky Column (Names) and Sticky Row (Days) */}
+            <div className="bg-white rounded-3xl border-2 border-orange-100 shadow-sm overflow-hidden flex flex-col">
+              <div className="overflow-auto max-h-[72vh] relative">
+                <table className="min-w-full table-fixed border-separate border-spacing-0">
+                  <thead className="sticky top-0 z-20 bg-slate-100 shadow-xs">
+                    <tr>
+                      <th 
+                        scope="col" 
+                        className="sticky left-0 top-0 z-30 w-56 min-w-[220px] max-w-[220px] px-5 py-4 text-left text-xs font-black uppercase text-slate-700 tracking-wider bg-slate-100 border-b-2 border-r-2 border-orange-200 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.08)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span>Medewerker</span>
+                          <span className="text-[9px] font-black text-orange-600 bg-orange-100/70 border border-orange-200 px-1.5 py-0.5 rounded-md normal-case">
+                            📌 Vastgezet
+                          </span>
+                        </div>
+                      </th>
+                      {DAYS_OF_WEEK.map((day, idx) => (
+                        <th 
+                          key={idx} 
+                          scope="col" 
+                          className="sticky top-0 z-20 px-3 py-3 text-center text-xs font-black uppercase text-slate-700 tracking-wider bg-slate-100 border-b-2 border-r border-orange-200 min-w-[125px]"
+                        >
+                          <div className="flex items-center justify-center gap-1">
+                            <span>{day}</span>
+                            {idx === 6 && (
+                              <span className="text-[8px] font-black text-amber-800 bg-amber-200/80 border border-amber-300 px-1 py-0.5 rounded">10u</span>
+                            )}
+                          </div>
+                          <span className="text-[9px] font-bold text-slate-500 block normal-case font-mono">
+                            {idx === 6 ? 'va. 10:00' : 'va. 16:00'}
+                          </span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  
+                  <tbody className="bg-white">
+                    {filteredEmployees.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-12 text-center text-xs text-slate-500 font-bold uppercase tracking-tight border-b border-slate-200">
+                          Geen medewerkers gevonden voor deze zoekfilters.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredEmployees.map(emp => {
+                        const employeeAvail = availabilities.find(a => a.employeeId === emp.id && a.weekNumber === selectedManagerWeek);
+                        
+                        return (
+                          <tr key={emp.id} className="hover:bg-orange-50/30 transition-all group">
+                            
+                            {/* Employee Bio details - Sticky First Column */}
+                            <td className="sticky left-0 z-10 w-56 min-w-[220px] max-w-[220px] px-5 py-3.5 whitespace-nowrap bg-white group-hover:bg-orange-50/90 border-r-2 border-b border-orange-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] transition-colors">
+                              <div className="flex items-center space-x-3 text-left">
+                                <span 
+                                  className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-black text-[10px] text-white uppercase shadow-sm border border-white shrink-0"
+                                  style={{ backgroundColor: emp.color }}
+                                >
+                                  {emp.avatarUrl ? (
+                                    <img src={emp.avatarUrl} alt={emp.name} className="w-full h-full object-cover" />
+                                  ) : (
+                                    emp.name.split(' ').map(n => n[0]).join('')
+                                  )}
+                                </span>
+                                <div className="truncate">
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="text-xs font-black text-slate-800 leading-tight uppercase truncate max-w-[130px]" title={emp.name}>{emp.name}</p>
+                                    {(emp.contractDaysPerWeek === 4 || emp.name === "Pat" || emp.name.toLowerCase().includes("matthias") || emp.name.toLowerCase().includes("mathias")) && (
+                                      <span className="text-[8px] font-black bg-purple-100 text-purple-800 border border-purple-200 px-1 py-0.2 rounded shrink-0" title="Fulltime regime: 4 dagen per week">
+                                        4d
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[9px] font-black uppercase text-orange-600 tracking-wider block truncate">
+                                    {emp.statuut} {emp.contractDaysPerWeek === 4 ? '(4d)' : ''} ({emp.experience})
+                                  </span>
+                                  {employeeAvail && (
+                                    <div className="mt-0.5">
+                                      {selectedManagerWeek === CURRENT_WEEK_NUMBER ? (
+                                        <span className="text-[8px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-1 py-0.2 rounded inline-flex items-center gap-0.5" title="Huidige week (vastgelegd)">
+                                          <Lock size={7} /> Huidig (Vast)
+                                        </span>
+                                      ) : selectedManagerWeek === NEXT_WEEK_NUMBER ? (
+                                        <span className="text-[8px] font-black text-slate-800 bg-slate-200 border border-slate-300 px-1 py-0.2 rounded inline-flex items-center gap-0.5" title="Volgende week (vastgelegd)">
+                                          <Lock size={7} /> Volgende (Vast)
+                                        </span>
+                                      ) : selectedManagerWeek < CURRENT_WEEK_NUMBER ? (
+                                        <span className="text-[8px] font-black text-slate-600 bg-slate-100 border border-slate-300 px-1 py-0.2 rounded inline-block" title="Gearchiveerde week">
+                                          Archief
+                                        </span>
+                                      ) : (
+                                        <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded inline-block" title="Komende week (open voor invoer)">
+                                          ✓ Open
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Mon — Sun availability blocks */}
+                            {Array.from({ length: 7 }).map((_, dayIdx) => {
+                              const dayAvail = employeeAvail?.days.find(d => d.day === dayIdx);
+                              
+                              let bgClass = 'bg-slate-50/50 text-slate-400';
+                              let badgeText = '—';
+                              let icon = '⚪';
+                              let hasNotes = false;
+
+                              if (dayAvail) {
+                                hasNotes = !!dayAvail.notes?.trim();
+                                if (dayAvail.status === 'preferred') {
+                                  bgClass = 'bg-amber-50/60 border-amber-250 text-amber-950 font-extrabold';
+                                  badgeText = 'Voorkeur';
+                                  icon = '⭐';
+                                } else if (dayAvail.status === 'available') {
+                                  bgClass = 'bg-emerald-50/60 border-emerald-250 text-emerald-950';
+                                  badgeText = 'Beschikbaar';
+                                  icon = '✓';
+                                } else if (dayAvail.status === 'unavailable') {
+                                  bgClass = 'bg-rose-50/60 border-rose-250 text-rose-800';
+                                  badgeText = 'Niet-beschikbaar';
+                                  icon = '✕';
+                                }
+                              }
+
+                              return (
+                                <td key={dayIdx} className={`px-2 py-3 border-r border-b border-slate-200/70 text-center text-[10px] font-bold min-w-[125px] ${bgClass}`}>
+                                  <div className="flex flex-col items-center justify-center space-y-0.5">
+                                    <span className="text-[11px] font-black">{icon} {badgeText}</span>
+                                    {dayAvail && dayAvail.status !== 'unavailable' && (dayAvail.startTime || dayAvail.endTime) && (
+                                      <span className="text-[8.5px] font-black tracking-tight text-orange-900 bg-orange-100 border border-orange-200 px-1 py-0.2 rounded mt-0.5 block leading-tight">
+                                        {dayAvail.startTime || 'Open'} - {dayAvail.endTime || 'Sluit'}
+                                      </span>
+                                    )}
+                                    {hasNotes && (
+                                      <span className="text-[9px] text-slate-500 italic block leading-none font-medium text-center bg-white/75 px-1 py-0.5 border rounded-md" title={dayAvail?.notes}>
+                                        "{dayAvail?.notes}"
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              );
+                            })}
+
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              {/* Pagination/Filter helper message */}
+              <div className="bg-slate-50 px-5 py-3 border-t border-orange-100 flex justify-between items-center text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                <span>Weergave: {filteredEmployees.length} van {employees.filter(e => e.id !== 'emp1').length} medewerkers</span>
+                <span>💡 Tip: Gebruik de filters bovenaan om snel per statuut & ervaring te coördineren.</span>
+              </div>
+            </div>
+
+          </div>
+        );
+      })()}
+
+      {/* 2. RUILVERZOEKEN TAB */}
+      {activeSubTab === 'verzoeken' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight uppercase">Openstaande Ruileverzoeken</h2>
+            <p className="text-xs text-slate-500">Medewerkers die onderling hun dienst willen ruilen of een dienst willen afstaan.</p>
+          </div>
+
+          {swapRequests.length === 0 ? (
+            <div className="bg-white p-12 text-center rounded-2xl border border-slate-100 shadow-sm space-y-3">
+              <div className="w-12 h-12 bg-slate-50 rounded-full text-slate-400 flex items-center justify-center mx-auto">
+                <Check size={24} />
+              </div>
+              <h4 className="font-bold text-sm text-slate-700">Geen openstaande verzoeken!</h4>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">Alle ingediende wijzigingen zijn momenteel verwerkt. Het team is up-to-date.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {swapRequests.map((req) => {
+                const requester = employees.find(e => e.id === req.requesterId);
+                const shift = shifts.find(s => s.id === req.shiftId);
+                const targetEmp = req.targetEmployeeId ? employees.find(e => e.id === req.targetEmployeeId) : null;
+                
+                if (!requester || !shift) return null;
+
+                return (
+                  <div 
+                    key={req.id} 
+                    className={`bg-white rounded-3xl p-5 border-2 shadow-sm space-y-4 relative overflow-hidden ${
+                      req.status === 'approved' ? 'border-emerald-500' : req.status === 'geweigerd' ? 'border-slate-300 bg-slate-50/50' : 'border-orange-100'
+                    }`}
+                  >
+                    {/* Status corner badge - Vibrant Palette Styles */}
+                    <div className="absolute top-4 right-4">
+                      {req.status === 'pending' ? (
+                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-orange-100 border border-orange-200 text-orange-950">Wacht op beheerder</span>
+                      ) : req.status === 'approved' ? (
+                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-emerald-100 border border-emerald-300 text-emerald-850">Goedgekeurd</span>
+                      ) : (
+                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-slate-100 border border-slate-200 text-slate-600">Geweigerd</span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-3">
+                      <div 
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-sm uppercase ring-2 ring-orange-200 border border-white"
+                        style={{ backgroundColor: requester.color }}
+                      >
+                        {requester.name.split(' ').map(n => n[0]).join('')}
+                      </div>
+                      <div>
+                        <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight">{requester.name}</h4>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase">Aangevraagd: {req.date}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-orange-50/40 p-4 rounded-xl border border-orange-100 text-xs text-slate-755 space-y-2 font-medium">
+                      <div className="flex justify-between font-black text-slate-800 uppercase tracking-tight">
+                        <span>Originele Dienst:</span>
+                        <span className="text-orange-600">{DAYS_OF_WEEK[shift.day]}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tijdstip:</span>
+                        <span className="font-bold text-slate-700">{shift.startTime} - {shift.endTime}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-750">Ruilen met / Overname door:</span>
+                        {targetEmp ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-orange-100 border border-orange-200 text-orange-950">
+                            {targetEmp.name}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-black uppercase text-orange-500 tracking-tight bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-100">Open Aanbod</span>
+                        )}
+                      </div>
+                      {shift.notes && (
+                        <div className="pt-2 border-t border-orange-100 text-slate-500 italic">
+                          "{shift.notes}"
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[10px] text-orange-650 uppercase tracking-wide font-black">Opgegeven Reden:</p>
+                      <blockquote className="bg-orange-100/50 text-orange-950 px-3.5 py-2.5 rounded-xl text-xs italic border border-orange-200/50 font-medium">
+                        "{req.reason}"
+                      </blockquote>
+                    </div>
+
+                    {req.status === 'pending' && (
+                      <div className="flex space-x-2 pt-2">
+                        <button
+                          onClick={() => onDeclineSwap(req.id)}
+                          className="flex-1 py-2.5 border-2 border-orange-200 hover:bg-orange-50 text-orange-700 hover:text-orange-900 text-xs font-black uppercase tracking-tight rounded-xl transition"
+                        >
+                          Weigeren
+                        </button>
+                        <button
+                          onClick={() => onApproveSwap(req.id)}
+                          className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5"
+                        >
+                          <Check size={14} className="stroke-[3]" />
+                          <span>Goedkeuren +</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. BERICHETEN TAB */}
+      {activeSubTab === 'berichten' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-sans">
+          
+          {/* Post notice form - Vibrant Palette Theme */}
+          <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 space-y-4 md:col-span-1 h-fit">
+            <div>
+              <h3 className="font-extrabold text-sm text-slate-850 flex items-center gap-2 uppercase tracking-tight">
+                <Megaphone size={16} className="text-orange-500 shrink-0" />
+                <span>Nieuw bericht plaatsen</span>
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Medewerkers zien dit direct opvallend op hun startscherm.</p>
+            </div>
+
+            <form onSubmit={handleCreateNotice} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Titel</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Bijv. Gewijzigde sluitdiensttijden"
+                  value={newNotice.title}
+                  onChange={(e) => setNewNotice({ ...newNotice, title: e.target.value })}
+                  className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Categorie</label>
+                <select
+                  value={newNotice.category}
+                  onChange={(e) => setNewNotice({ ...newNotice, category: e.target.value as any })}
+                  className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase focus:outline-none focus:ring-2 focus:ring-orange-500"
+                >
+                  <option value="planning">Planningsupdate 📅</option>
+                  <option value="wijziging">Belangrijke Wijziging 🔄</option>
+                  <option value="belangrijk">Urgent / Belangrijk ⚠️</option>
+                  <option value="algemeen">Algemeen 💬</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Inhoud mededeling</label>
+                <textarea
+                  required
+                  rows={4}
+                  placeholder="Type hier je mededeling voor het team..."
+                  value={newNotice.content}
+                  onChange={(e) => setNewNotice({ ...newNotice, content: e.target.value })}
+                  className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-lg transition duration-150 active:scale-95 cursor-pointer"
+              >
+                Groepsbericht Verzenden +
+              </button>
+            </form>
+          </div>
+
+          {/* Active Notices list */}
+          <div className="md:col-span-2 space-y-4">
+            <h3 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight">Actieve Berichten op het Personeelspaneel</h3>
+            
+            <div className="space-y-4">
+              {notices.map((not) => (
+                <div key={not.id} className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-start space-x-4">
+                  <span className={`w-2.5 h-12 rounded-full shrink-0 ${
+                    not.category === 'planning' ? 'bg-blue-400' : 
+                    not.category === 'wijziging' ? 'bg-orange-400' : 
+                    not.category === 'belangrijk' ? 'bg-rose-500' : 'bg-slate-400'
+                  }`} />
+                  <div className="space-y-2 flex-1">
+                    <div className="flex items-center justify-between">
+                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
+                        {not.category}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase">{not.date}</span>
+                    </div>
+                    <h4 className="font-black text-xs text-slate-800 font-sans uppercase tracking-tight">{not.title}</h4>
+                    <p className="text-xs text-slate-650 leading-relaxed font-sans">{not.content}</p>
+                    <div className="pt-2 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                      <span className="font-bold">Geplaatst door: <strong className="text-slate-600">{not.author}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. PERSOONEEL TAB */}
+      {activeSubTab === 'team' && (
+        <div className="space-y-4 font-sans">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Team Overzicht & Rechten</h2>
+              <p className="text-xs text-orange-600 font-bold uppercase">Beheer je personeelsleden, contactgegevens en rollen.</p>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowExcelSyncModal(true)}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-tight rounded-xl flex items-center space-x-2 shadow-md transition duration-150 active:scale-95 cursor-pointer"
+                title="Personeel importeren, updaten en exporteren via Excel (.xlsx / .csv)"
+              >
+                <FileSpreadsheet size={16} />
+                <span>Excel Beheer (.xlsx / .csv)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowEmployeeModal(true)}
+                className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl flex items-center space-x-2 shadow-lg transition duration-150 active:scale-95 cursor-pointer"
+              >
+                <UserPlus size={16} className="stroke-[3]" />
+                <span>Nieuw Teamlid +</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {sortEmployeesByFirstName(employees).map((emp) => {
+              const empShifts = shifts.filter(s => s.employeeId === emp.id);
+              const publishedShifts = empShifts.filter(s => s.status === 'published');
+              const publishedCount = publishedShifts.length;
+              const unconfirmedCount = publishedShifts.filter(s => !s.acknowledged).length;
+
+              // Acceptance status for current week
+              const hasAcceptedWeekly = publishedCount > 0 && unconfirmedCount === 0;
+              const hasUnconfirmedWeekly = publishedCount > 0 && unconfirmedCount > 0;
+
+              const isEditing = editingEmployeeId === emp.id;
+
+              return (
+                <div key={emp.id} className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex flex-col justify-between space-y-4 hover:shadow-md transition duration-150 text-left">
+                  {isEditing ? (
+                    // EDIT MODE
+                    <div className="space-y-3 w-full">
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                        <span className="text-[10px] font-black uppercase text-orange-600">Teamlid Bewerken</span>
+                        <span className="text-[10px] text-slate-400 font-bold">ID: {emp.id}</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Naam</label>
+                          <input
+                            type="text"
+                            value={editEmpName}
+                            onChange={(e) => setEditEmpName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-extrabold"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Afdeling</label>
+                          <select
+                            value={editEmpDepartment}
+                            onChange={(e) => setEditEmpDepartment(e.target.value as Department)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                          >
+                            <option value="zaal">🍽️ Zaal</option>
+                            <option value="keuken">🍳 Keuken</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Statuut</label>
+                          <select
+                            value={editEmpStatuut}
+                            onChange={(e) => setEditEmpStatuut(e.target.value as EmployeeStatuut)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold cursor-pointer"
+                          >
+                            <option value="Student">Student</option>
+                            <option value="Flexi">Flexi</option>
+                            <option value="Vast">Vast</option>
+                            <option value="Extra">Extra</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Ervaring</label>
+                          <select
+                            value={editEmpExperience}
+                            onChange={(e) => setEditEmpExperience(e.target.value as ExperienceLevel)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold cursor-pointer"
+                          >
+                            <option value="Beginner">Beginner</option>
+                            <option value="Gemiddeld">Gemiddeld</option>
+                            <option value="Ervaren">Ervaren</option>
+                            <option value="Verantwoordelijke">Verantwoordelijke</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">E-mail</label>
+                          <input
+                            type="email"
+                            placeholder="mail@example.com"
+                            value={editEmpEmail}
+                            onChange={(e) => setEditEmpEmail(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Telefoon</label>
+                          <input
+                            type="text"
+                            placeholder="0470..."
+                            value={editEmpPhone}
+                            onChange={(e) => setEditEmpPhone(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                          <Facebook size={10} className="text-[#1877F2]" />
+                          <span>Facebook Profiel URL</span>
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://www.facebook.com/..."
+                          value={editEmpFacebook}
+                          onChange={(e) => setEditEmpFacebook(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <KeyRound size={11} className="text-orange-600" />
+                            <span>Persoonlijke Pincode (PIN)</span>
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-medium">4 cijfers</span>
+                        </label>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="text"
+                            maxLength={4}
+                            placeholder="1234"
+                            value={editEmpPin}
+                            onChange={(e) => setEditEmpPin(e.target.value.replace(/[^0-9]/g, ''))}
+                            className="w-24 bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono font-bold text-center tracking-widest"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setEditEmpPin('1234')}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                          >
+                            Reset naar 1234
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedAvatarEmployee(emp)}
+                          className="w-full py-1.5 px-2.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                          title="Profielfoto maken met camera of uploaden"
+                        >
+                          <Camera size={13} className="stroke-[2.5]" />
+                          <span>{emp.avatarUrl ? 'Foto Wijzigen (Camera)' : 'Foto Toevoegen (Camera)'}</span>
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveEmployeeEdit(emp)}
+                          className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-md transition duration-100 active:scale-95 cursor-pointer text-center"
+                        >
+                          Opslaan ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingEmployeeId(null)}
+                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold uppercase transition duration-100 active:scale-95 cursor-pointer text-center"
+                        >
+                          Annuleer
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    // VIEW MODE
+                    <>
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center space-x-3 text-left">
+                          {/* AVATAR PLACEHOLDER / PHOTO WITH CAMERA BUTTON OVERLAY */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAvatarEmployee(emp)}
+                            className="group relative cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 rounded-full shrink-0"
+                            title="Klik om profielfoto via camera te maken of aan te passen"
+                          >
+                            <div 
+                              className="w-13 h-13 rounded-full overflow-hidden flex items-center justify-center font-black text-sm text-white uppercase shadow-md ring-2 ring-orange-200 border-2 border-white relative transition duration-150 group-hover:scale-105"
+                              style={{ backgroundColor: emp.color }}
+                            >
+                              {emp.avatarUrl ? (
+                                <img src={emp.avatarUrl} alt={emp.name} className="w-full h-full object-cover" />
+                              ) : (
+                                emp.name.split(' ').map(n => n[0]).join('')
+                              )}
+                              
+                              {/* Hover Camera Overlay */}
+                              <div className="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                <Camera size={18} className="stroke-[2.5]" />
+                              </div>
+                            </div>
+
+                            {/* Camera Indicator Badge */}
+                            <span 
+                              className={`absolute -bottom-1 -right-1 p-1 rounded-full shadow-md border transition ${
+                                emp.avatarUrl 
+                                  ? 'bg-emerald-500 text-white border-white' 
+                                  : 'bg-white text-orange-600 border-orange-200 group-hover:bg-orange-500 group-hover:text-white'
+                              }`}
+                              title={emp.avatarUrl ? 'Foto actief in Firebase (klik om te wijzigen)' : 'Geen foto (klik om met camera te maken)'}
+                            >
+                              <Camera size={11} className="stroke-[2.5]" />
+                            </span>
+                          </button>
+
+                          <div>
+                            <div className="flex items-center space-x-1.5">
+                              <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-tight">{emp.name}</h4>
+                              {emp.avatarUrl && (
+                                <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200" title="Profielfoto opgeslagen in Firebase">
+                                  📸 Foto
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1.5 items-center">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                emp.department === 'keuken' 
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300' 
+                                  : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+                              }`}>
+                                {emp.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                              </span>
+                              {renderStatuutBadge(emp.statuut)}
+                              {renderExperienceBadge(emp.experience)}
+                              {hasAcceptedWeekly ? (
+                                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                  ✓ Akkoord
+                                </span>
+                              ) : hasUnconfirmedWeekly ? (
+                                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-amber-50 text-amber-800 border border-amber-200 animate-pulse">
+                                  ⌛ Te Bevestigen
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-tight bg-slate-50 text-slate-500 border border-slate-200">
+                                  Ongepland
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`w-2.5 h-2.5 rounded-full border border-white ring-2 ${emp.active ? 'bg-emerald-500 ring-emerald-100' : 'bg-slate-300 ring-slate-100'}`} title={emp.active ? "Actief" : "Standby"} />
+                          
+                          {/* CAMERA PHOTO BUTTON */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAvatarEmployee(emp)}
+                            className="p-1.5 text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition cursor-pointer"
+                            title="Profielfoto maken met camera of uploaden naar Firebase"
+                          >
+                            <Camera size={13} className="stroke-[2.5]" />
+                          </button>
+
+                          {/* EDIT BUTTON */}
+                          <button
+                            onClick={() => handleStartEmployeeEdit(emp)}
+                            className="p-1.5 text-orange-600 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 border border-orange-100 rounded-xl transition cursor-pointer"
+                            title="Medewerker bewerken (statuut, ervaring, etc.)"
+                          >
+                            <Tag size={13} className="stroke-[2.5]" />
+                          </button>
+
+                          {onDeleteEmployee && emp.id !== 'emp1' && (
+                            <button
+                              onClick={() => onDeleteEmployee(emp.id)}
+                              className="p-1.5 text-rose-650 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-100 hover:border-rose-200 rounded-xl transition cursor-pointer"
+                              title="Medewerker verwijderen"
+                            >
+                              <Trash2 size={13} className="stroke-[2.5]" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Display contact details if filled */}
+                      {(emp.email || emp.phone || emp.facebookUrl) && (
+                        <div className="text-[10px] text-slate-500 space-y-0.5 bg-slate-50 p-2 rounded-2xl border border-slate-100 text-left">
+                          {emp.email && <div className="flex items-center gap-1"><span className="text-slate-400">✉</span> {emp.email}</div>}
+                          {emp.phone && <div className="flex items-center gap-1"><span className="text-slate-400">📞</span> {emp.phone}</div>}
+                          {emp.facebookUrl && (
+                            <div className="flex items-center gap-1">
+                              <Facebook size={10} className="text-[#1877F2] shrink-0" />
+                              <a href={emp.facebookUrl} target="_blank" rel="noopener noreferrer" className="text-[#1877F2] hover:underline truncate max-w-[200px]">
+                                Facebook Profiel ↗
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Personal Staff PIN code row */}
+                      <div className="flex items-center justify-between text-[10px] bg-orange-50/70 p-1.5 rounded-xl border border-orange-200/60 mt-1">
+                        <div className="flex items-center gap-1.5 text-slate-700">
+                          <KeyRound size={12} className="text-orange-600 shrink-0" />
+                          <span className="font-bold text-slate-600">Login PIN:</span>
+                          <span className="font-mono font-black text-xs text-orange-950 bg-white px-1.5 py-0.5 rounded border border-orange-200 shadow-xs tracking-wider">
+                            {emp.pin || '1234'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleResetEmployeePin(emp)}
+                          className="text-[9px] font-black uppercase text-orange-700 hover:text-orange-900 bg-white hover:bg-orange-100 border border-orange-250 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                          title="Reset deze pincode terug naar 1234"
+                        >
+                          Reset naar 1234
+                        </button>
+                      </div>
+
+                      <div className="border-t border-orange-50 my-1 py-1" />
+
+                      <div className="flex items-center justify-between text-[11px]">
+                        <div className="text-slate-500 font-bold uppercase tracking-tight">
+                          Totaal: <strong className="text-orange-600 font-black">{empShifts.length}</strong> diensten
+                        </div>
+
+                        {publishedCount === 0 ? (
+                          <span className="px-2.5 py-1 text-[10px] rounded-full bg-slate-100 text-slate-500 font-black border border-slate-200 uppercase tracking-tight text-center">
+                            Geen shifts
+                          </span>
+                        ) : unconfirmedCount > 0 ? (
+                          <span className="px-2.5 py-1 text-[10px] rounded-full bg-rose-100 text-rose-800 font-black border border-rose-200 uppercase tracking-tight animate-pulse">
+                            {unconfirmedCount} Onbevestigd
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 text-[10px] rounded-full bg-emerald-100 text-emerald-800 font-black border border-emerald-200 uppercase tracking-tight text-center flex items-center gap-0.5 justify-center">
+                            <Check size={11} className="stroke-[3.5]" /> Akkoord ✓
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+
+            {employees.filter(e => e.id !== 'emp1').length === 0 && (
+              <div className="col-span-full bg-white rounded-3xl p-10 text-center border-2 border-dashed border-orange-200 shadow-sm space-y-3">
+                <div className="w-14 h-14 bg-orange-50 text-orange-600 rounded-2xl mx-auto flex items-center justify-center border border-orange-200">
+                  <Users size={28} />
+                </div>
+                <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Geen personeelsleden geregistreerd</h3>
+                <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
+                  Er zijn momenteel geen medewerkers in het systeem. Klik hierboven op <strong className="text-orange-600">"Nieuw Teamlid +"</strong> of gebruik <strong className="text-orange-600">"Excel Beheer (.xlsx / .csv)"</strong> om uw team in bulk in te laden.
+                </p>
+                <div className="pt-2 flex justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowEmployeeModal(true)}
+                    className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer"
+                  >
+                    + Teamlid Toevoegen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowExcelSyncModal(true)}
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black uppercase tracking-tight rounded-xl transition border border-slate-200 cursor-pointer"
+                  >
+                    📊 Excel Importeren
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+
+      {/* SHIFT TOEVOEGEN/BEWERKEN MODAL */}
+      {showShiftModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-bold text-slate-800">
+                {selectedShift.isNew ? 'Nieuwe Dienst Toevoegen' : 'Dienst Bewerken'}
+              </h3>
+              <button 
+                onClick={() => setShowShiftModal(false)}
+                className="text-slate-400 hover:text-slate-600 bg-slate-50 p-1.5 rounded-full transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveShift} className="space-y-4">
+              
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-600">Weekrooster</label>
+                <select
+                  value={selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek}
+                  onChange={(e) => setSelectedShift({ ...selectedShift, weekNumber: parseInt(e.target.value) })}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                >
+                  {activeWeeks.map(w => (
+                    <option key={w.weekNumber} value={w.weekNumber}>
+                      {w.label} ({w.dateRange}) {w.isUpcoming ? '• (Vanaf volgende week)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Medewerker</label>
+                  <select
+                    required
+                    value={selectedShift.employeeId || ''}
+                    onChange={(e) => {
+                      const empId = e.target.value;
+                      const emp = employees.find(x => x.id === empId);
+                      setSelectedShift({ 
+                        ...selectedShift, 
+                        employeeId: empId,
+                        department: emp?.department || selectedShift.department || 'zaal'
+                      });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="" disabled>Kies medewerker...</option>
+                    {sortEmployeesByFirstName(employees).map(e => (
+                      <option key={e.id} value={e.id}>{e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Afdeling (Tabblad)</label>
+                  <select
+                    required
+                    value={selectedShift.department || 'zaal'}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, department: e.target.value as Department })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                  >
+                    <option value="zaal">🍽️ Zaal (IDM Zaal)</option>
+                    <option value="keuken">🍳 Keuken (IDM Keuken)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Dag van de week</label>
+                  <select
+                    required
+                    value={selectedShift.day !== undefined ? selectedShift.day : ''}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, day: parseInt(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    {DAYS_OF_WEEK.map((d, idx) => (
+                      <option key={idx} value={idx}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Dienststatus</label>
+                  <select
+                    required
+                    value={selectedShift.status || 'draft'}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, status: e.target.value as any })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="draft">Ontwerp (Geheim)</option>
+                    <option value="published">Gepubliceerd (Zichtbaar)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Begintijd</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Bijv. Open, 16u00, 17u00"
+                    value={selectedShift.startTime || ''}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, startTime: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                  />
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {['Open', '10u00', '15u30', '16u00', '16u30', '17u00'].map((time) => (
+                      <button
+                        type="button"
+                        key={time}
+                        onClick={() => setSelectedShift({ ...selectedShift, startTime: time })}
+                        className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition ${
+                          selectedShift.startTime === time ? 'bg-orange-500 text-white border-orange-600' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                        }`}
+                      >
+                        {time}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Eindtijd</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Bijv. 18u00, Sluit, Hulpsluit"
+                    value={selectedShift.endTime || ''}
+                    onChange={(e) => setSelectedShift({ ...selectedShift, endTime: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                  />
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {['18u00', '23u00', '23u30', 'Sluit', 'Hulpsluit'].map((time) => (
+                      <button
+                        type="button"
+                        key={time}
+                        onClick={() => setSelectedShift({ ...selectedShift, endTime: time })}
+                        className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold transition ${
+                          selectedShift.endTime === time ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                        }`}
+                      >
+                        {time}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-600">Speciale instructies of opmerkingen</label>
+                <textarea
+                  rows={2}
+                  placeholder="Bijv: Inclusief sluiting en terras opruimen"
+                  value={selectedShift.notes || ''}
+                  onChange={(e) => setSelectedShift({ ...selectedShift, notes: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none animate-none"
+                />
+              </div>
+
+              {!selectedShift.isNew && (
+                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>Bevestigd door medewerker:</span>
+                  {selectedShift.acknowledged ? (
+                    <span className="text-emerald-700 font-bold flex items-center bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100"><Check size={12} className="mr-0.5 inline" /> Ja</span>
+                  ) : (
+                    <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-medium">Nee</span>
+                  )}
+                </div>
+              )}
+
+              <div className="flex space-x-2 pt-2">
+                {!selectedShift.isNew && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteShiftClick(selectedShift.id!)}
+                    className={`px-3 py-2.5 rounded-xl transition flex items-center justify-center border font-bold text-xs gap-1 cursor-pointer ${
+                      isConfirmingDeleteShift 
+                        ? 'bg-red-650 hover:bg-red-800 text-white border-red-700 animate-pulse' 
+                        : 'bg-red-50 hover:bg-red-100 text-red-650 border-red-100'
+                    }`}
+                    title={isConfirmingDeleteShift ? "Nogmaals klikken om DEFINITIEF te verwijderen" : "Verwijder Dienst"}
+                  >
+                    <Trash2 size={16} className="stroke-[2.5]" />
+                    {isConfirmingDeleteShift && <span>Zeker?</span>}
+                  </button>
+                )}
+                
+                <button
+                  type="button"
+                  onClick={() => setShowShiftModal(false)}
+                  className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition"
+                >
+                  Annuleren
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition"
+                >
+                  Opslaan
+                </button>
+              </div>
+
+            </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* MEDEWERKER TOEVOEGEN MODAL */}
+      {showEmployeeModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Teamlid Registreren</h3>
+              <button 
+                onClick={() => {
+                  setShowEmployeeModal(false);
+                  setIsBulkMode(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 bg-slate-50 p-1.5 rounded-full transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Mode switch */}
+            <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+              <button
+                type="button"
+                onClick={() => setIsBulkMode(false)}
+                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-tight rounded-lg transition cursor-pointer ${!isBulkMode ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Enkel toevoegen
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsBulkMode(true)}
+                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-tight rounded-lg transition cursor-pointer ${isBulkMode ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Snelle lijst
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEmployeeModal(false);
+                  setShowExcelSyncModal(true);
+                }}
+                className="flex-1 py-1.5 text-xs font-black uppercase tracking-tight rounded-lg transition text-emerald-800 hover:text-emerald-950 flex items-center justify-center gap-1 bg-emerald-100/70 hover:bg-emerald-200/80 border border-emerald-300 cursor-pointer"
+                title="Open Excel/CSV beheer om te exporteren, importeren en personen te verwijderen of toe te voegen"
+              >
+                <FileSpreadsheet size={13} />
+                <span>Excel (.xlsx)</span>
+              </button>
+            </div>
+
+            {!isBulkMode ? (
+              <form onSubmit={handleCreateEmployee} className="space-y-4">
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Volledige Naam</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Bijv: Thomas Janssen"
+                    value={newEmp.name}
+                    onChange={(e) => setNewEmp({ ...newEmp, name: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Afdeling (Tabblad)</label>
+                  <select
+                    required
+                    value={newEmp.department || 'zaal'}
+                    onChange={(e) => setNewEmp({ ...newEmp, department: e.target.value as Department })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                  >
+                    <option value="zaal">🍽️ Zaal (IDM Zaal)</option>
+                    <option value="keuken">🍳 Keuken (IDM Keuken)</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Statuut</label>
+                    <select
+                      required
+                      value={newEmp.statuut}
+                      onChange={(e) => setNewEmp({ ...newEmp, statuut: e.target.value as EmployeeStatuut })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="Student">Student</option>
+                      <option value="Flexi">Flexi</option>
+                      <option value="Vast">Vast</option>
+                      <option value="Extra">Extra</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Ervaring</label>
+                    <select
+                      required
+                      value={newEmp.experience}
+                      onChange={(e) => setNewEmp({ ...newEmp, experience: e.target.value as ExperienceLevel })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="Beginner">Beginner</option>
+                      <option value="Gemiddeld">Gemiddeld</option>
+                      <option value="Ervaren">Ervaren</option>
+                      <option value="Verantwoordelijke">Verantwoordelijke</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Telefoon (GSM)</label>
+                    <input
+                      type="text"
+                      placeholder="0471..."
+                      value={newEmp.phone}
+                      onChange={(e) => setNewEmp({ ...newEmp, phone: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Facebook URL</label>
+                    <input
+                      type="url"
+                      placeholder="https://facebook.com/..."
+                      value={newEmp.facebookUrl}
+                      onChange={(e) => setNewEmp({ ...newEmp, facebookUrl: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <KeyRound size={13} className="text-orange-600" />
+                      <span>Persoonlijke Pincode (PIN)</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">Standaard: 1234</span>
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="1234"
+                    value={newEmp.pin}
+                    onChange={(e) => setNewEmp({ ...newEmp, pin: e.target.value.replace(/[^0-9]/g, '') })}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs font-mono font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    De medewerker gebruikt deze code om persoonlijk in te loggen op het portaal.
+                  </p>
+                </div>
+
+                <div className="bg-orange-50 text-orange-950 rounded-xl p-3 text-[10px] leading-relaxed border border-orange-100">
+                  <strong>💡 Let op:</strong> Nieuw personeel logt in met hun naam en deze persoonlijke 4-cijferige pincode!
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowEmployeeModal(false)}
+                    className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition"
+                  >
+                    Annuleren
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-xl shadow-sm transition"
+                  >
+                    Opslaan
+                  </button>
+                </div>
+
+              </form>
+            ) : (
+              <form onSubmit={handleBulkCreateEmployees} className="space-y-4">
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 block">Namenlijst (één naam per regel)</label>
+                  <p className="text-[10px] text-slate-500 leading-tight">Plak of typ hier een lijst met namen. Elk op een nieuwe regel.</p>
+                  <textarea
+                    required
+                    rows={5}
+                    placeholder="Thomas Janssen&#10;Sophie De Smet&#10;Jan Peeters"
+                    value={bulkNamesText}
+                    onChange={(e) => setBulkNamesText(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-850 rounded-xl px-3 py-2 text-xs font-mono mt-1 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600">Standaard Afdeling</label>
+                  <select
+                    required
+                    value={bulkDepartment}
+                    onChange={(e) => setBulkDepartment(e.target.value as Department)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                  >
+                    <option value="zaal">🍽️ Zaal (IDM Zaal)</option>
+                    <option value="keuken">🍳 Keuken (IDM Keuken)</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Standaard Statuut</label>
+                    <select
+                      required
+                      value={bulkStatuut}
+                      onChange={(e) => setBulkStatuut(e.target.value as EmployeeStatuut)}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="Student">Student (Standaard)</option>
+                      <option value="Flexi">Flexi</option>
+                      <option value="Vast">Vast</option>
+                      <option value="Extra">Extra</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-600">Standaard Ervaring</label>
+                    <select
+                      required
+                      value={bulkExperience}
+                      onChange={(e) => setBulkExperience(e.target.value as ExperienceLevel)}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="Beginner">Beginner (Standaard)</option>
+                      <option value="Gemiddeld">Gemiddeld</option>
+                      <option value="Ervaren">Ervaren</option>
+                      <option value="Verantwoordelijke">Verantwoordelijke</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="bg-orange-50 text-orange-950 rounded-xl p-3 text-[10px] leading-relaxed border border-orange-100">
+                  <strong>💡 Sneltoevoegen:</strong> Alle medewerkers zijn meteen actief en kunnen onmiddellijk worden ingeroosterd!
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEmployeeModal(false);
+                      setIsBulkMode(false);
+                    }}
+                    className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition"
+                  >
+                    Annuleren
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-xl shadow-sm transition"
+                  >
+                    Bulk uploaden
+                  </button>
+                </div>
+
+              </form>
+            )}
+
+          </div>
+        </div>
+      )}
+
+      {/* Personeel Notificeren / Delen Modal (WhatsApp & Outlook) */}
+      <NotificationModal
+        isOpen={showNotificationModal}
+        onClose={() => setShowNotificationModal(false)}
+        employees={employees}
+        shifts={shifts}
+        weekNumber={selectedManagerWeek}
+        onMarkNotified={(ids, type) => {
+          if (onMarkNotified) {
+            onMarkNotified(ids, type);
+          }
+        }}
+      />
+
+      {/* Cloud Backup & Archief Modal */}
+      <BackupManagerModal
+        isOpen={showBackupModal}
+        onClose={() => setShowBackupModal(false)}
+        currentWeek={selectedManagerWeek}
+        shifts={shifts}
+        employees={employees}
+        onRestoreSchedule={(restoredShifts, weekNum) => {
+          if (onRestoreSchedule) {
+            onRestoreSchedule(restoredShifts, weekNum);
+          }
+        }}
+      />
+
+      {/* 6-Weken Planning Horizon Modal */}
+      {showSixWeeksModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in font-sans">
+          <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border-2 border-orange-200 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-5 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-white/20 rounded-2xl">
+                  <CalendarIcon size={22} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base uppercase tracking-tight flex items-center gap-2">
+                    <span>6-Weken Planning Horizon</span>
+                    <span className="bg-white text-orange-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">
+                      W{UPCOMING_SIX_WEEKS_FROM_NEXT[0]} t/m W{UPCOMING_SIX_WEEKS_FROM_NEXT[UPCOMING_SIX_WEEKS_FROM_NEXT.length - 1]}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-orange-100 font-medium">
+                    Vanaf volgende week (Week {NEXT_WEEK_NUMBER}): complete personeelsplanningen 6 weken vooruit klaargezet voor Zaal en Keuken.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSixWeeksModal(false)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center font-bold transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* Highlights Policy Box */}
+              <div className="bg-orange-50/70 border-2 border-orange-200 rounded-2xl p-4 text-xs text-slate-700 space-y-1.5">
+                <div className="font-black text-orange-900 flex items-center gap-2 uppercase tracking-wide">
+                  <span>⚡</span>
+                  <span>In De Molen Personeelsnormen in de 6-Weken Horizon</span>
+                </div>
+                <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-bold text-slate-600 pt-1">
+                  <li className="flex items-center gap-2">
+                    <span className="text-emerald-500 font-black">✓</span>
+                    <span><strong>Pat & Matthias:</strong> Exact 4 dagen fulltime per week</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-emerald-500 font-black">✓</span>
+                    <span><strong>Overig Vast personeel:</strong> 5 dagen / 38u fulltime</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-emerald-500 font-black">✓</span>
+                    <span><strong>Zondagopening:</strong> Vroegdienst va. 09:30/10:00 uur</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-emerald-500 font-black">✓</span>
+                    <span><strong>2-Weken Regel:</strong> Beschikbaarheid deadline tijdig zichtbaar</span>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Weeks Table */}
+              <div className="border-2 border-orange-100 rounded-2xl overflow-hidden shadow-xs">
+                <table className="min-w-full divide-y-2 divide-orange-100">
+                  <thead className="bg-orange-50/50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-black text-slate-700 uppercase">Week</th>
+                      <th className="px-4 py-3 text-left text-xs font-black text-slate-700 uppercase">Periode</th>
+                      <th className="px-4 py-3 text-left text-xs font-black text-slate-700 uppercase">Totaal Shifts</th>
+                      <th className="px-4 py-3 text-left text-xs font-black text-slate-700 uppercase">Zaal / Keuken</th>
+                      <th className="px-4 py-3 text-left text-xs font-black text-slate-700 uppercase">Status</th>
+                      <th className="px-4 py-3 text-right text-xs font-black text-slate-700 uppercase">Acties</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-orange-50 text-xs">
+                    {UPCOMING_SIX_WEEKS_FROM_NEXT.map((wk) => {
+                      const meta = getWeekMeta(wk);
+                      const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk);
+                      const zaalCount = weekShifts.filter(s => s.department === 'zaal').length;
+                      const keukenCount = weekShifts.filter(s => s.department === 'keuken').length;
+                      const draftCount = weekShifts.filter(s => s.status === 'draft').length;
+                      const isPublished = weekShifts.length > 0 && draftCount === 0;
+
+                      return (
+                        <tr key={wk} className="hover:bg-orange-50/30 transition-colors">
+                          <td className="px-4 py-3.5 whitespace-nowrap font-black text-slate-900">
+                            <div className="flex items-center gap-1.5">
+                              <span>Week {wk}</span>
+                              {wk === NEXT_WEEK_NUMBER && (
+                                <span className="bg-orange-100 text-orange-800 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">
+                                  Volgende
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap font-bold text-slate-600">
+                            {meta.dateRange}
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap font-black text-slate-800">
+                            {weekShifts.length} diensten
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap font-bold text-slate-500">
+                            <span className="text-orange-600">{zaalCount} Zaal</span>
+                            <span className="mx-1">•</span>
+                            <span className="text-amber-700">{keukenCount} Keuken</span>
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            {isPublished ? (
+                              <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full font-black text-[10px] uppercase">
+                                ✓ Gepubliceerd
+                              </span>
+                            ) : weekShifts.length > 0 ? (
+                              <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300 rounded-full font-black text-[10px] uppercase flex items-center gap-1 w-fit">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                                <span>{draftCount} Concept(en)</span>
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 bg-slate-100 text-slate-500 border border-slate-200 rounded-full font-black text-[10px] uppercase">
+                                Leeg
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap text-right space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedManagerWeek(wk);
+                                setAutoPlanWeek(wk);
+                                setShowSixWeeksModal(false);
+                              }}
+                              className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold rounded-lg transition text-[11px] cursor-pointer"
+                            >
+                              Bekijk Rooster
+                            </button>
+                            {draftCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onPublishAllDrafts(wk);
+                                  setSixWeeksSuccessMsg(`Week ${wk} is succesvol gepubliceerd!`);
+                                }}
+                                className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-lg transition text-[11px] cursor-pointer"
+                              >
+                                Publiceer
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 p-4 border-t-2 border-orange-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrepareSixWeeksHorizon(true, false)}
+                  className="px-4 py-2 bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 font-black rounded-xl text-xs uppercase transition cursor-pointer"
+                  title="Genereert verse evenwichtige planningen voor alle 6 weken"
+                >
+                  ⚡ Hergenereer Alle 6 Weken
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePublishAllSixWeeks}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase shadow-sm transition cursor-pointer"
+                >
+                  📢 Publiceer Alle 6 Weken
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowSixWeeksModal(false)}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-black rounded-xl text-xs uppercase transition cursor-pointer"
+              >
+                Sluiten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Planner Confirmation Modal */}
+      {showAutoPlanConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-600">
+                  <Sparkles className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    Slimme Planning Genereren
+                  </h3>
+                  <p className="text-xs text-orange-600 font-bold uppercase tracking-wider">
+                    Week {autoPlanWeek}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAutoPlanConfirmModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-6 text-sm text-slate-600">
+              <p className="text-xs text-slate-500">
+                Het algoritme vult Week {autoPlanWeek} automatisch in volgens de vaste bezettingsnormen en medewerker-beschikbaarheden:
+              </p>
+
+              <div className="bg-orange-50/70 border border-orange-200/80 rounded-2xl p-3.5 space-y-1.5 text-xs text-slate-700">
+                <div className="font-black text-orange-900 mb-1 flex items-center gap-1.5">
+                  <Check className="w-3.5 h-3.5 text-orange-600" /> Bezettingsregels:
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
+                  <span><strong>Overdag:</strong> 2 personen per dag (11:00 - 18:00)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
+                  <span><strong>Avond Ma & Di:</strong> 4 personen (1 sluit + 1 hulpsluit)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
+                  <span><strong>Avond Wo & Do:</strong> 5 personen (1 sluit + 1 hulpsluit)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
+                  <span><strong>Avond Vr, Za & Zo:</strong> 7 personen (1 sluit + 1 hulpsluit)</span>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-2xl p-3 text-xs text-amber-800">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  Bestaande diensten voor <strong>Week {autoPlanWeek}</strong> worden overschreven door deze nieuwe ontwerp-planning.
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowAutoPlanConfirmModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Annuleren
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteAutoPlan}
+                className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md shadow-orange-600/20 transition cursor-pointer flex items-center gap-2"
+              >
+                <Sparkles className="w-4 h-4" />
+                Planning Genereren 🪄
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No Team / Empty Employees Warning Modal */}
+      {showNoTeamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-600">
+                  <Users className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    Geen Medewerkers Gevonden
+                  </h3>
+                  <p className="text-xs text-amber-700 font-bold uppercase tracking-wider">
+                    Team vereist voor planning
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNoTeamModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-5 leading-relaxed">
+              Er zijn momenteel geen actieve personeelsleden geregistreerd om in te delen in het rooster. Je kunt handmatig medewerkers aanmaken, importeren via Excel, of direct het standaard voorbeeldteam inladen.
+            </p>
+
+            <div className="flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={handleLoadSampleTeam}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md shadow-blue-600/20 transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Users className="w-4 h-4" />
+                Standaard Voorbeeldteam Inladen (12 medewerkers)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNoTeamModal(false);
+                  setActiveSubTab('team');
+                }}
+                className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Naar Medewerkers Beheer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Excel / CSV Employee Sync Modal */}
+      <ExcelEmployeeSyncModal
+        isOpen={showExcelSyncModal}
+        onClose={() => setShowExcelSyncModal(false)}
+        employees={employees}
+        shifts={shifts}
+        onBulkSyncEmployees={(newEmployees, removedIds) => {
+          if (onBulkSyncEmployees) {
+            onBulkSyncEmployees(newEmployees, removedIds);
+          }
+        }}
+      />
+
+      {/* Excel Availability Bulk Upload / Download Modal */}
+      <ExcelAvailabilityBulkModal
+        isOpen={showExcelAvailabilityModal}
+        onClose={() => setShowExcelAvailabilityModal(false)}
+        employees={employees}
+        availabilities={availabilities}
+        currentWeekNumber={selectedManagerWeek}
+        onBulkUpdateAvailability={(updatedAvailabilities) => {
+          if (onBulkUpdateAvailability) {
+            onBulkUpdateAvailability(updatedAvailabilities);
+          }
+        }}
+      />
+
+      {/* Gemini AI Rooster Proposal Modal */}
+      <GeminiRoosterModal
+        isOpen={showGeminiModal}
+        onClose={() => setShowGeminiModal(false)}
+        employees={employees}
+        availabilities={availabilities}
+        availableWeeks={AVAILABLE_WEEKS}
+        defaultWeekNumber={selectedManagerWeek || autoPlanWeek}
+        onApplyProposal={handleApplyGeminiProposal}
+      />
+
+      {/* Canteen Schedule PDF / Print Export Modal */}
+      <SchedulePrintModal
+        isOpen={showSchedulePrintModal}
+        onClose={() => setShowSchedulePrintModal(false)}
+        employees={employees}
+        shifts={shifts}
+        initialWeek={selectedManagerWeek}
+        initialDepartment={activeSubTab === 'keuken' ? 'keuken' : activeSubTab === 'zaal' ? 'zaal' : 'all'}
+      />
+
+      {/* Confirmation Modal: Clear Week Roster (Wis Knop) */}
+      {showClearWeekModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center text-rose-600">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    Weekrooster Wissen
+                  </h3>
+                  <p className="text-xs text-rose-600 font-bold uppercase tracking-wider">
+                    Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowClearWeekModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              Weet je zeker dat je alle <strong>{activeWeekShifts.length} ingevulde diensten</strong> voor <strong>Week {selectedManagerWeek}</strong> wilt wissen? Deze actie verwijdert alle geplande uren voor deze week.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowClearWeekModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Annuleren
+              </button>
+              <button
+                type="button"
+                onClick={confirmClearWeekRoster}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md shadow-rose-600/20 transition cursor-pointer flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Wis Alle {activeWeekShifts.length} Diensten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Copy Previous Week */}
+      {showCopyWeekModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-600">
+                  <Copy className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    Diensten Kopiëren
+                  </h3>
+                  <p className="text-xs text-orange-600 font-bold uppercase tracking-wider">
+                    Van Week {selectedManagerWeek - 1} naar Week {selectedManagerWeek}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCopyWeekModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              Week {selectedManagerWeek} bevat al <strong>{activeWeekShifts.length} diensten</strong>. Wil je de diensten uit Week {selectedManagerWeek - 1} hieraan toevoegen als nieuwe concept-diensten?
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowCopyWeekModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Annuleren
+              </button>
+              <button
+                type="button"
+                onClick={executeCopyPreviousWeek}
+                className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md transition cursor-pointer flex items-center gap-2"
+              >
+                <Copy className="w-4 h-4" />
+                Toevoegen als Concept
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Publish Six Weeks Horizon */}
+      {showPublishSixWeeksConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-600">
+                  <CheckCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    6 Weken Definitief Publiceren
+                  </h3>
+                  <p className="text-xs text-emerald-600 font-bold uppercase tracking-wider">
+                    Week {UPCOMING_SIX_WEEKS_FROM_NEXT[0]} t/m Week {UPCOMING_SIX_WEEKS_FROM_NEXT[UPCOMING_SIX_WEEKS_FROM_NEXT.length - 1]}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPublishSixWeeksConfirmModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              Weet je zeker dat je alle concept-diensten voor de komende 6 weken definitief wilt publiceren? Alle medewerkers kunnen hun diensten dan direct inzien en bevestigen.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowPublishSixWeeksConfirmModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Annuleren
+              </button>
+              <button
+                type="button"
+                onClick={executePublishAllSixWeeks}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md transition cursor-pointer flex items-center gap-2"
+              >
+                <CheckCheck className="w-4 h-4" />
+                Definitief Publiceren
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📢 SNELLE MEDEDELING PLAATSEN MODAL */}
+      {showQuickNoticeModal && (
+        <div 
+          id="quick-notice-modal-backdrop"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs font-sans"
+        >
+          <div 
+            id="quick-notice-modal-content"
+            className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 border-2 border-orange-200 space-y-4"
+          >
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center shadow-inner shrink-0">
+                  <Megaphone size={22} className="stroke-[2.5]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">
+                    Mededeling Plaatsen
+                  </h3>
+                  <p className="text-xs text-orange-600 font-bold uppercase tracking-wider">
+                    Direct zichtbaar op het startscherm van het personeel
+                  </p>
+                </div>
+              </div>
+              <button
+                id="close-quick-notice-modal-btn"
+                type="button"
+                onClick={() => setShowQuickNoticeModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateNotice} className="space-y-4">
+              {/* Category */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase text-slate-600 tracking-tight flex items-center justify-between">
+                  <span>Categorie</span>
+                  <span className="text-[10px] text-slate-400 font-normal">Kies type bericht</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { val: 'planning', label: 'Planningsupdate 📅', color: 'border-blue-300 bg-blue-50 text-blue-800' },
+                    { val: 'wijziging', label: 'Belangrijke Wijziging 🔄', color: 'border-amber-300 bg-amber-50 text-amber-800' },
+                    { val: 'belangrijk', label: 'Urgent / Belangrijk ⚠️', color: 'border-red-300 bg-red-50 text-red-800' },
+                    { val: 'algemeen', label: 'Algemeen 💬', color: 'border-slate-300 bg-slate-50 text-slate-800' },
+                  ].map(c => (
+                    <button
+                      type="button"
+                      key={c.val}
+                      onClick={() => setNewNotice({ ...newNotice, category: c.val as any })}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold border transition text-left cursor-pointer ${
+                        newNotice.category === c.val
+                          ? `${c.color} ring-2 ring-orange-500 shadow-xs font-black`
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Title */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Titel</label>
+                  <span className="text-[10px] text-slate-400 font-medium">Snelvoorstellen:</span>
+                </div>
+                <div className="flex flex-wrap gap-1 mb-1.5">
+                  {[
+                    `Rooster Week ${selectedManagerWeek} is online!`,
+                    'Aangepaste sluitdiensttijden',
+                    'Extra drukte verwacht'
+                  ].map((preset) => (
+                    <button
+                      type="button"
+                      key={preset}
+                      onClick={() => setNewNotice({ ...newNotice, title: preset })}
+                      className="text-[10px] px-2 py-0.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-850 border border-orange-200 font-semibold transition cursor-pointer"
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  id="quick-notice-title-input"
+                  type="text"
+                  required
+                  placeholder="Bijv. Gewijzigde sluitingstijden dit weekend"
+                  value={newNotice.title}
+                  onChange={(e) => setNewNotice({ ...newNotice, title: e.target.value })}
+                  className="w-full bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              {/* Content */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Inhoud mededeling</label>
+                <textarea
+                  id="quick-notice-content-input"
+                  required
+                  rows={4}
+                  placeholder="Typ hier de tekst voor het personeelsteam. Iedereen ziet dit direct op het personeelspaneel..."
+                  value={newNotice.content}
+                  onChange={(e) => setNewNotice({ ...newNotice, content: e.target.value })}
+                  className="w-full bg-slate-50 border-2 border-slate-200 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickNoticeModal(false)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                >
+                  Annuleren
+                </button>
+                <button
+                  id="quick-notice-submit-btn"
+                  type="submit"
+                  className="px-5 py-2.5 bg-orange-500 hover:bg-orange-600 active:scale-95 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-lg shadow-orange-500/25 transition flex items-center gap-2 cursor-pointer"
+                >
+                  <Send size={15} />
+                  <span>Mededeling Plaatsen</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Employee Avatar / Camera Profile Photo Modal */}
+      {selectedAvatarEmployee && (
+        <EmployeeAvatarModal
+          isOpen={!!selectedAvatarEmployee}
+          onClose={() => setSelectedAvatarEmployee(null)}
+          employee={selectedAvatarEmployee}
+          onSaveAvatar={(empId, newAvatarUrl) => {
+            const target = employees.find(e => e.id === empId);
+            if (target) {
+              const updated = {
+                ...target,
+                avatarUrl: newAvatarUrl || undefined
+              };
+              onUpdateEmployee(updated);
+              setSelectedAvatarEmployee(updated);
+            }
+          }}
+        />
+      )}
+
+    </div>
+  );
+}

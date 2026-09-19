@@ -1,0 +1,9 @@
+{
+  "name": "Café Planning & Communicatie",
+  "description": "Een overzichtelijke planner en communicatieportaal voor het personeel van Eet-staminée In De Molen te Bierbeek.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,135 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "Personeelslid van In De Molen (vast, student, flexi)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["beheerder", "personeel"] },
+        "statuut": { "type": "string", "enum": ["Vast", "Student", "Flexi"] },
+        "department": { "type": "string", "enum": ["zaal", "keuken"] },
+        "experience": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "color": { "type": "string" },
+        "active": { "type": "boolean" },
+        "avatarUrl": { "type": "string", "description": "Base64 data-URL of foto-URL van het personeelslid" },
+        "contractDaysPerWeek": { "type": "number" },
+        "contractHoursPerWeek": { "type": "number" },
+        "pin": { "type": "string", "description": "Persoonlijke 4-cijferige PIN-code van het personeelslid voor beveiligde login" }
+      },
+      "required": ["id", "name", "role", "statuut"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Geplande dienst voor een personeelslid",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "weekNumber": { "type": "number" },
+        "day": { "type": "number" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "department": { "type": "string", "enum": ["zaal", "keuken"] },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "acknowledged": { "type": "boolean" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "employeeId", "day", "startTime", "endTime"]
+    },
+    "EmployeeAvailability": {
+      "title": "EmployeeAvailability",
+      "description": "Ingevulde beschikbaarheid van een personeelslid voor een specifieke week",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "weekNumber": { "type": "number" },
+        "employeeName": { "type": "string" },
+        "department": { "type": "string" },
+        "days": { "type": "array" },
+        "lastUpdated": { "type": "number" }
+      },
+      "required": ["employeeId", "weekNumber", "days"]
+    },
+    "ScheduleBackup": {
+      "title": "ScheduleBackup",
+      "description": "Onveranderlijke cloud snapshot van een gepubliceerd weekrooster",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "weekNumber": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "formattedDate": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "versionTitle": { "type": "string" },
+        "shiftsCount": { "type": "number" },
+        "shifts": { "type": "array" }
+      },
+      "required": ["id", "weekNumber", "createdAt", "shifts"]
+    },
+    "Notice": {
+      "title": "Notice",
+      "description": "Mededeling of groepsbericht voor het team",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "date": { "type": "string" },
+        "category": { "type": "string" },
+        "author": { "type": "string" }
+      },
+      "required": ["id", "title", "content", "date"]
+    },
+    "SwapRequest": {
+      "title": "SwapRequest",
+      "description": "Ruilverzoek tussen personeelsleden",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "requesterId": { "type": "string" },
+        "shiftId": { "type": "string" },
+        "targetEmployeeId": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "geweigerd"] },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "requesterId", "shiftId", "status"]
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Personeelsleden van het café"
+    },
+    "/current_schedule/active_shifts": {
+      "schema": { "$ref": "#/entities/Shift" },
+      "description": "Actieve geplande diensten voor alle weken"
+    },
+    "/availabilities/{availId}": {
+      "schema": "EmployeeAvailability",
+      "description": "Beschikbaarheden per medewerker en week"
+    },
+    "/availability_backups/{backupId}": {
+      "schema": "EmployeeAvailability",
+      "description": "Historische backup van elke beschikbaarheidsinzending"
+    },
+    "/schedule_backups/{backupId}": {
+      "schema": "ScheduleBackup",
+      "description": "Gearchiveerde snapshots van gepubliceerde weekplanningen"
+    },
+    "/notices/{noticeId}": {
+      "schema": "Notice",
+      "description": "Berichtenbord mededelingen"
+    },
+    "/swap_requests/{requestId}": {
+      "schema": "SwapRequest",
+      "description": "Dienstenruilverzoeken"
+    }
+  }
+}
