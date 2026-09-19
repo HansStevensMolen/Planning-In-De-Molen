@@ -20,7 +20,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Employee, Shift, Department } from '../types';
-import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER } from '../utils/weekUtils';
+import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 
 interface SchedulePrintModalProps {
@@ -527,11 +527,22 @@ export default function SchedulePrintModal({
                 onChange={(e) => setSelectedWeek(Number(e.target.value))}
                 className="bg-white border-2 border-orange-200 text-slate-900 rounded-xl px-3 py-1.5 font-black uppercase text-xs focus:ring-2 focus:ring-orange-500 cursor-pointer shadow-xs"
               >
-                {AVAILABLE_WEEKS.map(w => (
-                  <option key={w.weekNumber} value={w.weekNumber}>
-                    Week {w.weekNumber} ({w.dateRange}) {w.isCurrent ? '• Huidig' : w.isNext ? '• Volgende' : ''}
-                  </option>
-                ))}
+                <optgroup label="Actieve Weken">
+                  {getAutoActiveWeeks(CURRENT_WEEK_NUMBER, [], shifts).map(w => (
+                    <option key={w.weekNumber} value={w.weekNumber}>
+                      Week {w.weekNumber} ({w.dateRange}) {w.isCurrent ? '• Huidig' : w.isNext ? '• Volgende' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+                {getAutoArchivedWeeks(CURRENT_WEEK_NUMBER, shifts).length > 0 && (
+                  <optgroup label="Gearchiveerde Weken">
+                    {getAutoArchivedWeeks(CURRENT_WEEK_NUMBER, shifts).map(w => (
+                      <option key={w.weekNumber} value={w.weekNumber}>
+                        📦 Week {w.weekNumber} ({w.dateRange}) • Archief
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
 
@@ -662,6 +673,7 @@ export default function SchedulePrintModal({
                     {DAYS_OF_WEEK.map((dayName, idx) => {
                       const dayShifts = weekShifts.filter(s => s.day === idx);
                       const isSunday = idx === 6;
+                      const dayDateInfo = getDayDateInfo(selectedWeek, idx);
                       return (
                         <th key={dayName} className="border border-slate-700 p-2 text-center w-[14.28%] align-top">
                           <div className="font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1">
@@ -672,7 +684,10 @@ export default function SchedulePrintModal({
                               </span>
                             )}
                           </div>
-                          <div className="text-[9.5px] text-orange-400 font-bold mt-0.5">
+                          <div className="text-[11px] font-black text-amber-300 mt-0.5">
+                            {dayDateInfo.shortDate}
+                          </div>
+                          <div className="text-[9.5px] text-orange-200 font-bold mt-0.5">
                             {dayShifts.length} {dayShifts.length === 1 ? 'dienst' : 'diensten'}
                           </div>
                         </th>

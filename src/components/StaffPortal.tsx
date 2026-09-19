@@ -38,7 +38,8 @@ import {
   BellRing,
   LogOut,
   KeyRound,
-  ShieldCheck
+  ShieldCheck,
+  Archive
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
@@ -59,7 +60,7 @@ import {
   generateOutlookWebUrl,
   openGoogleCalendarForShift
 } from '../utils/notificationUtils';
-import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek } from '../utils/weekUtils';
+import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 
 interface StaffPortalProps {
@@ -334,6 +335,11 @@ export default function StaffPortal({
   // Tabs within Staff Portal
   const [activeSubTab, setActiveSubTab] = useState<'rooster' | 'ruilen' | 'berichten' | 'collegas' | 'beschikbaarheid'>('rooster');
 
+  // Roster week selection state
+  const [selectedRosterWeek, setSelectedRosterWeek] = useState<number>(CURRENT_WEEK_NUMBER);
+  const [showRosterArchiveMenu, setShowRosterArchiveMenu] = useState<boolean>(false);
+  const [showAvailArchiveMenu, setShowAvailArchiveMenu] = useState<boolean>(false);
+
   // Availability state: default to the first open week (CURRENT_WEEK_NUMBER + 2)
   const [selectedWeek, setSelectedWeek] = useState<number>(CURRENT_WEEK_NUMBER + 2);
   const [tempAvailability, setTempAvailability] = useState<Record<number, { status: DayAvailability['status'], notes: string, startTime?: string, endTime?: string }>>({});
@@ -434,8 +440,16 @@ export default function StaffPortal({
     setTempAvailability(initialTemp);
   }, [activeEmployeeId, selectedWeek, availabilities]);
 
-  // Filters
-  const personalShifts = shifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
+  // Active weeks vs automatically archived previous weeks
+  const staffActiveWeeks = getAutoActiveWeeks(CURRENT_WEEK_NUMBER, [], shifts);
+  const staffArchivedWeeks = getAutoArchivedWeeks(CURRENT_WEEK_NUMBER, shifts, availabilities);
+
+  const isSelectedRosterWeekArchived = selectedRosterWeek < CURRENT_WEEK_NUMBER;
+  const isSelectedAvailWeekArchived = selectedWeek < CURRENT_WEEK_NUMBER;
+
+  // Filters for the selected roster week
+  const rosterWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek);
+  const personalShifts = rosterWeekShifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
   const unconfirmedShifts = personalShifts.filter(s => !s.acknowledged);
   const otherEmployees = sortEmployeesByFirstName(employees.filter(e => e.id !== activeEmployeeId));
 
@@ -449,8 +463,9 @@ export default function StaffPortal({
     return () => clearInterval(timer);
   }, []);
 
-  // Compute shifts starting within 24 hours or ongoing for active employee
-  const upcomingShifts24h = personalShifts
+  // Compute shifts starting within 24 hours or ongoing for active employee (checked across all published shifts)
+  const allPersonalPublishedShifts = shifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
+  const upcomingShifts24h = allPersonalPublishedShifts
     .map(sh => getShift24HourDetails(sh, currentTime))
     .filter((d): d is Shift24HourAlert => d !== null && d.isWithin24Hours)
     .sort((a, b) => {
@@ -461,8 +476,8 @@ export default function StaffPortal({
 
   const nextUrgentShift = upcomingShifts24h[0] || null;
 
-  // All published shifts for the team view (filter by Zaal / Keuken / Alle)
-  const publishedTeamShifts = shifts.filter(s => {
+  // All published shifts for the team view (filter by Zaal / Keuken / Alle for the selected week)
+  const publishedTeamShifts = rosterWeekShifts.filter(s => {
     if (s.status !== 'published') return false;
     if (rosterDeptFilter === 'all') return true;
     return (s.department || 'zaal') === rosterDeptFilter;
@@ -947,7 +962,127 @@ export default function StaffPortal({
 
       {/* 1. MY ROSTER & WEEK ROSTER */}
       {activeSubTab === 'rooster' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="space-y-4">
+          {/* Week Selector Bar for Schedule */}
+          <div className="bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+              <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider mr-1">Rooster Week:</span>
+              {staffActiveWeeks.map(w => {
+                const wk = w.weekNumber;
+                const isSelected = selectedRosterWeek === wk;
+                return (
+                  <button
+                    key={wk}
+                    type="button"
+                    onClick={() => setSelectedRosterWeek(wk)}
+                    title={`${w.label}: ${w.dateRange}`}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
+                      isSelected
+                        ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
+                        : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
+                    }`}
+                  >
+                    <span>Week {wk}</span>
+                    {wk === CURRENT_WEEK_NUMBER && (
+                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
+                        isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                      }`}>
+                        Huidig
+                      </span>
+                    )}
+                    {wk === NEXT_WEEK_NUMBER && (
+                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
+                        isSelected ? 'bg-slate-200 text-slate-900' : 'bg-slate-200 text-slate-700 border border-slate-300'
+                      }`}>
+                        Volgende
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Archive Dropdown */}
+              {staffArchivedWeeks.length > 0 && (
+                <div className="relative inline-block">
+                  <button
+                    type="button"
+                    onClick={() => setShowRosterArchiveMenu(prev => !prev)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 border cursor-pointer ${
+                      isSelectedRosterWeekArchived
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                    }`}
+                    title="Vorige weken worden automatisch gearchiveerd"
+                  >
+                    <Archive size={12} />
+                    <span>Archief ({staffArchivedWeeks.length})</span>
+                    <ChevronDown size={11} className={`transition-transform duration-200 ${showRosterArchiveMenu ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {showRosterArchiveMenu && (
+                    <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border-2 border-slate-200 py-1.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                      <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        📦 Vorige Weken (Automatisch Gearchiveerd)
+                      </div>
+                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                        {staffArchivedWeeks.map(aw => {
+                          const isSel = selectedRosterWeek === aw.weekNumber;
+                          const countShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === aw.weekNumber && s.status === 'published').length;
+                          return (
+                            <button
+                              key={aw.weekNumber}
+                              type="button"
+                              onClick={() => {
+                                setSelectedRosterWeek(aw.weekNumber);
+                                setShowRosterArchiveMenu(false);
+                              }}
+                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between transition hover:bg-orange-50 cursor-pointer ${
+                                isSel ? 'bg-amber-50 font-black text-amber-900' : 'text-slate-700'
+                              }`}
+                            >
+                              <div>
+                                <div className="font-black text-xs">Week {aw.weekNumber}</div>
+                                <div className="text-[10px] text-slate-500 font-semibold">{aw.dateRange}</div>
+                              </div>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                {countShifts} diensten
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="text-xs font-bold text-slate-600 bg-orange-50/60 border border-orange-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
+              <span>📅 {getWeekMeta(selectedRosterWeek).label}:</span>
+              <span className="text-orange-950 font-black">{getWeekMeta(selectedRosterWeek).dateRange}</span>
+            </div>
+          </div>
+
+          {/* Archived Week Notice */}
+          {isSelectedRosterWeekArchived && (
+            <div className="bg-amber-50 border-2 border-amber-200 text-amber-900 p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold">
+              <div className="flex items-center gap-2">
+                <Archive size={16} className="text-amber-700 shrink-0" />
+                <span>
+                  📦 Je bekijkt een gearchiveerde week: Week {selectedRosterWeek} ({getWeekMeta(selectedRosterWeek).dateRange}).
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedRosterWeek(CURRENT_WEEK_NUMBER)}
+                className="px-2.5 py-1 bg-amber-600 text-white hover:bg-amber-700 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                Naar Huidige Week ({CURRENT_WEEK_NUMBER})
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           {/* Left panel: Personal shifts list */}
           <div className="lg:col-span-1 space-y-4">
@@ -1025,14 +1160,19 @@ export default function StaffPortal({
                         )
                       )}
 
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-bold text-sm text-slate-800">{DAYS_OF_WEEK[sh.day]}</h4>
-                        <div className="flex items-center space-x-1.5 mt-1 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
-                          <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
-                          <span>{sh.startTime} - {sh.endTime}</span>
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                            <span>{DAYS_OF_WEEK[sh.day]}</span>
+                            <span className="text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md shadow-2xs">
+                              {getDayDateInfo(selectedRosterWeek, sh.day).shortDate}
+                            </span>
+                          </h4>
+                          <div className="flex items-center space-x-1.5 mt-1 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
+                            <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
+                            <span>{sh.startTime} - {sh.endTime}</span>
+                          </div>
                         </div>
-                      </div>
 
                       <div className="text-right">
                         <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Afdeling</span>
@@ -1146,12 +1286,16 @@ export default function StaffPortal({
             <div className="bg-white rounded-3xl border-2 border-orange-100 p-4 shadow-sm overflow-x-auto">
               <div className="grid grid-cols-7 gap-2 min-w-[700px]">
                 {DAYS_OF_WEEK.map((day, dayIdx) => {
+                  const dayDateInfo = getDayDateInfo(selectedRosterWeek, dayIdx);
                   const dayShifts = publishedTeamShifts.filter(s => s.day === dayIdx);
 
                   return (
                     <div key={day} className="space-y-3">
-                      <div className="bg-orange-50/40 p-2 rounded-xl text-center border border-orange-100 font-black text-xs text-slate-700 uppercase tracking-tight">
-                        {day.slice(0, 3)}
+                      <div className="bg-orange-50/70 p-2 rounded-2xl text-center border-2 border-orange-200/80 shadow-2xs">
+                        <div className="text-[11px] font-black text-slate-700 uppercase tracking-wider">{day.slice(0, 3)}</div>
+                        <div className="text-xs font-black text-orange-950 bg-white border border-orange-200 rounded-lg py-0.5 px-1 mt-0.5 shadow-2xs">
+                          {dayDateInfo.shortDate}
+                        </div>
                       </div>
 
                       <div className="space-y-2 min-h-[300px]">
@@ -1223,6 +1367,7 @@ export default function StaffPortal({
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* 2. SWAP / OVERDRACHT REQUESTS */}
@@ -1453,8 +1598,8 @@ export default function StaffPortal({
               </span>
             </div>
             
-            <div className="flex flex-wrap gap-2">
-              {AVAILABLE_WEEKS.map((w) => {
+            <div className="flex flex-wrap items-center gap-2">
+              {staffActiveWeeks.map((w) => {
                 const weekNum = w.weekNumber;
                 const isLockedWeek = isWeekAvailabilityLocked(weekNum, CURRENT_WEEK_NUMBER);
                 const hasFilled = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === weekNum);
@@ -1466,6 +1611,7 @@ export default function StaffPortal({
                       setSelectedWeek(weekNum);
                       setSuccessMsg(null);
                     }}
+                    title={`${w.label}: ${w.dateRange}`}
                     className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                       isSelected
                         ? 'bg-orange-500 text-white shadow-xs'
@@ -1507,6 +1653,61 @@ export default function StaffPortal({
                   </button>
                 );
               })}
+
+              {/* Archive dropdown for staff availability past weeks */}
+              {staffArchivedWeeks.length > 0 && (
+                <div className="relative inline-block">
+                  <button
+                    type="button"
+                    onClick={() => setShowAvailArchiveMenu(prev => !prev)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 border cursor-pointer ${
+                      isSelectedAvailWeekArchived
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                    }`}
+                    title="Vorige weken worden automatisch gearchiveerd"
+                  >
+                    <Archive size={12} />
+                    <span>Archief ({staffArchivedWeeks.length})</span>
+                    <ChevronDown size={11} className={`transition-transform duration-200 ${showAvailArchiveMenu ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {showAvailArchiveMenu && (
+                    <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border-2 border-slate-200 py-1.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                      <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        📦 Vorige Weken (Automatisch Gearchiveerd)
+                      </div>
+                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                        {staffArchivedWeeks.map(aw => {
+                          const isSel = selectedWeek === aw.weekNumber;
+                          const hasFilledPast = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === aw.weekNumber);
+                          return (
+                            <button
+                              key={aw.weekNumber}
+                              type="button"
+                              onClick={() => {
+                                setSelectedWeek(aw.weekNumber);
+                                setShowAvailArchiveMenu(false);
+                              }}
+                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between transition hover:bg-orange-50 cursor-pointer ${
+                                isSel ? 'bg-amber-50 font-black text-amber-900' : 'text-slate-700'
+                              }`}
+                            >
+                              <div>
+                                <div className="font-black text-xs">Week {aw.weekNumber}</div>
+                                <div className="text-[10px] text-slate-500 font-semibold">{aw.dateRange}</div>
+                              </div>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                {hasFilledPast ? '✓ Ingevuld' : 'Niet ingevuld'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             
             {/* Status compact info */}
@@ -1664,14 +1865,19 @@ export default function StaffPortal({
                           }`}
                         >
                           <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-1">
-                                <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{dayName}</span>
-                                {isSunday && (
-                                  <span className="text-[8px] font-black text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
-                                    10u
-                                  </span>
-                                )}
+                            <div className="flex items-start justify-between mb-1.5">
+                              <div>
+                                <div className="flex items-center gap-1">
+                                  <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{dayName}</span>
+                                  {isSunday && (
+                                    <span className="text-[8px] font-black text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
+                                      10u
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md mt-0.5 shadow-2xs">
+                                  {getDayDateInfo(selectedWeek, dayIdx).shortDate}
+                                </span>
                               </div>
                               <div className="flex items-center gap-1">
                                 {isSelectedLocked && (

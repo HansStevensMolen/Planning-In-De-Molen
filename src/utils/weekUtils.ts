@@ -44,6 +44,47 @@ export function getDateOfISOWeek(w: number, y: number = CURRENT_WEEK_INFO.year):
   return monW;
 }
 
+export const DAYS_FULL_NL = [
+  'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'
+];
+
+export interface DayDateInfo {
+  dayIndex: number;
+  dayNameFull: string;
+  dayNameShort: string;
+  shortDate: string;
+  fullDate: string;
+  slashDate: string;
+  formattedWithDay: string;
+}
+
+export function getDayDateInfo(
+  weekNumber: number,
+  dayIndex: number,
+  year: number = CURRENT_WEEK_INFO.year
+): DayDateInfo {
+  const mon = getDateOfISOWeek(weekNumber, year);
+  const d = new Date(mon.getTime() + dayIndex * 86400000);
+  const dayOfMonth = d.getUTCDate();
+  const mShort = MONTHS_SHORT_NL[d.getUTCMonth()];
+  const mFull = MONTHS_NL[d.getUTCMonth()];
+  const dayNameFull = DAYS_FULL_NL[dayIndex] || `Dag ${dayIndex + 1}`;
+  const dayNameShort = DAYS_SHORT_NL[dayIndex] || `D${dayIndex + 1}`;
+  const shortDate = `${dayOfMonth} ${mShort}`;
+  const fullDate = `${dayOfMonth} ${mFull} ${d.getUTCFullYear()}`;
+  const slashDate = `${String(dayOfMonth).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  return {
+    dayIndex,
+    dayNameFull,
+    dayNameShort,
+    shortDate,
+    fullDate,
+    slashDate,
+    formattedWithDay: `${dayNameFull} ${shortDate}`
+  };
+}
+
 /**
  * Dynamically generates full WeekMeta with precise Dutch dates for ANY week number.
  */
@@ -75,9 +116,16 @@ export function generateWeekMeta(
   const dateRange = `${mon.getUTCDate()} ${MONTHS_NL[mon.getUTCMonth()]} – ${sun.getUTCDate()} ${MONTHS_NL[sun.getUTCMonth()]} ${sun.getUTCFullYear()}`;
 
   const daysFormatted: string[] = [];
+  const dayDates: string[] = [];
+  const dayDatesFull: string[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(mon.getTime() + i * 86400000);
-    daysFormatted.push(`${DAYS_SHORT_NL[i]} ${d.getUTCDate()} ${MONTHS_SHORT_NL[d.getUTCMonth()]}`);
+    const dayNr = d.getUTCDate();
+    const mShort = MONTHS_SHORT_NL[d.getUTCMonth()];
+    const mFull = MONTHS_NL[d.getUTCMonth()];
+    daysFormatted.push(`${DAYS_SHORT_NL[i]} ${dayNr} ${mShort}`);
+    dayDates.push(`${dayNr} ${mShort}`);
+    dayDatesFull.push(`${dayNr} ${mFull}`);
   }
 
   return {
@@ -87,8 +135,11 @@ export function generateWeekMeta(
     isCurrent,
     isNext,
     isUpcoming,
+    isArchived,
     dateRange,
-    daysFormatted
+    daysFormatted,
+    dayDates,
+    dayDatesFull
   };
 }
 
@@ -113,6 +164,84 @@ export const HISTORICAL_WEEKS: WeekMeta[] = [
   generateWeekMeta(27),
   generateWeekMeta(26)
 ];
+
+/**
+ * Automatically discovers all past weeks (any week strictly prior to CURRENT_WEEK_NUMBER).
+ * Collects past weeks from shifts, availabilities, recent historical weeks, and marks them as archived.
+ * Automatically sorts them descending (most recent past week first: Week 37, Week 36, etc.).
+ */
+export function getAutoArchivedWeeks(
+  currentWeek: number = CURRENT_WEEK_NUMBER,
+  shifts: { weekNumber?: number }[] = [],
+  availabilities: { weekNumber?: number }[] = []
+): WeekMeta[] {
+  const pastWeekSet = new Set<number>();
+
+  // 1. Scan shifts for past weeks
+  shifts.forEach(s => {
+    if (typeof s.weekNumber === 'number' && s.weekNumber < currentWeek) {
+      pastWeekSet.add(s.weekNumber);
+    }
+  });
+
+  // 2. Scan availabilities for past weeks
+  availabilities.forEach(a => {
+    if (typeof a.weekNumber === 'number' && a.weekNumber < currentWeek) {
+      pastWeekSet.add(a.weekNumber);
+    }
+  });
+
+  // 3. Always include immediate past weeks (at least currentWeek - 1, currentWeek - 2, etc.)
+  for (let i = 1; i <= 4; i++) {
+    const pastW = currentWeek - i;
+    if (pastW > 0) {
+      pastWeekSet.add(pastW);
+    }
+  }
+
+  // 4. Include previous recorded history if any
+  HISTORICAL_WEEKS.forEach(w => {
+    if (w.weekNumber < currentWeek) {
+      pastWeekSet.add(w.weekNumber);
+    }
+  });
+
+  const sorted = Array.from(pastWeekSet).sort((a, b) => b - a);
+  return sorted.map(w => generateWeekMeta(w, currentWeek));
+}
+
+/**
+ * Generates active (non-archived) weeks list:
+ * Strictly >= currentWeek.
+ * Default horizon is currentWeek + 5 (6 active weeks total) + any extra added future weeks.
+ */
+export function getAutoActiveWeeks(
+  currentWeek: number = CURRENT_WEEK_NUMBER,
+  extraWeeks: number[] = [],
+  shifts: { weekNumber?: number }[] = []
+): WeekMeta[] {
+  const activeWeekSet = new Set<number>();
+
+  // Default horizon: current week + 5 weeks (6 active weeks total)
+  for (let i = 0; i < 6; i++) {
+    activeWeekSet.add(currentWeek + i);
+  }
+
+  // Extra future weeks
+  extraWeeks.forEach(w => {
+    if (w >= currentWeek) activeWeekSet.add(w);
+  });
+
+  // Shifts in future weeks
+  shifts.forEach(s => {
+    if (typeof s.weekNumber === 'number' && s.weekNumber >= currentWeek) {
+      activeWeekSet.add(s.weekNumber);
+    }
+  });
+
+  const sorted = Array.from(activeWeekSet).sort((a, b) => a - b);
+  return sorted.map(w => generateWeekMeta(w, currentWeek));
+}
 
 /**
  * The 6 upcoming weeks from next week for the 6-weeks auto-planner

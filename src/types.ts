@@ -60,8 +60,11 @@ export interface WeekMeta {
   isCurrent?: boolean;
   isNext?: boolean;
   isUpcoming?: boolean;
+  isArchived?: boolean;
   dateRange: string;
   daysFormatted: string[];
+  dayDates?: string[];
+  dayDatesFull?: string[];
 }
 
 export interface Notice {

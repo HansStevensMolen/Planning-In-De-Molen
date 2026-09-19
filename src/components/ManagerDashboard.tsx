@@ -39,7 +39,8 @@ import {
   KeyRound,
   CalendarPlus,
   Zap,
-  Send
+  Send,
+  ChevronDown
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department } from '../types';
 import NotificationModal from './NotificationModal';
@@ -49,7 +50,7 @@ import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
-import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER } from '../utils/weekUtils';
+import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 
@@ -140,6 +141,7 @@ export default function ManagerDashboard({
   // Dynamic active weeks and archive management
   const [extraWeekNumbers, setExtraWeekNumbers] = useState<number[]>([]);
   const [showArchiveMenu, setShowArchiveMenu] = useState(false);
+  const [showAvailArchiveMenu, setShowAvailArchiveMenu] = useState(false);
 
   // In-app confirmation dialog states (no window.confirm or alert)
   const [showClearWeekModal, setShowClearWeekModal] = useState(false);
@@ -189,18 +191,11 @@ export default function ManagerDashboard({
   const [showGeminiModal, setShowGeminiModal] = useState(false);
   const [showSchedulePrintModal, setShowSchedulePrintModal] = useState(false);
 
-  // Active weeks dynamically generated: default horizon + extra weeks + any future week with shifts
-  const activeWeeks = Array.from(new Set([
-    ...AVAILABLE_WEEKS.map(w => w.weekNumber),
-    ...extraWeekNumbers,
-    ...shifts.map(s => s.weekNumber).filter((w): w is number => typeof w === 'number' && w >= CURRENT_WEEK_NUMBER)
-  ])).sort((a, b) => a - b).map(w => getWeekMeta(w));
+  // Active weeks dynamically generated: strictly >= CURRENT_WEEK_NUMBER
+  const activeWeeks = getAutoActiveWeeks(CURRENT_WEEK_NUMBER, extraWeekNumbers, shifts);
 
-  // Archived older weeks (all weeks prior to CURRENT_WEEK_NUMBER)
-  const archivedWeeks = Array.from(new Set([
-    ...HISTORICAL_WEEKS.map(w => w.weekNumber),
-    ...shifts.map(s => s.weekNumber).filter((w): w is number => typeof w === 'number' && w < CURRENT_WEEK_NUMBER)
-  ])).sort((a, b) => b - a).map(w => getWeekMeta(w));
+  // Archived older weeks: all previous weeks strictly prior to CURRENT_WEEK_NUMBER are automatically archived
+  const archivedWeeks = getAutoArchivedWeeks(CURRENT_WEEK_NUMBER, shifts, availabilities);
 
   const isCurrentWeekSelectedArchived = isWeekArchived(selectedManagerWeek, CURRENT_WEEK_NUMBER);
 
@@ -1497,19 +1492,21 @@ export default function ManagerDashboard({
                       </div>
                     </th>
                     {DAYS_OF_WEEK.map((day, dIdx) => {
-                      const currentMeta = getWeekMeta(selectedManagerWeek);
-                      const formattedDate = currentMeta?.daysFormatted?.[dIdx] || day;
+                      const dayDateInfo = getDayDateInfo(selectedManagerWeek, dIdx);
                       const eveningTarget = dIdx <= 1 ? 4 : dIdx <= 3 ? 5 : 7;
                       return (
-                        <th key={day} className="px-3 py-3.5 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[135px] bg-orange-50">
-                          <div className="flex items-center gap-1">
-                            <span>{formattedDate}</span>
-                            {dIdx === 6 && (
-                              <span className="text-[8px] font-black text-amber-900 bg-amber-200 px-1 py-0.2 rounded">10u</span>
-                            )}
+                        <th key={day} className="px-3 py-3 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[145px] bg-orange-50/90">
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <span className="font-black text-xs text-slate-800 tracking-tight">{day}</span>
+                            <span className="text-[11px] font-black text-orange-950 bg-orange-200/90 border border-orange-300 px-2 py-0.5 rounded-lg shadow-2xs">
+                              {dayDateInfo.shortDate}
+                            </span>
                           </div>
-                          <div className="text-[10px] font-bold text-orange-600">
-                            {dIdx === 6 ? 'Open va. 10u00' : 'Gewoon open'}
+                          <div className="text-[10px] font-bold text-orange-700 flex items-center justify-between">
+                            <span>{dIdx === 6 ? 'va. 10u00 open' : 'va. 16u00 open'}</span>
+                            {dIdx === 6 && (
+                              <span className="text-[8px] font-black text-amber-900 bg-amber-200 px-1.5 py-0.2 rounded border border-amber-300">Zon</span>
+                            )}
                           </div>
                           <div className="text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
                             2 overdag • {eveningTarget} avond
@@ -1787,8 +1784,8 @@ export default function ManagerDashboard({
               {/* Select Week selector */}
               <div className="space-y-1.5 w-full md:w-auto text-left">
                 <span className="block text-[10px] font-black text-slate-600 uppercase tracking-widest">Selecteer Week:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {AVAILABLE_WEEKS.map(w => {
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {activeWeeks.map(w => {
                     const wk = w.weekNumber;
                     const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER);
                     const isSelected = selectedManagerWeek === wk;
@@ -1799,7 +1796,8 @@ export default function ManagerDashboard({
                         onClick={() => {
                           setSelectedManagerWeek(wk);
                         }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 ${
+                        title={`${w.label}: ${w.dateRange}`}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                           isSelected
                             ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
                             : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
@@ -1830,6 +1828,61 @@ export default function ManagerDashboard({
                       </button>
                     );
                   })}
+
+                  {/* Archive dropdown for past weeks */}
+                  {archivedWeeks.length > 0 && (
+                    <div className="relative inline-block">
+                      <button
+                        type="button"
+                        onClick={() => setShowAvailArchiveMenu(prev => !prev)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 border cursor-pointer ${
+                          isCurrentWeekSelectedArchived
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                        }`}
+                        title="Vorige weken worden automatisch gearchiveerd"
+                      >
+                        <Archive size={12} />
+                        <span>Archief ({archivedWeeks.length})</span>
+                        <ChevronDown size={11} className={`transition-transform duration-200 ${showAvailArchiveMenu ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {showAvailArchiveMenu && (
+                        <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border-2 border-slate-200 py-1.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                          <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                            📦 Vorige Weken (Automatisch Gearchiveerd)
+                          </div>
+                          <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                            {archivedWeeks.map(aw => {
+                              const isSel = selectedManagerWeek === aw.weekNumber;
+                              const pastAvails = availabilities.filter(a => a.weekNumber === aw.weekNumber).length;
+                              return (
+                                <button
+                                  key={aw.weekNumber}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedManagerWeek(aw.weekNumber);
+                                    setShowAvailArchiveMenu(false);
+                                  }}
+                                  className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between transition hover:bg-orange-50 cursor-pointer ${
+                                    isSel ? 'bg-amber-50 font-black text-amber-900' : 'text-slate-700'
+                                  }`}
+                                >
+                                  <div>
+                                    <div className="font-black text-xs">Week {aw.weekNumber}</div>
+                                    <div className="text-[10px] text-slate-500 font-semibold">{aw.dateRange}</div>
+                                  </div>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                    {pastAvails} inzendingen
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1892,23 +1945,29 @@ export default function ManagerDashboard({
                           </span>
                         </div>
                       </th>
-                      {DAYS_OF_WEEK.map((day, idx) => (
-                        <th 
-                          key={idx} 
-                          scope="col" 
-                          className="sticky top-0 z-20 px-3 py-3 text-center text-xs font-black uppercase text-slate-700 tracking-wider bg-slate-100 border-b-2 border-r border-orange-200 min-w-[125px]"
-                        >
-                          <div className="flex items-center justify-center gap-1">
-                            <span>{day}</span>
-                            {idx === 6 && (
-                              <span className="text-[8px] font-black text-amber-800 bg-amber-200/80 border border-amber-300 px-1 py-0.5 rounded">10u</span>
-                            )}
-                          </div>
-                          <span className="text-[9px] font-bold text-slate-500 block normal-case font-mono">
-                            {idx === 6 ? 'va. 10:00' : 'va. 16:00'}
-                          </span>
-                        </th>
-                      ))}
+                      {DAYS_OF_WEEK.map((day, idx) => {
+                        const dayDateInfo = getDayDateInfo(selectedManagerWeek, idx);
+                        return (
+                          <th 
+                            key={idx} 
+                            scope="col" 
+                            className="sticky top-0 z-20 px-3 py-3 text-center text-xs font-black uppercase text-slate-700 tracking-wider bg-slate-100 border-b-2 border-r border-orange-200 min-w-[135px]"
+                          >
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <span className="text-[10px] font-black uppercase tracking-wider text-slate-600">{day}</span>
+                              <span className="px-2.5 py-0.5 rounded-lg bg-orange-100 text-orange-950 font-black text-xs border border-orange-200 shadow-2xs">
+                                {dayDateInfo.shortDate}
+                              </span>
+                              {idx === 6 && (
+                                <span className="text-[8px] font-black text-amber-800 bg-amber-200/80 border border-amber-300 px-1 py-0.2 rounded">va. 10u</span>
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-500 block normal-case font-mono mt-0.5">
+                              {idx === 6 ? 'Zon/feestdag' : 'va. 16:00 open'}
+                            </span>
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   
