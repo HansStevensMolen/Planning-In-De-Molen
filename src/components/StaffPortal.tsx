@@ -39,9 +39,10 @@ import {
   LogOut,
   KeyRound,
   ShieldCheck,
-  Archive
+  Archive,
+  Repeat
 } from 'lucide-react';
-import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department } from '../types';
+import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department, RecurringAvailability, RecurringShiftPreference, RecurringFrequency } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
 import StaffGuideModal from './StaffGuideModal';
 import StaffProfileModal from './StaffProfileModal';
@@ -62,6 +63,8 @@ import {
 } from '../utils/notificationUtils';
 import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import StaffHoursTracker from './StaffHoursTracker';
+import { calculateShiftDurationHours } from '../utils/employeeAgeUtils';
 
 interface StaffPortalProps {
   employees: Employee[];
@@ -74,6 +77,8 @@ interface StaffPortalProps {
   onUpdateEmployee: (employee: Employee) => void;
   onAddEmployee?: (employee: Omit<Employee, 'id'>) => Employee | void;
   onUpdateAvailability: (employeeId: string, weekNumber: number, days: DayAvailability[]) => void;
+  onSignUpForOpenShift?: (swapRequestId: string, employeeId: string, employeeName: string, note?: string) => void;
+  onCancelSignUpOpenShift?: (swapRequestId: string, employeeId: string) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -241,7 +246,9 @@ export default function StaffPortal({
   onAddSwapRequest,
   onUpdateEmployee,
   onAddEmployee,
-  onUpdateAvailability
+  onUpdateAvailability,
+  onSignUpForOpenShift,
+  onCancelSignUpOpenShift
 }: StaffPortalProps) {
   // Authenticated Staff Member ID (Personal Login with PIN)
   const [loggedInStaffId, setLoggedInStaffId] = useState<string | null>(() => {
@@ -333,7 +340,7 @@ export default function StaffPortal({
   };
   
   // Tabs within Staff Portal
-  const [activeSubTab, setActiveSubTab] = useState<'rooster' | 'ruilen' | 'berichten' | 'collegas' | 'beschikbaarheid'>('rooster');
+  const [activeSubTab, setActiveSubTab] = useState<'rooster' | 'uren' | 'beschikbaarheid' | 'ruilen' | 'berichten' | 'collegas'>('rooster');
 
   // Roster week selection state
   const [selectedRosterWeek, setSelectedRosterWeek] = useState<number>(CURRENT_WEEK_NUMBER);
@@ -379,6 +386,88 @@ export default function StaffPortal({
 
   // Active Employee object
   const currentEmployee = employees.find(e => e.id === activeEmployeeId);
+
+  // Only Flexi, Student and Extra can enter fixed/recurring availability
+  const isFlexiStudentExtra = Boolean(
+    currentEmployee && (
+      currentEmployee.statuut === 'Flexi' ||
+      currentEmployee.statuut === 'Student' ||
+      currentEmployee.statuut === 'Extra'
+    )
+  );
+
+  const [availViewMode, setAvailViewMode] = useState<'weekly' | 'recurring'>('weekly');
+  const [recurringFrequency, setRecurringFrequency] = useState<RecurringFrequency>('every_week');
+  const [recurringActive, setRecurringActive] = useState<boolean>(true);
+  const [recurringDays, setRecurringDays] = useState<RecurringShiftPreference[]>(() => {
+    return Array.from({ length: 7 }, (_, i) => ({
+      day: i,
+      status: 'available' as const,
+      startTime: 'Open',
+      endTime: 'Sluit',
+      notes: ''
+    }));
+  });
+  const [recurringNotes, setRecurringNotes] = useState<string>('');
+
+  // Sync recurring availability from currentEmployee
+  React.useEffect(() => {
+    if (currentEmployee?.recurringAvailability) {
+      setRecurringFrequency(currentEmployee.recurringAvailability.frequency || 'every_week');
+      setRecurringActive(currentEmployee.recurringAvailability.active !== false);
+      setRecurringNotes(currentEmployee.recurringAvailability.notes || '');
+      if (currentEmployee.recurringAvailability.days && currentEmployee.recurringAvailability.days.length === 7) {
+        setRecurringDays(currentEmployee.recurringAvailability.days);
+      }
+    } else {
+      setRecurringFrequency('every_week');
+      setRecurringActive(true);
+      setRecurringNotes('');
+      setRecurringDays(Array.from({ length: 7 }, (_, i) => ({
+        day: i,
+        status: 'available' as const,
+        startTime: 'Open',
+        endTime: 'Sluit',
+        notes: ''
+      })));
+    }
+  }, [currentEmployee?.id, currentEmployee?.recurringAvailability]);
+
+  const handleSaveRecurringAvailability = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentEmployee) return;
+
+    const updatedEmp: Employee = {
+      ...currentEmployee,
+      recurringAvailability: {
+        frequency: recurringFrequency,
+        active: recurringActive,
+        days: recurringDays,
+        notes: recurringNotes.trim() || undefined,
+        updatedAt: Date.now()
+      }
+    };
+
+    onUpdateEmployee(updatedEmp);
+    setSuccessMsg('🔁 Je vaste beschikbaarheid is succesvol opgeslagen! De beheerder kan dit direct meenemen in de planning.');
+    setTimeout(() => setSuccessMsg(null), 5000);
+  };
+
+  const handleApplyRecurringToSelectedWeek = () => {
+    if (!currentEmployee?.recurringAvailability?.days) return;
+    const newTemp: Record<number, { status: DayAvailability['status'], notes: string, startTime?: string, endTime?: string }> = {};
+    currentEmployee.recurringAvailability.days.forEach(rd => {
+      newTemp[rd.day] = {
+        status: rd.status,
+        notes: rd.notes || '',
+        startTime: rd.startTime || 'Open',
+        endTime: rd.endTime || 'Sluit'
+      };
+    });
+    setTempAvailability(newTemp);
+    setSuccessMsg(`⚡ Jouw vaste beschikbaarheid is overgenomen voor Week ${selectedWeek}! Klik hieronder op "Opslaan & Versturen" om te bevestigen.`);
+    setTimeout(() => setSuccessMsg(null), 5000);
+  };
 
   const handleOpenColleagueModal = (colleague: Employee) => {
     setSelectedColleagueForModal(colleague);
@@ -450,6 +539,9 @@ export default function StaffPortal({
   // Filters for the selected roster week
   const rosterWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek);
   const personalShifts = rosterWeekShifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
+  const personalWeekHours = React.useMemo(() => {
+    return Math.round(personalShifts.reduce((acc, sh) => acc + calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day), 0) * 10) / 10;
+  }, [personalShifts]);
   const unconfirmedShifts = personalShifts.filter(s => !s.acknowledged);
   const otherEmployees = sortEmployeesByFirstName(employees.filter(e => e.id !== activeEmployeeId));
 
@@ -921,6 +1013,16 @@ export default function StaffPortal({
           )}
         </button>
         <button
+          id="staff-tab-uren-btn"
+          onClick={() => { setActiveSubTab('uren'); setSuccessMsg(null); }}
+          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
+            activeSubTab === 'uren' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Clock size={14} />
+          <span>Uren-tracker ⏱️</span>
+        </button>
+        <button
           onClick={() => { setActiveSubTab('beschikbaarheid'); setSuccessMsg(null); }}
           className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
             activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
@@ -1086,10 +1188,23 @@ export default function StaffPortal({
           
           {/* Left panel: Personal shifts list */}
           <div className="lg:col-span-1 space-y-4">
-            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1">
-              <Clock size={16} className="text-indigo-600" />
-              <span>Jouw aankomende diensten</span>
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1">
+                <Clock size={16} className="text-orange-500" />
+                <span>Jouw aankomende diensten</span>
+              </h3>
+              {personalShifts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveSubTab('uren'); setSuccessMsg(null); }}
+                  className="text-xs font-black text-orange-600 hover:text-orange-700 bg-orange-50 hover:bg-orange-100 px-2.5 py-1 rounded-xl border border-orange-200 transition cursor-pointer flex items-center gap-1"
+                  title="Bekijk de volledige uren-tracker voor deze week"
+                >
+                  <span>⏱️ {personalWeekHours}u</span>
+                  <ChevronRight size={12} />
+                </button>
+              )}
+            </div>
 
             {/* Directe Agenda / Delen balk */}
             {personalShifts.length > 0 && (
@@ -1171,6 +1286,7 @@ export default function StaffPortal({
                           <div className="flex items-center space-x-1.5 mt-1 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
                             <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
                             <span>{sh.startTime} - {sh.endTime}</span>
+                            <span className="text-orange-600 font-extrabold ml-1">({calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day)}u)</span>
                           </div>
                         </div>
 
@@ -1370,156 +1486,305 @@ export default function StaffPortal({
       </div>
       )}
 
-      {/* 2. SWAP / OVERDRACHT REQUESTS */}
+      {/* 2. UREN-TRACKER VOOR MEDEWERKERS (TOTAAL GEWERKTE UREN PER WEEK OP BASIS VAN GOEDGEKEURDE DIENSTEN) */}
+      {activeSubTab === 'uren' && (
+        <StaffHoursTracker
+          currentEmployee={currentEmployee}
+          shifts={shifts}
+          initialWeekNumber={selectedRosterWeek}
+          onAcknowledgeShift={onAcknowledgeShift}
+        />
+      )}
+
+      {/* 3. SWAP / OVERDRACHT REQUESTS & OPEN SHIFTS */}
       {activeSubTab === 'ruilen' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="space-y-6">
           
-          {/* Submit swap form - Vibrant Palette Theme */}
-          <div className="lg:col-span-1 bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 h-fit space-y-4">
-            <div>
-              <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-1.5 uppercase tracking-tight">
-                <ArrowLeftRight size={16} className="text-orange-500 shrink-0 stroke-[2.5]" />
-                <span>Nieuw ruilverzoek indienen</span>
-              </h3>
-              <p className="text-xs text-slate-500 font-medium">Meld hier een dienst aan die je wilt ruilen of overdragen.</p>
+          {/* 📢 OPEN SHIFTS BOARD (OPENGESTELDE SHIFTEN VOOR INTEKENING) */}
+          {(() => {
+            const openShifts = swapRequests.filter(r => r.isOpenShift && r.status === 'pending');
+            return (
+              <div className="bg-gradient-to-r from-amber-50/90 via-orange-50/80 to-amber-50/90 rounded-3xl p-5 sm:p-6 border-2 border-amber-300 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black text-lg shadow-sm shrink-0">
+                      📢
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-sm sm:text-base text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                        <span>Openstaande Shiften (Ruilbord)</span>
+                        {openShifts.length > 0 && (
+                          <span className="text-[10px] font-black bg-amber-200 text-amber-950 px-2.5 py-0.5 rounded-full border border-amber-300">
+                            {openShifts.length} {openShifts.length === 1 ? 'open dienst' : 'open diensten'}
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-xs text-slate-600 font-medium">
+                        Diensten die zijn opengesteld door de beheerder of collega's. Schrijf je in om aan te geven dat je kunt inspringen!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {openShifts.length === 0 ? (
+                  <div className="bg-white/85 rounded-2xl p-6 text-center border-2 border-dashed border-amber-200 text-slate-500 text-xs font-semibold">
+                    ✨ Er zijn op dit moment geen openstaande shiften die ingevuld moeten worden. Alles is bezet!
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {openShifts.map((req) => {
+                      const shift = shifts.find(s => s.id === req.shiftId);
+                      if (!shift) return null;
+                      const shiftWeek = shift.weekNumber || CURRENT_WEEK_NUMBER;
+                      const dayInfo = getDayDateInfo(shiftWeek, shift.day);
+                      const hasSignedUp = Boolean(req.candidates?.some(c => c.employeeId === activeEmployeeId));
+                      const candidates = req.candidates || [];
+
+                      return (
+                        <div 
+                          key={req.id} 
+                          className={`bg-white rounded-2xl p-4 border-2 shadow-xs space-y-3 transition flex flex-col justify-between ${
+                            hasSignedUp ? 'border-emerald-400 bg-emerald-50/20' : 'border-amber-200 hover:border-amber-300 hover:shadow-md'
+                          }`}
+                        >
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-start gap-2">
+                              <div>
+                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-900 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200 inline-block mb-1">
+                                  Week {shiftWeek} • {shift.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                                </span>
+                                <h4 className="font-extrabold text-sm text-slate-800">
+                                  {dayInfo.dayNameFull} {dayInfo.shortDate}
+                                </h4>
+                              </div>
+                              <span className="text-xs font-black text-slate-800 bg-orange-100/70 border border-orange-200 px-2.5 py-1 rounded-lg font-mono">
+                                {shift.startTime} - {shift.endTime}
+                              </span>
+                            </div>
+
+                            {req.reason && (
+                              <p className="text-[11px] text-slate-600 italic bg-amber-50/60 p-2.5 rounded-xl border border-amber-100">
+                                "{req.reason}"
+                              </p>
+                            )}
+
+                            {/* Candidates enrolled */}
+                            <div className="pt-1">
+                              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-tight flex items-center justify-between mb-1.5">
+                                <span>Kandidaten ({candidates.length}):</span>
+                                {hasSignedUp && (
+                                  <span className="text-emerald-700 font-black flex items-center gap-1 text-[10px]">
+                                    <Check size={11} className="stroke-[3]" /> Jij bent ingetekend
+                                  </span>
+                                )}
+                              </div>
+                              {candidates.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {candidates.map(c => (
+                                    <span 
+                                      key={c.employeeId} 
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                                        c.employeeId === activeEmployeeId 
+                                          ? 'bg-emerald-100 text-emerald-950 border-emerald-300' 
+                                          : 'bg-slate-100 text-slate-700 border-slate-200'
+                                      }`}
+                                    >
+                                      {c.employeeName} {c.employeeId === activeEmployeeId && '(Jij)'}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 italic">Nog geen kandidaten ingetekend</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action button */}
+                          <div className="pt-2 border-t border-slate-100 mt-2">
+                            {hasSignedUp ? (
+                              <button
+                                type="button"
+                                onClick={() => onCancelSignUpOpenShift && onCancelSignUpOpenShift(req.id, activeEmployeeId)}
+                                className="w-full py-2 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-xs font-bold rounded-xl border border-slate-200 hover:border-rose-200 transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
+                              >
+                                <X size={13} />
+                                <span>Mijn intekening intrekken</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onSignUpForOpenShift && currentEmployee) {
+                                    onSignUpForOpenShift(req.id, activeEmployeeId, currentEmployee.name, 'Beschikbaar voor deze shift');
+                                  }
+                                }}
+                                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-xs transition duration-150 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                              >
+                                <Check size={14} className="stroke-[3]" />
+                                <span>🙋 Ik kan inspringen! (Intekenen)</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            {/* Submit swap form - Vibrant Palette Theme */}
+            <div className="lg:col-span-1 bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 h-fit space-y-4">
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-1.5 uppercase tracking-tight">
+                  <ArrowLeftRight size={16} className="text-orange-500 shrink-0 stroke-[2.5]" />
+                  <span>Nieuw ruilverzoek indienen</span>
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">Meld hier een dienst aan die je wilt ruilen of overdragen.</p>
+              </div>
+
+              {personalShifts.length === 0 ? (
+                <div className="text-xs text-slate-500 font-black bg-orange-50/20 p-4 text-center rounded-2xl border-2 border-dashed border-orange-150">
+                  Je bent deze week niet ingepland, dus je hebt geen diensten om te ruilen.
+                </div>
+              ) : (
+                <form onSubmit={handleSubmitSwap} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Welke van jouw diensten?</label>
+                    <select
+                      required
+                      value={selectedShiftForSwap}
+                      onChange={(e) => setSelectedShiftForSwap(e.target.value)}
+                      className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="" disabled>Selecteer dienst...</option>
+                      {personalShifts.map((sh) => (
+                        <option key={sh.id} value={sh.id}>
+                          {DAYS_OF_WEEK[sh.day]} ({getDayDateInfo(sh.weekNumber || selectedRosterWeek, sh.day).shortDate}) • {sh.startTime} - {sh.endTime}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Specifiek overdragen aan colleague? (Optioneel)</label>
+                    <select
+                      value={targetColleagueId}
+                      onChange={(e) => setTargetColleagueId(e.target.value)}
+                      className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                    >
+                      <option value="">Aanbieden aan iedereen</option>
+                      {otherEmployees.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Reden van het ruilen</label>
+                    <textarea
+                      required
+                      rows={3}
+                      placeholder="E.g. Familie verjaardag of studieverplichting..."
+                      value={swapReason}
+                      onChange={(e) => setSwapReason(e.target.value)}
+                      className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-850 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none animate-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition duration-150 active:scale-95 cursor-pointer"
+                  >
+                    Ruilverzoek Versturen +
+                  </button>
+                </form>
+              )}
             </div>
 
-            {personalShifts.length === 0 ? (
-              <div className="text-xs text-slate-500 font-black bg-orange-50/20 p-4 text-center rounded-2xl border-2 border-dashed border-orange-150">
-                Je bent deze week niet ingepland, dus je hebt geen diensten om te ruilen.
-              </div>
-            ) : (
-              <form onSubmit={handleSubmitSwap} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Welke van jouw diensten?</label>
-                  <select
-                    required
-                    value={selectedShiftForSwap}
-                    onChange={(e) => setSelectedShiftForSwap(e.target.value)}
-                    className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
-                  >
-                    <option value="" disabled>Selecteer dienst...</option>
-                    {personalShifts.map((sh) => (
-                      <option key={sh.id} value={sh.id}>
-                        {DAYS_OF_WEEK[sh.day]} ({sh.startTime} - {sh.endTime})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            {/* Global swap requests list */}
+            <div className="lg:col-span-2 space-y-4">
+              <h3 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight">Geplaatste Ruilverzoeken van Collega's</h3>
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Specifiek overdragen aan colleague? (Optioneel)</label>
-                  <select
-                    value={targetColleagueId}
-                    onChange={(e) => setTargetColleagueId(e.target.value)}
-                    className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
-                  >
-                    <option value="">Aanbieden aan iedereen</option>
-                    {otherEmployees.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {swapRequests.filter(r => !r.isOpenShift).map((req) => {
+                  const requester = req.requesterId === 'beheerder'
+                    ? { id: 'beheerder', name: 'Beheerder', color: '#f97316' }
+                    : employees.find(e => e.id === req.requesterId);
+                  const shift = shifts.find(s => s.id === req.shiftId);
+                  const target = req.targetEmployeeId ? employees.find(e => e.id === req.targetEmployeeId) : null;
+                  
+                  if (!requester || !shift) return null;
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-black uppercase text-slate-600 tracking-tight">Reden van het ruilen</label>
-                  <textarea
-                    required
-                    rows={3}
-                    placeholder="E.g. Familie verjaardag of studieverplichting..."
-                    value={swapReason}
-                    onChange={(e) => setSwapReason(e.target.value)}
-                    className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-850 placeholder-slate-400 rounded-xl px-3.5 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none animate-none"
-                  />
-                </div>
+                  const isOwnRequest = requester.id === activeEmployeeId;
 
-                <button
-                  type="submit"
-                  className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition duration-150 active:scale-95 cursor-pointer"
-                >
-                  Ruilverzoek Versturen +
-                </button>
-              </form>
-            )}
-          </div>
-
-          {/* Global swap requests list */}
-          <div className="lg:col-span-2 space-y-4">
-            <h3 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight">Geplaatste Ruileverzoeken</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {swapRequests.map((req) => {
-                const requester = employees.find(e => e.id === req.requesterId);
-                const shift = shifts.find(s => s.id === req.shiftId);
-                const target = req.targetEmployeeId ? employees.find(e => e.id === req.targetEmployeeId) : null;
-                
-                if (!requester || !shift) return null;
-
-                const isOwnRequest = requester.id === activeEmployeeId;
-
-                return (
-                  <div 
-                    key={req.id} 
-                    className={`bg-white rounded-3xl p-5 border-2 shadow-sm space-y-3 relative overflow-hidden transition hover:shadow-md ${
-                      isOwnRequest ? 'border-orange-550 border-orange-500 bg-orange-50/15 font-bold' : 'border-orange-100'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center space-x-2.5">
-                        <div 
-                          className="w-8 h-8 rounded-full flex items-center justify-center font-black text-xs text-white uppercase shadow-md shrink-0 ring-1 ring-orange-200"
-                          style={{ backgroundColor: requester.color }}
-                        >
-                          {requester.name.split(' ').map(n => n[0]).join('')}
+                  return (
+                    <div 
+                      key={req.id} 
+                      className={`bg-white rounded-3xl p-5 border-2 shadow-sm space-y-3 relative overflow-hidden transition hover:shadow-md ${
+                        isOwnRequest ? 'border-orange-550 border-orange-500 bg-orange-50/15 font-bold' : 'border-orange-100'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center space-x-2.5">
+                          <div 
+                            className="w-8 h-8 rounded-full flex items-center justify-center font-black text-xs text-white uppercase shadow-md shrink-0 ring-1 ring-orange-200"
+                            style={{ backgroundColor: requester.color }}
+                          >
+                            {requester.name.split(' ').map(n => n[0]).join('')}
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-tight">
+                              {requester.name} {isOwnRequest && '(Jij)'}
+                            </h4>
+                            <span className="text-[9px] font-bold uppercase text-slate-400">Gevraagd op: {req.date}</span>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-tight">
-                            {requester.name} {isOwnRequest && '(Jij)'}
-                          </h4>
-                          <span className="text-[9px] font-bold uppercase text-slate-400">Gevraagd op: {req.date}</span>
+
+                        <span>
+                          {req.status === 'pending' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-orange-100 text-orange-950 border border-orange-200 uppercase tracking-tight">Wacht op akkoord</span>
+                          ) : req.status === 'approved' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-950 border border-emerald-200 uppercase tracking-tight">Ruil goedgekeurd</span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-tight">Geweigerd</span>
+                          )}
+                        </span>
+                      </div>
+
+                      <div className="bg-orange-50/20 p-3.5 rounded-2xl border border-orange-100 text-[11px] text-slate-650 space-y-1.5 font-medium">
+                        <div className="flex justify-between font-black text-slate-800 uppercase tracking-tight text-[10px]">
+                          <span>Originele Dienst:</span>
+                          <span>{DAYS_OF_WEEK[shift.day]} ({getDayDateInfo(shift.weekNumber || CURRENT_WEEK_NUMBER, shift.day).shortDate})</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Tijdstip:</span>
+                          <span className="font-bold text-slate-700">{shift.startTime} - {shift.endTime}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Bestemd voor:</span>
+                          <span className="font-bold text-slate-700">{target ? target.name : 'Iedereen collega'}</span>
                         </div>
                       </div>
 
-                      <span>
-                        {req.status === 'pending' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-orange-100 text-orange-950 border border-orange-200 uppercase tracking-tight">Wacht op akkoord</span>
-                        ) : req.status === 'approved' ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-950 border border-emerald-200 uppercase tracking-tight">Ruil goedgekeurd</span>
-                        ) : (
-                          <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-tight">Geweigerd</span>
-                        )}
-                      </span>
+                      <p className="text-[11px] text-slate-600 italic bg-orange-50/5 p-2.5 rounded-xl border border-orange-50/80">
+                        "{req.reason}"
+                      </p>
                     </div>
+                  );
+                })}
 
-                    <div className="bg-orange-50/20 p-3.5 rounded-2xl border border-orange-100 text-[11px] text-slate-650 space-y-1.5 font-medium">
-                      <div className="flex justify-between font-black text-slate-800 uppercase tracking-tight text-[10px]">
-                        <span>Originele Dienst:</span>
-                        <span>{DAYS_OF_WEEK[shift.day]}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Tijdstip:</span>
-                        <span className="font-bold text-slate-700">{shift.startTime} - {shift.endTime}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Bestemd voor:</span>
-                        <span className="font-bold text-slate-700">{target ? target.name : 'Iedereen collega'}</span>
-                      </div>
-                    </div>
-
-                    <p className="text-[11px] text-slate-600 italic bg-orange-50/5 p-2.5 rounded-xl border border-orange-50/80">
-                      "{req.reason}"
-                    </p>
+                {swapRequests.filter(r => !r.isOpenShift).length === 0 && (
+                  <div className="bg-white p-10 text-center rounded-3xl border-2 border-orange-100 md:col-span-2 text-slate-400 text-xs font-bold uppercase">
+                    Er zijn momenteel geen onderlinge ruilverzoeken ingediend.
                   </div>
-                );
-              })}
-
-              {swapRequests.length === 0 && (
-                <div className="bg-white p-10 text-center rounded-3xl border-2 border-orange-100 md:col-span-2 text-slate-400 text-xs font-bold uppercase">
-                  Er zijn momenteel geen ruilverzoeking ingediend. Alles loopt op rolletjes!
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1537,29 +1802,46 @@ export default function StaffPortal({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
-            {notices.map((not) => (
-              <div 
-                key={not.id} 
-                className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 relative overflow-hidden flex flex-col justify-between min-h-[160px] hover:shadow-md transition"
-              >
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center text-[10px]">
-                    <span className={`px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
-                      {CATEGORY_ICONS[not.category]} {not.category}
-                    </span>
-                    <span className="text-slate-400 font-bold uppercase">{not.date}</span>
+            {notices
+              .filter((not) => !not.targetEmployeeId || not.targetEmployeeId === currentEmployee.id)
+              .map((not) => {
+                const isPersonalReminder = not.targetEmployeeId === currentEmployee.id;
+                return (
+                  <div 
+                    key={not.id} 
+                    className={`p-5 rounded-3xl shadow-sm border-2 relative overflow-hidden flex flex-col justify-between min-h-[160px] hover:shadow-md transition ${
+                      isPersonalReminder
+                        ? 'bg-amber-50/70 border-amber-300 ring-2 ring-amber-200'
+                        : 'bg-white border-orange-100'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center text-[10px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
+                            {CATEGORY_ICONS[not.category]} {not.category}
+                          </span>
+                          {isPersonalReminder && (
+                            <span className="px-2 py-0.5 rounded-full font-black uppercase tracking-wider text-[9px] bg-amber-200 text-amber-950 border border-amber-300 flex items-center gap-1">
+                              <BellRing size={10} className="text-amber-700 animate-pulse" />
+                              <span>Persoonlijke Herinnering</span>
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-slate-400 font-bold uppercase">{not.date}</span>
+                      </div>
+
+                      <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight leading-snug">{not.title}</h4>
+                      <p className="text-xs text-slate-650 leading-relaxed">{not.content}</p>
+                    </div>
+
+                    <div className="pt-3 border-t border-orange-50 text-[10px] text-slate-400 flex justify-between items-center mt-4 font-bold uppercase">
+                      <span>Auteur: <strong className="text-slate-600">{not.author}</strong></span>
+                      <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-250"><CheckCheck size={11} className="stroke-[3.5]" /> Gelezen</span>
+                    </div>
                   </div>
-
-                  <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight leading-snug">{not.title}</h4>
-                  <p className="text-xs text-slate-650 leading-relaxed">{not.content}</p>
-                </div>
-
-                <div className="pt-3 border-t border-orange-50 text-[10px] text-slate-400 flex justify-between items-center mt-4 font-bold uppercase">
-                  <span>Auteur: <strong className="text-slate-600">{not.author}</strong></span>
-                  <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-250"><CheckCheck size={11} className="stroke-[3.5]" /> Gelezen</span>
-                </div>
-              </div>
-            ))}
+                );
+              })}
           </div>
         </div>
       )}
@@ -1586,8 +1868,405 @@ export default function StaffPortal({
             </div>
           </div>
 
-          {/* Week Selection Hub */}
-          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          {/* Mode Selector for Flexi / Student / Extra */}
+          {isFlexiStudentExtra && (
+            <div className="bg-white p-2.5 rounded-2xl border-2 border-orange-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setAvailViewMode('weekly')}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 ${
+                    availViewMode === 'weekly'
+                      ? 'bg-orange-500 text-white shadow-xs'
+                      : 'text-slate-650 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                >
+                  <CalendarIcon size={14} />
+                  <span>Wekelijks Invullen</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAvailViewMode('recurring')}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 ${
+                    availViewMode === 'recurring'
+                      ? 'bg-orange-500 text-white shadow-xs'
+                      : 'text-slate-650 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                >
+                  <Repeat size={14} />
+                  <span>Vaste Beschikbaarheid 🔁 ({currentEmployee?.statuut})</span>
+                  {currentEmployee?.recurringAvailability?.active && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  )}
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-500 font-medium px-2">
+                {availViewMode === 'recurring' ? (
+                  <span className="text-orange-950 font-black">🔁 Vaste wekelijkse of tweewekelijkse shiften</span>
+                ) : (
+                  <span>Specifieke planning per week beheren</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* VIEW 1: RECURRING AVAILABILITY FORM (Flexi, Student, Extra) */}
+          {availViewMode === 'recurring' && isFlexiStudentExtra ? (
+            <div className="space-y-6">
+              {/* Frequency Header & Toggle */}
+              <div className="bg-white p-5 rounded-3xl border-2 border-orange-200 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-orange-100">
+                  <div>
+                    <h4 className="font-black text-sm text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                      <Repeat size={16} className="text-orange-500" />
+                      <span>Vaste Beschikbaarheid Instellen ({currentEmployee?.name} • {currentEmployee?.statuut})</span>
+                    </h4>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      Als {currentEmployee?.statuut} kun je hier vaste shiften opgeven die je elke week of om de 2 weken wilt draaien.
+                    </p>
+                  </div>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none bg-orange-50 px-3.5 py-2 rounded-xl border border-orange-200 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={recurringActive}
+                      onChange={(e) => setRecurringActive(e.target.checked)}
+                      className="w-4 h-4 text-orange-500 rounded focus:ring-orange-400 cursor-pointer"
+                    />
+                    <span className="text-xs font-black uppercase text-orange-950">Vaste beschikbaarheid actief</span>
+                  </label>
+                </div>
+
+                {/* Frequency selection */}
+                <div className="space-y-2">
+                  <label className="text-xs font-black uppercase text-slate-700 tracking-tight block">
+                    Frequentie van jouw vaste shiften:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setRecurringFrequency('every_week')}
+                      className={`p-3 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-1 ${
+                        recurringFrequency === 'every_week'
+                          ? 'border-orange-500 bg-orange-50/80 shadow-xs'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-xs text-slate-800 uppercase">Elke Week</span>
+                        {recurringFrequency === 'every_week' && <span className="text-orange-600 font-black text-xs">✓</span>}
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-medium">Wekelijks hetzelfde vaste patroon</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRecurringFrequency('even_weeks')}
+                      className={`p-3 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-1 ${
+                        recurringFrequency === 'even_weeks'
+                          ? 'border-orange-500 bg-orange-50/80 shadow-xs'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-xs text-slate-800 uppercase">Om de 2 weken (Even)</span>
+                        {recurringFrequency === 'even_weeks' && <span className="text-orange-600 font-black text-xs">✓</span>}
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-medium">Week 38, 40, 42... (Even weeknummers)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRecurringFrequency('odd_weeks')}
+                      className={`p-3 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-1 ${
+                        recurringFrequency === 'odd_weeks'
+                          ? 'border-orange-500 bg-orange-50/80 shadow-xs'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-xs text-slate-800 uppercase">Om de 2 weken (Oneven)</span>
+                        {recurringFrequency === 'odd_weeks' && <span className="text-orange-600 font-black text-xs">✓</span>}
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-medium">Week 37, 39, 41... (Oneven weeknummers)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Days Matrix */}
+              <div className="bg-white p-5 sm:p-6 rounded-3xl border-2 border-orange-100 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-2 border-b border-orange-50">
+                  <div>
+                    <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight">
+                      Vaste shiften per weekdag
+                    </h4>
+                    <p className="text-[11px] text-slate-500 font-medium">
+                      Duid per dag aan of je vast beschikbaar bent en tussen welke uren.
+                    </p>
+                  </div>
+                  <div className="flex gap-2 text-[10px] font-black uppercase">
+                    <span className="flex items-center gap-1 text-emerald-600"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Ja</span>
+                    <span className="flex items-center gap-1 text-amber-600"><span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Voorkeur</span>
+                    <span className="flex items-center gap-1 text-rose-600"><span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Nee</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
+                  {DAYS_OF_WEEK.map((dayName, dayIdx) => {
+                    const currentPref = recurringDays[dayIdx] || {
+                      day: dayIdx,
+                      status: 'available',
+                      startTime: 'Open',
+                      endTime: 'Sluit',
+                      notes: ''
+                    };
+
+                    return (
+                      <div
+                        key={dayIdx}
+                        className={`p-3.5 rounded-2xl border-2 transition flex flex-col justify-between space-y-2.5 ${
+                          currentPref.status === 'preferred' ? 'bg-amber-50/50 border-amber-300' :
+                          currentPref.status === 'available' ? 'bg-emerald-50/40 border-emerald-200' :
+                          'bg-rose-50/40 border-rose-200'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{dayName}</span>
+                            <span className={`w-2.5 h-2.5 rounded-full ${
+                              currentPref.status === 'preferred' ? 'bg-amber-400' :
+                              currentPref.status === 'available' ? 'bg-emerald-500' :
+                              'bg-rose-500'
+                            }`} />
+                          </div>
+
+                          {/* Status Selector */}
+                          <div className="grid grid-cols-3 gap-1 text-center font-sans mt-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecurringDays(prev => {
+                                  const next = [...prev];
+                                  next[dayIdx] = { ...next[dayIdx], day: dayIdx, status: 'available' };
+                                  return next;
+                                });
+                              }}
+                              className={`py-1 rounded-lg text-[9px] font-black uppercase transition tracking-tight cursor-pointer ${
+                                currentPref.status === 'available'
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'bg-white/80 hover:bg-white text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              Ja
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecurringDays(prev => {
+                                  const next = [...prev];
+                                  next[dayIdx] = { ...next[dayIdx], day: dayIdx, status: 'preferred' };
+                                  return next;
+                                });
+                              }}
+                              className={`py-1 rounded-lg text-[9px] font-black uppercase transition tracking-tight cursor-pointer ${
+                                currentPref.status === 'preferred'
+                                  ? 'bg-amber-500 text-white shadow-xs'
+                                  : 'bg-white/80 hover:bg-white text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              Voorkeur
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecurringDays(prev => {
+                                  const next = [...prev];
+                                  next[dayIdx] = { ...next[dayIdx], day: dayIdx, status: 'unavailable' };
+                                  return next;
+                                });
+                              }}
+                              className={`py-1 rounded-lg text-[9px] font-black uppercase transition tracking-tight cursor-pointer ${
+                                currentPref.status === 'unavailable'
+                                  ? 'bg-rose-600 text-white shadow-xs'
+                                  : 'bg-white/80 hover:bg-white text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              Nee
+                            </button>
+                          </div>
+
+                          {/* Times if available or preferred */}
+                          {currentPref.status !== 'unavailable' && (
+                            <div className="space-y-1.5 pt-2">
+                              <div className="grid grid-cols-2 gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRecurringDays(prev => {
+                                      const next = [...prev];
+                                      next[dayIdx] = { ...next[dayIdx], startTime: 'Open', endTime: 'Sluit' };
+                                      return next;
+                                    });
+                                  }}
+                                  className={`text-[8px] font-black py-0.5 px-1 rounded border transition cursor-pointer ${
+                                    currentPref.startTime === 'Open' && currentPref.endTime === 'Sluit'
+                                      ? 'bg-orange-500 text-white border-orange-600'
+                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-orange-50'
+                                  }`}
+                                >
+                                  Hele dag
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRecurringDays(prev => {
+                                      const next = [...prev];
+                                      next[dayIdx] = { ...next[dayIdx], startTime: '18u00', endTime: 'Sluit' };
+                                      return next;
+                                    });
+                                  }}
+                                  className={`text-[8px] font-black py-0.5 px-1 rounded border transition cursor-pointer ${
+                                    currentPref.startTime === '18u00' && currentPref.endTime === 'Sluit'
+                                      ? 'bg-orange-500 text-white border-orange-600'
+                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-orange-50'
+                                  }`}
+                                >
+                                  Avond
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-1 bg-white/70 p-1.5 rounded-lg border border-slate-200">
+                                <div>
+                                  <span className="text-[7.5px] font-black text-slate-400 block uppercase mb-0.5">Van</span>
+                                  <select
+                                    value={currentPref.startTime || 'Open'}
+                                    onChange={(e) => {
+                                      const newStart = e.target.value;
+                                      setRecurringDays(prev => {
+                                        const next = [...prev];
+                                        next[dayIdx] = { ...next[dayIdx], startTime: newStart };
+                                        return next;
+                                      });
+                                    }}
+                                    className="w-full bg-white border border-slate-200 rounded px-1 py-1 text-[9px] font-bold text-slate-700 cursor-pointer"
+                                  >
+                                    {getBeginTimes(dayIdx).map(time => (
+                                      <option key={time} value={time}>{time}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <span className="text-[7.5px] font-black text-slate-400 block uppercase mb-0.5">Tot</span>
+                                  <select
+                                    value={currentPref.endTime || 'Sluit'}
+                                    onChange={(e) => {
+                                      const newEnd = e.target.value;
+                                      setRecurringDays(prev => {
+                                        const next = [...prev];
+                                        next[dayIdx] = { ...next[dayIdx], endTime: newEnd };
+                                        return next;
+                                      });
+                                    }}
+                                    className="w-full bg-white border border-slate-200 rounded px-1 py-1 text-[9px] font-bold text-slate-700 cursor-pointer"
+                                  >
+                                    {getEndTimes(dayIdx, currentPref.startTime || 'Open').map(time => (
+                                      <option key={time} value={time}>{time}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Note per day */}
+                        <input
+                          type="text"
+                          placeholder="Opmerking..."
+                          value={currentPref.notes || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setRecurringDays(prev => {
+                              const next = [...prev];
+                              next[dayIdx] = { ...next[dayIdx], notes: val };
+                              return next;
+                            });
+                          }}
+                          className="w-full bg-white/80 border border-slate-200 rounded-lg px-2 py-1 text-[9.5px] text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-orange-400"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* General notes & Save */}
+                <div className="pt-3 border-t border-orange-100 space-y-3">
+                  <div>
+                    <label className="text-xs font-black uppercase text-slate-700 block mb-1">
+                      Algemene opmerkingen over je vaste beschikbaarheid (optioneel):
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={recurringNotes}
+                      onChange={(e) => setRecurringNotes(e.target.value)}
+                      placeholder="E.g. In de even weken heb ik geen avondles op donderdag, studentencontract max 20u/week..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                    />
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                    <p className="text-xs text-slate-500 font-medium">
+                      💡 Tip: Nadat je dit opslaat, kun je in het wekelijkse overzicht met 1 klik je vaste shiften overnemen naar elke gewenste week.
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveRecurringAvailability}
+                      className="w-full sm:w-auto px-8 py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Check size={14} className="stroke-[3]" />
+                      <span>Vaste Beschikbaarheid Opslaan ✓</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Optional Quick-Apply Banner for Flexi/Student/Extra with active recurring availability */}
+              {isFlexiStudentExtra && currentEmployee?.recurringAvailability?.active && (
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-2xl border-2 border-blue-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-blue-500 text-white flex items-center justify-center font-bold text-sm shrink-0">
+                      🔁
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-xs text-blue-950 uppercase tracking-tight">
+                        Vaste Beschikbaarheid Actief ({
+                          currentEmployee.recurringAvailability.frequency === 'every_week' ? 'Elke week' :
+                          currentEmployee.recurringAvailability.frequency === 'even_weeks' ? 'Om de 2 weken (Even)' : 'Om de 2 weken (Oneven)'
+                        })
+                      </h4>
+                      <p className="text-[11px] text-blue-800 font-medium">
+                        Wil je jouw vaste shiften overnemen voor geselecteerde <strong>Week {selectedWeek}</strong>?
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleApplyRecurringToSelectedWeek}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black uppercase tracking-tight rounded-xl transition shadow-xs active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
+                  >
+                    <span>⚡ Vaste shiften toepassen op Week {selectedWeek}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Week Selection Hub */}
+              <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-1">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1">
                 <CalendarIcon size={13} className="text-orange-500" />
@@ -2103,6 +2782,8 @@ export default function StaffPortal({
               );
             })()}
           </div>
+            </>
+          )}
         </div>
       )}
 

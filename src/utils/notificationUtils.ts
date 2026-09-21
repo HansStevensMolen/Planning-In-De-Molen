@@ -1,5 +1,5 @@
 import { Employee, Shift, Department } from '../types';
-import { getDateOfISOWeek, CURRENT_WEEK_INFO } from './weekUtils';
+import { getDateOfISOWeek, CURRENT_WEEK_INFO, getDayDateInfo } from './weekUtils';
 
 const DAYS_OF_WEEK = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
 
@@ -133,24 +133,44 @@ export function generateOutlookWebUrl(employee: Employee, shift: Shift, weekNumb
   return `https://outlook.live.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&location=${location}&startdt=${startDt}&enddt=${endDt}`;
 }
 
+export const PUBLIC_APP_URL = 'https://ais-pre-m2somphks3peywsj3udb6b-287536891405.europe-west3.run.app';
+
+export function getShareableAppUrl(): string {
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname.includes('ais-dev')) {
+      return PUBLIC_APP_URL;
+    }
+    return window.location.origin;
+  }
+  return PUBLIC_APP_URL;
+}
+
 /**
- * Generate personal WhatsApp notification link
+ * Robustly normalizes Belgian and international phone numbers for WhatsApp
  */
-export function generateWhatsAppUrl(
+export function cleanBelgianPhoneNumber(phone: string): string {
+  if (!phone) return '';
+  let clean = phone.replace(/[^0-9+]/g, '');
+  if (clean.startsWith('+')) clean = clean.substring(1);
+  if (clean.startsWith('0032')) clean = '32' + clean.substring(4);
+  else if (clean.startsWith('00')) clean = clean.substring(2);
+  else if (clean.startsWith('0')) clean = '32' + clean.substring(1);
+  else if (clean.length === 9 && clean.startsWith('4')) clean = '32' + clean;
+  return clean;
+}
+
+/**
+ * Generate personal WhatsApp message text with direct clickable link
+ */
+export function generateWhatsAppMessageText(
   employee: Employee,
   shifts: Shift[],
   weekNumber: number,
   appUrl?: string
 ): string {
   const empShifts = shifts.filter(s => s.employeeId === employee.id && s.status === 'published');
-  const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
-  // Default to Belgian country code 32 if starts with 0
-  let intlPhone = cleanPhone;
-  if (intlPhone.startsWith('0')) {
-    intlPhone = '32' + intlPhone.substring(1);
-  }
-
   const dept = employee.department === 'keuken' ? 'Keuken' : 'Zaal';
+  const effectiveAppUrl = appUrl || getShareableAppUrl();
 
   let message = `*Hallo ${employee.name}!*\n\n`;
   message += `Hier is jouw werkrooster voor *Week ${weekNumber}* bij *Eet-staminée In De Molen* (${dept}):\n\n`;
@@ -160,19 +180,37 @@ export function generateWhatsAppUrl(
   } else {
     empShifts.forEach(s => {
       const dayName = DAYS_OF_WEEK[s.day];
+      const dateInfo = getDayDateInfo(weekNumber, s.day);
       const shiftDept = (s.department || employee.department) === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
-      message += `• *${dayName}*: ${s.startTime} - ${s.endTime} (${shiftDept})${s.notes ? ` _[${s.notes}]_` : ''}\n`;
+      message += `• *${dayName} ${dateInfo.shortDate}*: ${s.startTime} - ${s.endTime} (${shiftDept})${s.notes ? ` _[${s.notes}]_` : ''}\n`;
     });
     message += `\n*Totaal:* ${empShifts.length} dienst(en)\n\n`;
   }
 
-  message += `Gelieve je shifts te bekijken en te bevestigen via het personeelsportaal.\n`;
-  if (appUrl) {
-    message += `Link naar portaal: ${appUrl}\n\n`;
-  }
-  message += `Veel succes en tot snel!\n_Hans Stevens (Beheerder In De Molen)_`;
+  message += `Gelieve je shifts te bekijken en te bevestigen in het personeelsportaal.\n\n`;
+  message += `📱 *Klik hier om de app te openen en te bevestigen:*\n`;
+  message += `${effectiveAppUrl}\n\n`;
+  message += `Veel succes en tot snel!\n_Eet-staminée In De Molen_`;
 
-  return `https://wa.me/${intlPhone ? intlPhone : ''}?text=${encodeURIComponent(message)}`;
+  return message;
+}
+
+/**
+ * Generate personal WhatsApp notification link
+ */
+export function generateWhatsAppUrl(
+  employee: Employee,
+  shifts: Shift[],
+  weekNumber: number,
+  appUrl?: string
+): string {
+  const intlPhone = cleanBelgianPhoneNumber(employee.phone || '');
+  const message = generateWhatsAppMessageText(employee, shifts, weekNumber, appUrl);
+
+  if (intlPhone && intlPhone.length >= 8) {
+    return `https://api.whatsapp.com/send?phone=${intlPhone}&text=${encodeURIComponent(message)}`;
+  }
+  return `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
 }
 
 /**
@@ -182,9 +220,11 @@ export function generateTeamWhatsAppSummary(
   employees: Employee[],
   shifts: Shift[],
   weekNumber: number,
-  department: Department | 'alles'
+  department: Department | 'alles',
+  appUrl?: string
 ): string {
   const deptTitle = department === 'keuken' ? '🍳 KEUKEN' : department === 'zaal' ? '🍽️ ZAAL' : '🍻 TEAM IN DE MOLEN';
+  const effectiveAppUrl = appUrl || getShareableAppUrl();
   
   let message = `📋 *PLANNING WEEK ${weekNumber} — ${deptTitle}*\n`;
   message += `Eet-staminée In De Molen\n`;
@@ -200,7 +240,8 @@ export function generateTeamWhatsAppSummary(
 
   DAYS_OF_WEEK.forEach((dayName, dayIndex) => {
     const dayShifts = filteredShifts.filter(s => s.day === dayIndex);
-    message += `📅 *${dayName.toUpperCase()}*\n`;
+    const dateInfo = getDayDateInfo(weekNumber, dayIndex);
+    message += `📅 *${dayName.toUpperCase()} (${dateInfo.shortDate})*\n`;
     if (dayShifts.length === 0) {
       message += `  _Geen diensten gepland_\n\n`;
     } else {
@@ -215,8 +256,9 @@ export function generateTeamWhatsAppSummary(
   });
 
   message += `══════════════════════════\n`;
-  message += `⚠️ Gelieve je diensten z.s.m. te bevestigen in het personeelsportaal.\n`;
-  message += `Groeten, Hans`;
+  message += `⚠️ Gelieve je diensten z.s.m. te bekijken en te bevestigen:\n`;
+  message += `🔗 ${effectiveAppUrl}\n\n`;
+  message += `Groeten, Beheer In De Molen`;
 
   return message;
 }

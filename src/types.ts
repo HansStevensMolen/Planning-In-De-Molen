@@ -17,6 +17,24 @@ export type Department = 'zaal' | 'keuken';
 export type EmployeeStatuut = 'Student' | 'Flexi' | 'Vast' | 'Extra';
 export type ExperienceLevel = 'Beginner' | 'Gemiddeld' | 'Ervaren' | 'Verantwoordelijke';
 
+export type RecurringFrequency = 'every_week' | 'even_weeks' | 'odd_weeks';
+
+export interface RecurringShiftPreference {
+  day: number; // 0 = Maandag, ..., 6 = Zondag
+  status: 'available' | 'preferred' | 'unavailable';
+  startTime?: string;
+  endTime?: string;
+  notes?: string;
+}
+
+export interface RecurringAvailability {
+  frequency: RecurringFrequency; // 'every_week' | 'even_weeks' | 'odd_weeks'
+  days: RecurringShiftPreference[];
+  active: boolean;
+  notes?: string;
+  updatedAt?: number;
+}
+
 export interface Employee {
   id: string;
   name: string;
@@ -36,6 +54,7 @@ export interface Employee {
   firstLoginComplete?: boolean;
   pin?: string; // Persoonlijke 4-cijferige pincode voor personeelslogin (standaard '1234')
   birthDate?: string; // Geboortedatum (YYYY-MM-DD), wettelijk verplicht voor studenten
+  recurringAvailability?: RecurringAvailability; // Vaste shiften per week of om de 2 weken (Flexi, Student, Extra)
 }
 
 export interface Shift {
@@ -52,6 +71,8 @@ export interface Shift {
   updatedAt: number;
   notifiedViaEmail?: boolean;
   notifiedViaWhatsApp?: boolean;
+  isOpenShift?: boolean; // Shift opengesteld voor intekening
+  lastReminderSentAt?: number; // Timestamp van laatst verstuurde shift-herinnering
 }
 
 export interface WeekMeta {
@@ -75,16 +96,27 @@ export interface Notice {
   date: string;
   category: 'planning' | 'wijziging' | 'belangrijk' | 'algemeen';
   author: string;
+  targetEmployeeId?: string; // Optioneel gericht aan specifieke medewerker
+  shiftId?: string; // Gekoppelde shift voor directe context
+}
+
+export interface SwapCandidate {
+  employeeId: string;
+  employeeName: string;
+  signedUpAt: number;
+  note?: string;
 }
 
 export interface SwapRequest {
   id: string;
   shiftId: string;
-  requesterId: string;
+  requesterId: string; // 'beheerder' of id van aanvrager
   reason: string;
   targetEmployeeId?: string; // Optional specific target
   status: 'pending' | 'approved' | 'geweigerd';
   date: string;
+  isOpenShift?: boolean; // Opengesteld door beheerder zodat kandidaten kunnen intekenen
+  candidates?: SwapCandidate[]; // Medewerkers die hierop hebben ingetekend
 }
 
 export interface ChangeLog {

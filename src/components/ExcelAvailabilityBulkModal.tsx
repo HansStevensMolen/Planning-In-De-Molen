@@ -29,7 +29,7 @@ import {
   ParsedAvailabilityResult,
   ParsedAvailabilityRow 
 } from '../utils/excelAvailabilityUtils';
-import { AVAILABLE_WEEKS } from '../utils/weekUtils';
+import { AVAILABLE_WEEKS, getDayDateInfo } from '../utils/weekUtils';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 
 interface ExcelAvailabilityBulkModalProps {
@@ -479,9 +479,17 @@ export default function ExcelAvailabilityBulkModal({
                       <tr>
                         <th className="p-3">Medewerker</th>
                         <th className="p-3">Afdeling</th>
-                        {DAYS_DUTCH_SHORT.map((day, idx) => (
-                          <th key={idx} className="p-2.5 text-center min-w-[75px]">{day}</th>
-                        ))}
+                        {DAYS_DUTCH_SHORT.map((day, idx) => {
+                          const dateInfo = getDayDateInfo(parsedResult.detectedWeekNumber || selectedWeek, idx);
+                          return (
+                            <th key={idx} className="p-2 text-center min-w-[85px]">
+                              <div className="font-black text-slate-800 text-[11px]">{day}</div>
+                              <div className="text-[9px] font-bold text-orange-950 bg-orange-100/90 border border-orange-200 rounded px-1 py-0.5 mt-0.5 whitespace-nowrap">
+                                {dateInfo.shortDate}
+                              </div>
+                            </th>
+                          );
+                        })}
                         <th className="p-3">Opmerking</th>
                         <th className="p-3 text-right">Status</th>
                       </tr>
@@ -540,7 +548,11 @@ export default function ExcelAvailabilityBulkModal({
                                   <td key={d} className="p-2 text-center">
                                     <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-amber-100 border border-amber-300 text-amber-900 shadow-2xs">
                                       ⭐ Voorkeur
-                                      {dayAvail.startTime && <div className="text-[8px] font-mono lowercase">{dayAvail.startTime}</div>}
+                                      {dayAvail.startTime && (
+                                        <div className="text-[8px] font-mono lowercase whitespace-nowrap">
+                                          {dayAvail.startTime}{dayAvail.endTime ? ` - ${dayAvail.endTime}` : ''}
+                                        </div>
+                                      )}
                                     </span>
                                   </td>
                                 );
@@ -551,6 +563,11 @@ export default function ExcelAvailabilityBulkModal({
                                   <td key={d} className="p-2 text-center">
                                     <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-rose-100 border border-rose-300 text-rose-800">
                                       Niet-beschikbaar
+                                      {dayAvail.notes && dayAvail.notes.includes('(') && (
+                                        <div className="text-[8px] font-normal lowercase truncate max-w-[70px]" title={dayAvail.notes}>
+                                          {dayAvail.notes}
+                                        </div>
+                                      )}
                                     </span>
                                   </td>
                                 );
@@ -560,7 +577,11 @@ export default function ExcelAvailabilityBulkModal({
                                 <td key={d} className="p-2 text-center">
                                   <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-emerald-100 border border-emerald-300 text-emerald-900">
                                     Beschikbaar
-                                    {dayAvail.startTime && <div className="text-[8px] font-mono lowercase">{dayAvail.startTime}</div>}
+                                    {dayAvail.startTime && (
+                                      <div className="text-[8px] font-mono lowercase whitespace-nowrap">
+                                        {dayAvail.startTime}{dayAvail.endTime ? ` - ${dayAvail.endTime}` : ''}
+                                      </div>
+                                    )}
                                   </span>
                                 </td>
                               );

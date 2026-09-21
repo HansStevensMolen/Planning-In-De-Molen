@@ -19,6 +19,7 @@ import {
   generateScheduleWithGemini,
   GeminiRoosterProposalResponse
 } from '../services/geminiRoosterService';
+import { getDayDateInfo } from '../utils/weekUtils';
 
 interface GeminiRoosterModalProps {
   isOpen: boolean;
@@ -300,6 +301,7 @@ export const GeminiRoosterModal: React.FC<GeminiRoosterModalProps> = ({
                   {DAYS_OF_WEEK.map((dayName, dIdx) => {
                     const count = shiftsByDay[dIdx]?.length || 0;
                     const isActive = activeDayTab === dIdx;
+                    const dateInfo = getDayDateInfo(selectedWeek, dIdx);
                     return (
                       <button
                         key={dayName}
@@ -311,8 +313,11 @@ export const GeminiRoosterModal: React.FC<GeminiRoosterModalProps> = ({
                             : 'text-slate-600 hover:text-slate-900 font-bold hover:bg-white/50'
                         }`}
                       >
-                        <span className="text-[10px] uppercase truncate w-full">
+                        <span className="text-[10px] font-black uppercase truncate w-full">
                           {dayName.slice(0, 2)}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-500">
+                          {dateInfo.shortDate}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black mt-0.5 ${
                           isActive ? 'bg-orange-100 text-orange-700' : 'bg-slate-200/80 text-slate-600'
@@ -327,8 +332,11 @@ export const GeminiRoosterModal: React.FC<GeminiRoosterModalProps> = ({
                 {/* Shifts List for the active day */}
                 <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
                   <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-xs">
-                    <span className="font-black text-slate-800">
-                      {DAYS_OF_WEEK[activeDayTab]}
+                    <span className="font-black text-slate-800 flex items-center gap-2">
+                      <span>{DAYS_OF_WEEK[activeDayTab]}</span>
+                      <span className="text-xs font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-lg shadow-2xs">
+                        {getDayDateInfo(selectedWeek, activeDayTab).shortDate}
+                      </span>
                     </span>
                     <span className="text-slate-500">
                       {shiftsByDay[activeDayTab]?.length || 0} geplande diensten

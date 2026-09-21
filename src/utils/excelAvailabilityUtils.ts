@@ -38,41 +38,103 @@ const DAYS_DUTCH = [
 ];
 
 /**
- * Extracts optional time ranges like "17:00 - 23:00", "va. 18:00", "16:00-22:00" from text
+ * Normalizes a single time fragment like "17u30", "17u", "17:30", "17.30", "18" into "HH:MM"
  */
-function extractTimes(text: string): { startTime?: string; endTime?: string } {
+function normalizeTimeFragment(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'sluit' || trimmed === 'hulpsluit' || trimmed === 'open') {
+    return trimmed;
+  }
+
+  // e.g. 17u30, 9u, 17u
+  if (trimmed.includes('u')) {
+    const parts = trimmed.split('u');
+    const h = (parseInt(parts[0], 10) || 0).toString().padStart(2, '0');
+    const m = (parts[1] || '00').padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
+  // e.g. 17.30 or 17.00
+  if (trimmed.includes('.')) {
+    const parts = trimmed.split('.');
+    const h = (parseInt(parts[0], 10) || 0).toString().padStart(2, '0');
+    const m = (parts[1] || '00').padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
+  // e.g. 17:30
+  if (trimmed.includes(':')) {
+    const parts = trimmed.split(':');
+    const h = (parseInt(parts[0], 10) || 0).toString().padStart(2, '0');
+    const m = (parts[1] || '00').padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
+  // Pure number e.g. "18"
+  const num = parseInt(trimmed, 10);
+  if (!isNaN(num) && num >= 0 && num <= 24) {
+    return `${num.toString().padStart(2, '0')}:00`;
+  }
+
+  return trimmed;
+}
+
+/**
+ * Extracts time ranges or single times, with special support for hours between parentheses:
+ * e.g. "(17:00 - 23:00)", "Ja (17u - 23u)", "(17u30 - 23u)", "(17u - sluit)", "(va 18u)", "(tot 22u)", "(18u)"
+ */
+function extractTimes(text: string): { startTime?: string; endTime?: string; noteText?: string } {
   const clean = text.trim();
-  
-  // Pattern 1: HH:MM - HH:MM or HH:MM-HH:MM
-  const rangeMatch = clean.match(/(\b[0-2]?[0-9]:[0-5][0-9]\b)\s*(?:-|tot|totenmet|t\/m)\s*(\b[0-2]?[0-9]:[0-5][0-9]\b)/i);
-  if (rangeMatch) {
-    let start = rangeMatch[1];
-    let end = rangeMatch[2];
-    if (start.length === 4) start = '0' + start;
-    if (end.length === 4) end = '0' + end;
-    return { startTime: start, endTime: end };
-  }
+  if (!clean) return {};
 
-  // Pattern 2: va. HH:MM or vanaf HH:MM or va HH:MM
-  const vaMatch = clean.match(/(?:va\.?|vanaf)\s*(\b[0-2]?[0-9]:[0-5][0-9]\b|[0-2]?[0-9]u(?:[0-5][0-9])?)/i);
-  if (vaMatch) {
-    let raw = vaMatch[1];
-    if (raw.includes('u')) {
-      const parts = raw.split('u');
-      const h = parts[0].padStart(2, '0');
-      const m = (parts[1] || '00').padStart(2, '0');
-      return { startTime: `${h}:${m}` };
+  // First, look specifically inside parentheses/brackets like "(17:00 - 23:00)" or "[18u - sluit]"
+  const parenMatches = clean.match(/[\(\[](.*?)[\)\]]/g);
+  const targetsToInspect: string[] = [];
+  if (parenMatches && parenMatches.length > 0) {
+    parenMatches.forEach(pm => {
+      targetsToInspect.push(pm.replace(/[\(\[\]\)]/g, '').trim());
+    });
+  }
+  targetsToInspect.push(clean);
+
+  for (const target of targetsToInspect) {
+    // Pattern 1: Time range with separator ( - , tot, t/m, -> )
+    // e.g. 17:00 - 23:00, 17u30 - 23u, 17.30-23.00, 17u - sluit, 11u30 - 18u, open - 17u
+    const rangeRegex = /([0-2]?[0-9](?:[:.][0-5][0-9]|u(?:[0-5][0-9])?)?|open)\s*(?:-|–|—|tot|totenmet|t\/m|->)\s*([0-2]?[0-9](?:[:.][0-5][0-9]|u(?:[0-5][0-9])?)?|sluit|hulpsluit)/i;
+    const rangeMatch = target.match(rangeRegex);
+    if (rangeMatch) {
+      const rawStart = rangeMatch[1];
+      const rawEnd = rangeMatch[2];
+      const startTime = normalizeTimeFragment(rawStart);
+      const endTime = normalizeTimeFragment(rawEnd);
+      return { startTime, endTime, noteText: target };
     }
-    if (raw.length === 4) raw = '0' + raw;
-    return { startTime: raw };
-  }
 
-  // Pattern 3: Simple hours range like "17u - 23u"
-  const uRangeMatch = clean.match(/(\b[0-2]?[0-9]\b)u(?:[0-5][0-9])?\s*(?:-|tot)\s*(\b[0-2]?[0-9]\b)u(?:[0-5][0-9])?/i);
-  if (uRangeMatch) {
-    const startH = uRangeMatch[1].padStart(2, '0');
-    const endH = uRangeMatch[2].padStart(2, '0');
-    return { startTime: `${startH}:00`, endTime: `${endH}:00` };
+    // Pattern 2: "va." or "vanaf" or "na" with time
+    // e.g. va 18u, vanaf 17:30, va. 18:00, na 17u
+    const vaRegex = /(?:va\.?|vanaf|na|from)\s*([0-2]?[0-9](?:[:.][0-5][0-9]|u(?:[0-5][0-9])?)?)/i;
+    const vaMatch = target.match(vaRegex);
+    if (vaMatch) {
+      const startTime = normalizeTimeFragment(vaMatch[1]);
+      return { startTime, noteText: target };
+    }
+
+    // Pattern 3: "tot" with time or "tot sluit"
+    // e.g. tot 22u, tot 23:00, tot sluit
+    const totRegex = /(?:tot|until|before)\s*([0-2]?[0-9](?:[:.][0-5][0-9]|u(?:[0-5][0-9])?)?|sluit|hulpsluit)/i;
+    const totMatch = target.match(totRegex);
+    if (totMatch) {
+      const endTime = normalizeTimeFragment(totMatch[1]);
+      return { endTime, noteText: target };
+    }
+
+    // Pattern 4: Single time expression inside target e.g. "18u", "17:30", "18:00", "sluit"
+    const singleTimeRegex = /\b([0-2]?[0-9](?:[:.][0-5][0-9]|u(?:[0-5][0-9])?)|sluit|hulpsluit)\b/i;
+    const singleMatch = target.match(singleTimeRegex);
+    if (singleMatch && (target === singleMatch[1] || targetsToInspect.length > 1)) {
+      const startTime = normalizeTimeFragment(singleMatch[1]);
+      return { startTime, noteText: target };
+    }
   }
 
   return {};
@@ -87,6 +149,7 @@ export function parseDayCellValue(val: any, dayIndex: number): DayAvailability |
   if (!str) return null;
 
   const lower = str.toLowerCase();
+  const times = extractTimes(str);
 
   // Determine status
   let status: 'available' | 'unavailable' | 'preferred' = 'available';
@@ -102,6 +165,13 @@ export function parseDayCellValue(val: any, dayIndex: number): DayAvailability |
   ) {
     status = 'preferred';
   } else if (
+    // If it says "niet tot 18u" or "nee tot 18u", it means they ARE available from 18u!
+    lower.includes('niet tot') || 
+    lower.includes('nee tot') ||
+    lower.includes('kan niet tot')
+  ) {
+    status = 'available';
+  } else if (
     lower.includes('verhinderd') || 
     lower.includes('niet') || 
     lower.includes('nee') || 
@@ -114,6 +184,7 @@ export function parseDayCellValue(val: any, dayIndex: number): DayAvailability |
     lower === '0' || 
     lower === '-'
   ) {
+    // If there are specific hours given with "niet", e.g. "niet (18u-23u)", still keep unavailable or note
     status = 'unavailable';
   } else if (
     lower.includes('kan') || 
@@ -123,12 +194,12 @@ export function parseDayCellValue(val: any, dayIndex: number): DayAvailability |
     lower.includes('ok') || 
     lower === 'v' || 
     lower === '1' || 
-    lower === 'j'
+    lower === 'j' ||
+    times.startTime !== undefined ||
+    times.endTime !== undefined
   ) {
     status = 'available';
   }
-
-  const times = extractTimes(str);
 
   const dayResult: DayAvailability = {
     day: dayIndex,
@@ -141,7 +212,7 @@ export function parseDayCellValue(val: any, dayIndex: number): DayAvailability |
   if (times.endTime) {
     dayResult.endTime = times.endTime;
   }
-  if (times.startTime || times.endTime) {
+  if (str) {
     dayResult.notes = str;
   }
 

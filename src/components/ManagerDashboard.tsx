@@ -41,9 +41,13 @@ import {
   Zap,
   Send,
   ChevronDown,
-  ShieldAlert
+  ShieldAlert,
+  ShieldCheck,
+  Crown,
+  Bell,
+  BellRing
 } from 'lucide-react';
-import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department } from '../types';
+import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta } from '../types';
 import NotificationModal from './NotificationModal';
 import BackupManagerModal from './BackupManagerModal';
 import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
@@ -51,7 +55,8 @@ import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
-import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks } from '../utils/weekUtils';
+import ShiftReminderModal from './ShiftReminderModal';
+import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks, getEffectiveEmployeeAvailability, isRecurringApplicableToWeek, DAYS_FULL_NL } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 import {
@@ -82,8 +87,10 @@ interface ManagerDashboardProps {
   onDeleteEmployee?: (id: string) => void;
   onBulkSyncEmployees?: (newEmployees: Employee[], removedIds: string[]) => void;
   onAddNotice: (notice: Omit<Notice, 'id' | 'date'>) => void;
-  onApproveSwap: (requestId: string) => void;
+  onApproveSwap: (requestId: string, assignedCandidateId?: string) => void;
   onDeclineSwap: (requestId: string) => void;
+  onOpenShiftForSwap?: (shiftId: string, note?: string) => void;
+  onCreateOpenShift?: (shift: Omit<Shift, 'id' | 'updatedAt'>, customReason?: string) => void;
   onUpdateAvailability?: (availability: EmployeeAvailability, notes?: string) => void;
   onBulkUpdateAvailability?: (
     updatedAvailabilities: { employeeId: string; weekNumber: number; days: DayAvailability[]; notes?: string }[]
@@ -134,7 +141,9 @@ export default function ManagerDashboard({
   onMarkNotified,
   onRestoreSchedule,
   onBatchUpdateShifts,
-  onOpenShareModal
+  onOpenShareModal,
+  onOpenShiftForSwap,
+  onCreateOpenShift
 }: ManagerDashboardProps) {
   // Tabs within manager dashboard: Zaal (IDM zaal), Keuken (IDM keuken), Beschikbaarheden (alleen beheerder!), etc.
   const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team'>('zaal');
@@ -162,6 +171,17 @@ export default function ManagerDashboard({
 
   // Modals state
   const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [showShiftReminderModal, setShowShiftReminderModal] = useState(false);
+  const [reminderToast, setReminderToast] = useState<{
+    shiftId: string;
+    employeeName: string;
+    dayName: string;
+    dateStr: string;
+    timeStr: string;
+    department: string;
+    phone?: string;
+    whatsAppUrl: string | null;
+  } | null>(null);
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showExcelSyncModal, setShowExcelSyncModal] = useState(false);
   const [showExcelAvailabilityModal, setShowExcelAvailabilityModal] = useState(false);
@@ -181,7 +201,8 @@ export default function ManagerDashboard({
     email: '', 
     phone: '', 
     facebookUrl: '', 
-    pin: '1234' 
+    pin: '1234',
+    role: 'medewerker' as 'medewerker' | 'beheerder'
   });
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [bulkNamesText, setBulkNamesText] = useState('');
@@ -200,6 +221,7 @@ export default function ManagerDashboard({
   const [editEmpPhone, setEditEmpPhone] = useState('');
   const [editEmpFacebook, setEditEmpFacebook] = useState('');
   const [editEmpPin, setEditEmpPin] = useState('1234');
+  const [editEmpRole, setEditEmpRole] = useState<'medewerker' | 'beheerder'>('medewerker');
   const [selectedAvatarEmployee, setSelectedAvatarEmployee] = useState<Employee | null>(null);
 
   const [newNotice, setNewNotice] = useState({ title: '', content: '', category: 'planning' as Notice['category'] });
@@ -435,10 +457,84 @@ export default function ManagerDashboard({
     setIsConfirmingDeleteShift(false);
     setSelectedShift({
       ...shift,
+      weekNumber: shift.weekNumber || selectedManagerWeek,
       isNew: false
     });
     setShiftValidationError(null);
     setShowShiftModal(true);
+  };
+
+  // 1-Click Shift-herinnering sturen naar medewerker ter voorbereiding op de komende werkdag
+  const handleSendSingleShiftReminder = (targetShift: Shift) => {
+    const emp = employees.find(e => e.id === targetShift.employeeId);
+    if (!emp) return;
+
+    const wNum = targetShift.weekNumber || selectedManagerWeek;
+    const dayInfo = getDayDateInfo(wNum, targetShift.day);
+    const dayName = DAYS_FULL_NL[targetShift.day] || `Dag ${targetShift.day + 1}`;
+    const deptLabel = (targetShift.department || emp.department) === 'keuken' ? 'Keuken' : 'Zaal';
+
+    // 1. Update de shift met timestamp van herinnering
+    const updatedShift: Shift = {
+      ...targetShift,
+      lastReminderSentAt: Date.now()
+    };
+    onUpdateShift(updatedShift);
+
+    // Als modal open staat voor deze shift, update ook de selectedShift state
+    if (selectedShift && selectedShift.id === targetShift.id) {
+      setSelectedShift(prev => ({ ...prev, lastReminderSentAt: updatedShift.lastReminderSentAt }));
+    }
+
+    // 2. Plaats een officiële shift-herinnering notificatie / prikbordbericht
+    const noticeTitle = `🔔 Shift-herinnering: ${dayName} ${dayInfo.shortDate} (${targetShift.startTime} - ${targetShift.endTime})`;
+    const noticeContent = `Beste ${emp.name}, dit is een vriendelijke herinnering vanuit beheerder Hans voor je geplande dienst in de ${deptLabel} op ${dayName} (${dayInfo.shortDate}) van ${targetShift.startTime} tot ${targetShift.endTime}. Gelieve ter voorbereiding op de werkdag je shift te controleren en je aanwezigheid te bevestigen in het medewerkersportaal. Veel succes!`;
+
+    onAddNotice({
+      title: noticeTitle,
+      content: noticeContent,
+      category: 'planning',
+      author: 'Beheerder Hans',
+      targetEmployeeId: emp.id,
+      shiftId: targetShift.id
+    });
+
+    // 3. Optionele directe WhatsApp koppeling bij gekend telefoonnummer
+    let waUrl: string | null = null;
+    if (emp.phone) {
+      const raw = emp.phone.replace(/[^0-9]/g, '');
+      const intlPhone = (raw.startsWith('0') && raw.length === 10) ? '32' + raw.substring(1) : raw;
+      const waText = encodeURIComponent(
+        `Hallo ${emp.name}! 👋\n\nDit is een herinnering vanuit In De Molen voor je dienst:\n📅 ${dayName} ${dayInfo.shortDate}\n⏰ ${targetShift.startTime} - ${targetShift.endTime} (${deptLabel})\n\nGelieve je aanwezigheid tijdig te bevestigen in het portaal. Tot dan!`
+      );
+      waUrl = `https://wa.me/${intlPhone}?text=${waText}`;
+    }
+
+    // 4. Toon direct interactieve bevestiging/toast voor de beheerder
+    setReminderToast({
+      shiftId: targetShift.id,
+      employeeName: emp.name,
+      dayName,
+      dateStr: dayInfo.shortDate,
+      timeStr: `${targetShift.startTime} - ${targetShift.endTime}`,
+      department: deptLabel,
+      phone: emp.phone,
+      whatsAppUrl: waUrl
+    });
+
+    // Auto dismiss na 8 seconden
+    setTimeout(() => {
+      setReminderToast(prev => prev?.shiftId === targetShift.id ? null : prev);
+    }, 8000);
+  };
+
+  const handleSendBatchReminders = (shiftsToRemind: Shift[]) => {
+    if (shiftsToRemind.length === 0) return;
+    shiftsToRemind.forEach(sh => {
+      handleSendSingleShiftReminder(sh);
+    });
+    setSixWeeksSuccessMsg(`🔔 Shift-herinneringen verstuurd naar ${shiftsToRemind.length} medewerker(s)! Notificaties zijn direct klaargezet in het medewerkersportaal.`);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
   };
 
   const handleSaveShift = (e: React.FormEvent) => {
@@ -462,7 +558,22 @@ export default function ManagerDashboard({
       return;
     }
 
-    if (selectedShift.isNew) {
+    if (selectedShift.isOpenShift && onCreateOpenShift && selectedShift.isNew) {
+      onCreateOpenShift({
+        employeeId: selectedShift.employeeId,
+        department: shiftDept,
+        weekNumber: targetWeekNumber,
+        day: selectedShift.day,
+        startTime: selectedShift.startTime,
+        endTime: selectedShift.endTime,
+        notes: selectedShift.notes || '',
+        status: (selectedShift.status as 'draft' | 'published') || 'published',
+        acknowledged: false,
+        isOpenShift: true
+      }, selectedShift.notes || 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in via het Ruilbord!');
+      setSixWeeksSuccessMsg('📢 Openstaande dienst direct aangemaakt en gepubliceerd op het Ruilbord voor intekening!');
+      setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+    } else if (selectedShift.isNew) {
       onAddShift({
         employeeId: selectedShift.employeeId,
         department: shiftDept,
@@ -472,8 +583,13 @@ export default function ManagerDashboard({
         endTime: selectedShift.endTime,
         notes: selectedShift.notes || '',
         status: (selectedShift.status as 'draft' | 'published') || 'draft',
-        acknowledged: false
+        acknowledged: false,
+        isOpenShift: selectedShift.isOpenShift || false
       });
+      if (selectedShift.isOpenShift) {
+        setSixWeeksSuccessMsg('📢 Nieuwe dienst aangemaakt als openstaande shift.');
+        setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+      }
     } else {
       onUpdateShift({
         id: selectedShift.id!,
@@ -486,8 +602,18 @@ export default function ManagerDashboard({
         notes: selectedShift.notes || '',
         acknowledged: selectedShift.acknowledged || false,
         status: (selectedShift.status as 'draft' | 'published') || 'draft',
+        isOpenShift: selectedShift.isOpenShift || false,
         updatedAt: Date.now()
       });
+      if (selectedShift.isOpenShift && onOpenShiftForSwap && selectedShift.id) {
+        onOpenShiftForSwap(selectedShift.id, selectedShift.notes || 'Openstaande dienst');
+        setSixWeeksSuccessMsg('📢 Dienst opengesteld voor intekening op het Ruilbord!');
+        setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+      }
+    }
+    if (targetWeekNumber !== selectedManagerWeek) {
+      setSelectedManagerWeek(targetWeekNumber);
+      setAutoPlanWeek(targetWeekNumber);
     }
     setShiftValidationError(null);
     setShowShiftModal(false);
@@ -542,10 +668,16 @@ export default function ManagerDashboard({
       facebookUrl: newEmp.facebookUrl.trim() || undefined,
       active: true,
       firstLoginComplete: true,
-      pin: newEmp.pin.trim() || '1234'
+      pin: newEmp.pin.trim() || '1234',
+      role: newEmp.role || 'medewerker'
     });
 
-    setNewEmp({ name: '', department: 'zaal', statuut: 'Student', birthDate: '', experience: 'Beginner', email: '', phone: '', facebookUrl: '', pin: '1234' });
+    if (newEmp.role === 'beheerder') {
+      setSixWeeksSuccessMsg(`👑 Beheerder ${newEmp.name} is succesvol toegevoegd met volledige beheerrechten en inlogtoegang!`);
+      setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+    }
+
+    setNewEmp({ name: '', department: 'zaal', statuut: 'Student', birthDate: '', experience: 'Beginner', email: '', phone: '', facebookUrl: '', pin: '1234', role: 'medewerker' });
     setShowEmployeeModal(false);
   };
 
@@ -588,7 +720,8 @@ export default function ManagerDashboard({
         phone: '',
         active: true,
         firstLoginComplete: true,
-        pin: '1234'
+        pin: '1234',
+        role: 'medewerker'
       });
     });
 
@@ -608,6 +741,7 @@ export default function ManagerDashboard({
     setEditEmpPhone(emp.phone || '');
     setEditEmpFacebook(emp.facebookUrl || '');
     setEditEmpPin(emp.pin || '1234');
+    setEditEmpRole(emp.role || 'medewerker');
   };
 
   const handleSaveEmployeeEdit = (emp: Employee) => {
@@ -630,7 +764,8 @@ export default function ManagerDashboard({
       email: editEmpEmail,
       phone: editEmpPhone,
       facebookUrl: editEmpFacebook.trim() || undefined,
-      pin: cleanPin
+      pin: cleanPin,
+      role: editEmpRole
     });
     setEditingEmployeeId(null);
   };
@@ -838,6 +973,45 @@ export default function ManagerDashboard({
             >
               <CalendarPlus size={17} className="stroke-[2.5]" />
               <span>Nieuwe Dienst Aanmaken</span>
+            </button>
+
+            {/* Directe knop: Openstaande Dienst Instellen */}
+            <button
+              id="quick-action-create-open-shift-btn"
+              type="button"
+              onClick={() => {
+                setSelectedShift({
+                  isNew: true,
+                  isOpenShift: true,
+                  weekNumber: selectedManagerWeek,
+                  department: activeSubTab === 'keuken' ? 'keuken' : 'zaal',
+                  employeeId: employees[0]?.id || '',
+                  startTime: '11:30',
+                  endTime: activeSubTab === 'keuken' ? '23:00' : '01:00',
+                  day: 4, // Vrijdag
+                  status: 'published',
+                  acknowledged: false,
+                  notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!'
+                });
+                setShowShiftModal(true);
+              }}
+              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-amber-500/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
+              title="Stel direct een openstaande dienst in waarop medewerkers kunnen intekenen via het Ruilbord"
+            >
+              <Megaphone size={17} className="stroke-[2.5]" />
+              <span>Open Dienst Instellen 📢</span>
+            </button>
+
+            {/* Directe knop: Shift-Herinneringen Komende Werkdag */}
+            <button
+              id="quick-action-shift-reminders-btn"
+              type="button"
+              onClick={() => setShowShiftReminderModal(true)}
+              className="px-4 py-2.5 sm:py-3 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-amber-500/25 flex items-center gap-2 transition-all duration-150 cursor-pointer hover:shadow-lg"
+              title="Stuur met 1 klik een shift-herinnering naar medewerkers ter voorbereiding op de komende werkdag"
+            >
+              <BellRing size={17} className="stroke-[2.5] animate-pulse" />
+              <span>Herinneringen Werkdag 🔔</span>
             </button>
 
             {/* 2. Directe knop: Mededeling Plaatsen */}
@@ -1151,6 +1325,7 @@ export default function ManagerDashboard({
                     isNew: true,
                     employeeId: deptEmployees[0]?.id || employees[0]?.id || '',
                     department: activeDept,
+                    weekNumber: selectedManagerWeek,
                     day: 0,
                     startTime: activeDept === 'keuken' ? '15:00' : '17:00',
                     endTime: activeDept === 'keuken' ? '23:00' : '01:00',
@@ -1165,8 +1340,80 @@ export default function ManagerDashboard({
                 <Plus size={16} className="stroke-[3]" />
                 <span>Nieuwe Dienst +</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedShift({
+                    isNew: true,
+                    isOpenShift: true,
+                    employeeId: deptEmployees[0]?.id || employees[0]?.id || '',
+                    department: activeDept,
+                    weekNumber: selectedManagerWeek,
+                    day: 4, // Vrijdag
+                    startTime: '11:30',
+                    endTime: activeDept === 'keuken' ? '23:00' : '01:00',
+                    notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!',
+                    status: 'published',
+                    acknowledged: false
+                  });
+                  setShowShiftModal(true);
+                }}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 tracking-tight cursor-pointer"
+                title="Stel direct een openstaande dienst in waarop medewerkers kunnen intekenen via het Ruilbord"
+              >
+                <Megaphone size={15} className="stroke-[2.5]" />
+                <span>Open Dienst Instellen 📢</span>
+              </button>
             </div>
           </div>
+
+          {/* Interactive Shift-Herinnering Toast Banner */}
+          {reminderToast && (
+            <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-amber-500 text-white rounded-2xl shrink-0 shadow-xs ring-2 ring-amber-250">
+                  <BellRing size={20} className="animate-bounce stroke-[2.5]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-black uppercase tracking-tight text-amber-950">
+                      Shift-Herinnering Verstuurd naar {reminderToast.employeeName}!
+                    </p>
+                    <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full border border-amber-300">
+                      {reminderToast.department}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-900 mt-0.5">
+                    Dienst op <strong>{reminderToast.dayName} ({reminderToast.dateStr})</strong> van <strong>{reminderToast.timeStr}</strong>. Notificatie is direct klaargezet in het personeelsportaal.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                {reminderToast.whatsAppUrl && (
+                  <a
+                    href={reminderToast.whatsAppUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                    title={`Open direct in WhatsApp voor ${reminderToast.phone}`}
+                  >
+                    <MessageCircle size={14} />
+                    <span>WhatsApp Bericht</span>
+                  </a>
+                )}
+                <button 
+                  type="button" 
+                  onClick={() => setReminderToast(null)}
+                  className="p-1.5 hover:bg-amber-200/80 rounded-xl text-amber-800 text-xs font-bold cursor-pointer transition"
+                  title="Sluiten"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Success message banner for 6-weeks actions */}
           {sixWeeksSuccessMsg && (
@@ -1530,6 +1777,58 @@ export default function ManagerDashboard({
             </div>
           </div>
 
+          {/* Planning Voortgang Status Bar */}
+          {(() => {
+            const currentWeekShifts = shifts.filter(s => 
+              (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && 
+              (!activeDept || s.department === activeDept)
+            );
+            const openCount = currentWeekShifts.filter(s => s.isOpenShift).length;
+            const draftCount = currentWeekShifts.filter(s => !s.isOpenShift && s.status === 'draft').length;
+            const publishedCount = currentWeekShifts.filter(s => !s.isOpenShift && s.status === 'published').length;
+            const acknowledgedCount = currentWeekShifts.filter(s => s.acknowledged).length;
+
+            return (
+              <div className="bg-white rounded-3xl p-4 border-2 border-orange-100 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
+                    <span>📊 Voortgang Week {selectedManagerWeek}</span>
+                    <span className="text-slate-500 font-bold text-[11px]">({isZaal ? 'Zaal' : 'Keuken'})</span>:
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Open Chip */}
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs" title="Openstaande shiften waarop personeel kan intekenen">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span>{openCount} Open</span>
+                  </span>
+
+                  {/* Ontwerp Chip */}
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs" title="Concept-shiften die nog niet definitief gepubliceerd zijn">
+                    <span className="w-2 h-2 rounded-full bg-slate-400" />
+                    <span>{draftCount} Ontwerp</span>
+                  </span>
+
+                  {/* Gepubliceerd Chip */}
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs" title="Gepubliceerde shiften, zichtbaar voor medewerkers">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>{publishedCount} Gepubliceerd</span>
+                    {publishedCount > 0 && (
+                      <span className="text-[10px] text-emerald-700 font-bold ml-0.5" title="Waarvan gezien door medewerker">
+                        ({acknowledgedCount} ✓)
+                      </span>
+                    )}
+                  </span>
+
+                  <span className="text-[11px] font-bold text-slate-400 pl-1">
+                    Totaal: {currentWeekShifts.length}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Grid view - Vibrant Palette Style with Sticky Column (Names) and Sticky Row (Days) */}
           <div className="bg-white rounded-3xl shadow-md border-2 border-orange-100 overflow-hidden flex flex-col">
             <div className="overflow-auto max-h-[75vh] relative">
@@ -1603,21 +1902,63 @@ export default function ManagerDashboard({
                           return (
                             <td key={dayIdx} className="px-2 py-3 border-r border-b border-orange-100 align-top min-h-[96px] min-w-[135px]">
                             <div className="space-y-2 min-h-[64px] flex flex-col justify-start">
-                              {dayShifts.map((sh) => (
+                              {dayShifts.map((sh) => {
+                                const candidatesCount = swapRequests.find(r => r.shiftId === sh.id)?.candidates?.length || 0;
+                                return (
                                 <div
                                   key={sh.id}
                                   onClick={() => handleOpenEditShift(sh)}
-                                  className={`p-2 rounded-xl text-left border cursor-pointer transition relative group/shift hover:shadow-md ${emp.textBgColor} ${
-                                    sh.status === 'draft' ? 'border-dashed border-slate-300 bg-slate-50/70 opacity-80' : ''
+                                  className={`p-2.5 rounded-2xl text-left border cursor-pointer transition relative group/shift hover:shadow-md ${emp.textBgColor} ${
+                                    sh.isOpenShift 
+                                      ? 'border-2 border-amber-400 bg-amber-50/60 ring-1 ring-amber-300/70 shadow-xs' 
+                                      : sh.status === 'draft' 
+                                        ? 'border-2 border-dashed border-slate-300 bg-slate-50/80 opacity-90' 
+                                        : 'border border-emerald-200/90 bg-white/95 hover:border-emerald-300 shadow-2xs'
                                   }`}
                                 >
-                                  {/* Shift times */}
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-xs font-bold flex items-center gap-1">
-                                      <Clock size={11} className="inline opacity-80" />
+                                  {/* Shift times and quick action buttons */}
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                                      <Clock size={11} className="inline opacity-70 text-slate-500" />
                                       {sh.startTime} - {sh.endTime}
                                     </span>
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {/* 1-Click Shift-Herinnering Knop */}
+                                      {!sh.isOpenShift && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleSendSingleShiftReminder(sh);
+                                          }}
+                                          className={`p-0.5 rounded transition cursor-pointer ${
+                                            sh.lastReminderSentAt
+                                              ? 'text-amber-800 bg-amber-100 hover:bg-amber-200 ring-1 ring-amber-300'
+                                              : 'opacity-0 group-hover/shift:opacity-100 hover:bg-amber-100 text-amber-700'
+                                          }`}
+                                          title={sh.lastReminderSentAt 
+                                            ? `Herinnering verstuurd om ${new Date(sh.lastReminderSentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Klik om opnieuw te sturen.` 
+                                            : `Stuur met 1 klik een shift-herinnering naar ${emp.name} ter voorbereiding op de werkdag`
+                                          }
+                                        >
+                                          <Bell size={11} className={sh.lastReminderSentAt ? 'fill-amber-600 text-amber-700' : 'stroke-[2.5]'} />
+                                        </button>
+                                      )}
+                                      {onOpenShiftForSwap && !sh.isOpenShift && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onOpenShiftForSwap(sh.id, sh.notes || 'Openstaande dienst: wie kan er inspringen?');
+                                            setSixWeeksSuccessMsg(`📢 Dienst op ${DAYS_OF_WEEK[sh.day]} opengesteld voor intekening op het Ruilbord!`);
+                                            setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+                                          }}
+                                          className="opacity-0 group-hover/shift:opacity-100 p-0.5 hover:bg-amber-200 text-amber-800 rounded transition cursor-pointer"
+                                          title="Stel deze dienst direct open voor intekening op het Ruilbord"
+                                        >
+                                          <Megaphone size={11} className="stroke-[2.5]" />
+                                        </button>
+                                      )}
                                       <button
                                         type="button"
                                         onClick={(e) => {
@@ -1631,40 +1972,79 @@ export default function ManagerDashboard({
                                       >
                                         <Trash2 size={11} />
                                       </button>
-                                      {sh.status === 'draft' ? (
-                                        <span className="text-[9px] font-medium px-1 bg-slate-200 text-slate-700 rounded-md">Draft</span>
-                                      ) : sh.acknowledged ? (
-                                        <span className="text-emerald-600" title="Gezien door medewerker">
-                                          <CheckCheck size={14} className="stroke-[3]" />
-                                        </span>
-                                      ) : (
-                                        <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping" title="Nog niet bevestigd door medewerker" />
-                                      )}
                                     </div>
                                   </div>
 
-                                  {/* Role badge (Sluit, Hulpsluit, Overdag) */}
-                                  {(sh.endTime === 'Sluit' || (sh.notes?.toLowerCase().includes('sluit') && !sh.notes?.toLowerCase().includes('hulpsluit'))) && (
-                                    <div className="mt-1">
-                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                  {/* Visuele Status Indicator Chip: 'Open', 'Ontwerp', 'Gepubliceerd' */}
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                                    {sh.isOpenShift ? (
+                                      <span 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveSubTab('verzoeken');
+                                        }}
+                                        className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 shadow-2xs transition cursor-pointer"
+                                        title="Openstaande dienst op het ruilbord. Klik om kandidaten te bekijken."
+                                      >
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                        <span>Open</span>
+                                        {candidatesCount > 0 ? (
+                                          <span className="text-[8px] bg-amber-200 text-amber-900 px-1 py-0.2 rounded font-extrabold ml-0.5">
+                                            {candidatesCount} kand.
+                                          </span>
+                                        ) : null}
+                                      </span>
+                                    ) : sh.status === 'draft' ? (
+                                      <span 
+                                        className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs"
+                                        title="Ontwerp status: conceptversie, nog niet gepubliceerd"
+                                      >
+                                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                        <span>Ontwerp</span>
+                                      </span>
+                                    ) : (
+                                      <span 
+                                        className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs"
+                                        title="Gepubliceerd: definitief ingepland en zichtbaar voor personeel"
+                                      >
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                        <span>Gepubliceerd</span>
+                                        {sh.acknowledged ? (
+                                          <span className="text-emerald-700 font-black text-[9px] ml-0.5" title="Gezien door medewerker">✓</span>
+                                        ) : (
+                                          <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping ml-0.5" title="Nog niet bevestigd door medewerker" />
+                                        )}
+                                      </span>
+                                    )}
+
+                                    {/* Role badge (Sluit, Hulpsluit, Overdag) */}
+                                    {(sh.endTime === 'Sluit' || (sh.notes?.toLowerCase().includes('sluit') && !sh.notes?.toLowerCase().includes('hulpsluit'))) && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
                                         🌙 Sluit
                                       </span>
-                                    </div>
-                                  )}
-                                  {(sh.endTime === 'Hulpsluit' || sh.notes?.toLowerCase().includes('hulpsluit')) && (
-                                    <div className="mt-1">
-                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                    )}
+                                    {(sh.endTime === 'Hulpsluit' || sh.notes?.toLowerCase().includes('hulpsluit')) && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
                                         🌓 Hulpsluit
                                       </span>
-                                    </div>
-                                  )}
-                                  {(sh.endTime === '18u00' || sh.notes?.toLowerCase().includes('overdag') || sh.notes?.toLowerCase().includes('dagdienst')) && (
-                                    <div className="mt-1">
-                                      <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                    )}
+                                    {(sh.endTime === '18u00' || sh.notes?.toLowerCase().includes('overdag') || sh.notes?.toLowerCase().includes('dagdienst')) && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
                                         ☀️ Overdag
                                       </span>
-                                    </div>
-                                  )}
+                                    )}
+
+                                    {/* Shift-Herinnering Indicator Chip */}
+                                    {sh.lastReminderSentAt && (
+                                      <span 
+                                        className="inline-flex items-center gap-0.5 text-[8.5px] font-black uppercase tracking-tight px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs"
+                                        title={`Shift-herinnering verstuurd op ${new Date(sh.lastReminderSentAt).toLocaleString('nl-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`}
+                                      >
+                                        <BellRing size={8} className="text-amber-700 shrink-0" />
+                                        <span>Herinnerd</span>
+                                      </span>
+                                    )}
+                                  </div>
 
                                   {/* Notes summary */}
                                   {sh.notes && (
@@ -1679,7 +2059,8 @@ export default function ManagerDashboard({
                                     style={{ backgroundColor: emp.color }}
                                   />
                                 </div>
-                              ))}
+                                );
+                              })}
 
                               {/* Create button shown on cell focus/hover */}
                               <button
@@ -1700,20 +2081,45 @@ export default function ManagerDashboard({
             </div>
           </div>
 
-          {/* Color hints - Vibrant Palette Style */}
-          <div className="flex flex-wrap gap-4 text-xs text-slate-500 pt-2 bg-orange-50/40 p-4 rounded-3xl border-2 border-orange-100">
-            <span className="font-extrabold text-orange-600 uppercase">Legenda:</span>
-            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
-              <span className="inline-block w-4 h-2.5 bg-slate-100 border-2 border-dashed border-slate-300 rounded" />
-              <span>Ontwerp (Concept)</span>
+          {/* Color hints - Status Legenda */}
+          <div className="flex flex-wrap items-center gap-3.5 text-xs text-slate-600 pt-2 bg-orange-50/50 p-4 rounded-3xl border-2 border-orange-100">
+            <span className="font-black text-orange-600 uppercase tracking-tight text-[11px]">Status Legenda:</span>
+            
+            {/* Open Chip */}
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-amber-950">
+              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                <span>Open</span>
+              </span>
+              <span>Openstaande dienst (Ruilbord)</span>
             </span>
-            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
-              <span className="inline-block w-4 h-4 bg-emerald-100 border-2 border-emerald-300 rounded-full flex items-center justify-center text-emerald-600 font-extrabold text-[8px]"><CheckCheck size={10} /></span>
-              <span>Gezien & Bevestigd</span>
+
+            {/* Ontwerp Chip */}
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-700">
+              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                <span>Ontwerp</span>
+              </span>
+              <span>Concept (Nog niet gepubliceerd)</span>
             </span>
-            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-slate-600">
-              <span className="inline-block w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse" />
-              <span>Nog niet gelezen</span>
+
+            {/* Gepubliceerd Chip */}
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-emerald-900">
+              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span>Gepubliceerd</span>
+              </span>
+              <span>Definitief & Zichtbaar</span>
+            </span>
+
+            {/* Acknowledged / Read status */}
+            <span className="flex items-center space-x-1 font-bold text-[11px] text-slate-600 border-l border-orange-200 pl-3">
+              <span className="text-emerald-600 font-black">✓</span>
+              <span>Gezien door medewerker</span>
+            </span>
+            <span className="flex items-center space-x-1 font-bold text-[11px] text-slate-500">
+              <span className="inline-block w-2 h-2 bg-rose-500 rounded-full animate-ping" />
+              <span>Nog niet bevestigd</span>
             </span>
           </div>
         </div>
@@ -2021,7 +2427,9 @@ export default function ManagerDashboard({
                       </tr>
                     ) : (
                       filteredEmployees.map(emp => {
-                        const employeeAvail = availabilities.find(a => a.employeeId === emp.id && a.weekNumber === selectedManagerWeek);
+                        const effectiveResult = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
+                        const employeeAvail = effectiveResult.availability;
+                        const isFromRecurring = effectiveResult.source === 'recurring';
                         
                         return (
                           <tr key={emp.id} className="hover:bg-orange-50/30 transition-all group">
@@ -2051,9 +2459,13 @@ export default function ManagerDashboard({
                                   <span className="text-[9px] font-black uppercase text-orange-600 tracking-wider block truncate">
                                     {emp.statuut} {emp.contractDaysPerWeek === 4 ? '(4d)' : ''} ({emp.experience})
                                   </span>
-                                  {employeeAvail && (
-                                    <div className="mt-0.5">
-                                      {selectedManagerWeek === CURRENT_WEEK_NUMBER ? (
+                                  {employeeAvail ? (
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                                      {isFromRecurring ? (
+                                        <span className="text-[8px] font-black text-indigo-900 bg-indigo-100 border border-indigo-300 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5" title="Automatisch overgenomen van vaste beschikbaarheid van deze medewerker">
+                                          🔁 Vaste herhaling
+                                        </span>
+                                      ) : selectedManagerWeek === CURRENT_WEEK_NUMBER ? (
                                         <span className="text-[8px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-1 py-0.2 rounded inline-flex items-center gap-0.5" title="Huidige week (vastgelegd)">
                                           <Lock size={7} /> Huidig (Vast)
                                         </span>
@@ -2066,10 +2478,16 @@ export default function ManagerDashboard({
                                           Archief
                                         </span>
                                       ) : (
-                                        <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded inline-block" title="Komende week (open voor invoer)">
-                                          ✓ Open
+                                        <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded inline-block" title="Komende week (specifiek ingediend)">
+                                          ✓ Specifiek
                                         </span>
                                       )}
+                                    </div>
+                                  ) : (
+                                    <div className="mt-0.5">
+                                      <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1 py-0.2 rounded inline-block">
+                                        Niet ingevuld
+                                      </span>
                                     </div>
                                   )}
                                 </div>
@@ -2105,7 +2523,10 @@ export default function ManagerDashboard({
                               return (
                                 <td key={dayIdx} className={`px-2 py-3 border-r border-b border-slate-200/70 text-center text-[10px] font-bold min-w-[125px] ${bgClass}`}>
                                   <div className="flex flex-col items-center justify-center space-y-0.5">
-                                    <span className="text-[11px] font-black">{icon} {badgeText}</span>
+                                    <span className="text-[11px] font-black flex items-center justify-center gap-0.5">
+                                      {isFromRecurring && <span className="text-[9px] text-indigo-600 font-bold" title="Vaste herhaling">🔁</span>}
+                                      <span>{icon} {badgeText}</span>
+                                    </span>
                                     {dayAvail && dayAvail.status !== 'unavailable' && (dayAvail.startTime || dayAvail.endTime) && (
                                       <span className="text-[8.5px] font-black tracking-tight text-orange-900 bg-orange-100 border border-orange-200 px-1 py-0.2 rounded mt-0.5 block leading-tight">
                                         {dayAvail.startTime || 'Open'} - {dayAvail.endTime || 'Sluit'}
@@ -2140,117 +2561,307 @@ export default function ManagerDashboard({
         );
       })()}
 
-      {/* 2. RUILVERZOEKEN TAB */}
+      {/* 2. RUILVERZOEKEN & OPENSTAANDE SHIFTEN TAB */}
       {activeSubTab === 'verzoeken' && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight uppercase">Openstaande Ruileverzoeken</h2>
-            <p className="text-xs text-slate-500">Medewerkers die onderling hun dienst willen ruilen of een dienst willen afstaan.</p>
+        <div className="space-y-6 font-sans">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-2 border-orange-100 pb-4">
+            <div>
+              <h2 className="text-xl font-black text-slate-800 font-sans tracking-tight uppercase flex items-center gap-2">
+                <span>Ruilverzoeken & Openstaande Shiften</span>
+                {swapRequests.filter(r => r.status === 'pending').length > 0 && (
+                  <span className="text-xs bg-orange-500 text-white px-2.5 py-0.5 rounded-full font-black">
+                    {swapRequests.filter(r => r.status === 'pending').length} open
+                  </span>
+                )}
+              </h2>
+              <p className="text-xs text-slate-500">Beheer openstaande shiften waarop teamleden kunnen intekenen en keur onderlinge ruilverzoeken goed.</p>
+            </div>
+            
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedShift({
+                  isNew: true,
+                  weekNumber: selectedManagerWeek,
+                  status: 'draft',
+                  day: 4,
+                  startTime: '17:00',
+                  endTime: '02:00',
+                  notes: 'Openstaande shift: wie kan inspringen?'
+                });
+                setShowShiftModal(true);
+              }}
+              className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1.5 shadow-md transition cursor-pointer self-start sm:self-auto"
+            >
+              <Plus size={15} className="stroke-[3]" />
+              <span>Nieuwe Openstaande Shift +</span>
+            </button>
           </div>
 
-          {swapRequests.length === 0 ? (
-            <div className="bg-white p-12 text-center rounded-2xl border border-slate-100 shadow-sm space-y-3">
-              <div className="w-12 h-12 bg-slate-50 rounded-full text-slate-400 flex items-center justify-center mx-auto">
-                <Check size={24} />
-              </div>
-              <h4 className="font-bold text-sm text-slate-700">Geen openstaande verzoeken!</h4>
-              <p className="text-xs text-slate-400 max-w-md mx-auto">Alle ingediende wijzigingen zijn momenteel verwerkt. Het team is up-to-date.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {swapRequests.map((req) => {
-                const requester = employees.find(e => e.id === req.requesterId);
-                const shift = shifts.find(s => s.id === req.shiftId);
-                const targetEmp = req.targetEmployeeId ? employees.find(e => e.id === req.targetEmployeeId) : null;
-                
-                if (!requester || !shift) return null;
+          {/* SECTION A: OPENSTAANDE SHIFTEN MET INTEKENINGEN */}
+          {(() => {
+            const openShifts = swapRequests.filter(r => r.isOpenShift || r.requesterId === 'beheerder');
+            const pendingOpenShifts = openShifts.filter(r => r.status === 'pending');
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                    <span>📢 Openstaande Shiften voor Intekening</span>
+                    <span className="text-[11px] font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-200">
+                      {pendingOpenShifts.length} actief
+                    </span>
+                  </h3>
+                  <span className="text-[11px] text-slate-500 font-medium">Kandidaten kunnen hierop solliciteren via het Ruilbord in hun portaal</span>
+                </div>
 
-                return (
-                  <div 
-                    key={req.id} 
-                    className={`bg-white rounded-3xl p-5 border-2 shadow-sm space-y-4 relative overflow-hidden ${
-                      req.status === 'approved' ? 'border-emerald-500' : req.status === 'geweigerd' ? 'border-slate-300 bg-slate-50/50' : 'border-orange-100'
-                    }`}
-                  >
-                    {/* Status corner badge - Vibrant Palette Styles */}
-                    <div className="absolute top-4 right-4">
-                      {req.status === 'pending' ? (
-                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-orange-100 border border-orange-200 text-orange-950">Wacht op beheerder</span>
-                      ) : req.status === 'approved' ? (
-                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-emerald-100 border border-emerald-300 text-emerald-850">Goedgekeurd</span>
-                      ) : (
-                        <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-slate-100 border border-slate-200 text-slate-600">Geweigerd</span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center space-x-3">
-                      <div 
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-sm uppercase ring-2 ring-orange-200 border border-white"
-                        style={{ backgroundColor: requester.color }}
-                      >
-                        {requester.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div>
-                        <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight">{requester.name}</h4>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase">Aangevraagd: {req.date}</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-orange-50/40 p-4 rounded-xl border border-orange-100 text-xs text-slate-755 space-y-2 font-medium">
-                      <div className="flex justify-between font-black text-slate-800 uppercase tracking-tight">
-                        <span>Originele Dienst:</span>
-                        <span className="text-orange-600">{DAYS_OF_WEEK[shift.day]}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Tijdstip:</span>
-                        <span className="font-bold text-slate-700">{shift.startTime} - {shift.endTime}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-slate-750">Ruilen met / Overname door:</span>
-                        {targetEmp ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-orange-100 border border-orange-200 text-orange-950">
-                            {targetEmp.name}
-                          </span>
-                        ) : (
-                          <span className="text-[11px] font-black uppercase text-orange-500 tracking-tight bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-100">Open Aanbod</span>
-                        )}
-                      </div>
-                      {shift.notes && (
-                        <div className="pt-2 border-t border-orange-100 text-slate-500 italic">
-                          "{shift.notes}"
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      <p className="text-[10px] text-orange-650 uppercase tracking-wide font-black">Opgegeven Reden:</p>
-                      <blockquote className="bg-orange-100/50 text-orange-950 px-3.5 py-2.5 rounded-xl text-xs italic border border-orange-200/50 font-medium">
-                        "{req.reason}"
-                      </blockquote>
-                    </div>
-
-                    {req.status === 'pending' && (
-                      <div className="flex space-x-2 pt-2">
-                        <button
-                          onClick={() => onDeclineSwap(req.id)}
-                          className="flex-1 py-2.5 border-2 border-orange-200 hover:bg-orange-50 text-orange-700 hover:text-orange-900 text-xs font-black uppercase tracking-tight rounded-xl transition"
-                        >
-                          Weigeren
-                        </button>
-                        <button
-                          onClick={() => onApproveSwap(req.id)}
-                          className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5"
-                        >
-                          <Check size={14} className="stroke-[3]" />
-                          <span>Goedkeuren +</span>
-                        </button>
-                      </div>
-                    )}
+                {pendingOpenShifts.length === 0 ? (
+                  <div className="bg-amber-50/50 border-2 border-dashed border-amber-200 rounded-3xl p-6 text-center text-xs text-slate-600 space-y-1.5">
+                    <p className="font-bold text-slate-800">Geen actieve openstaande shiften</p>
+                    <p className="text-[11px] text-slate-500">
+                      Wil je een dienst openstellen zodat medewerkers kunnen intekenen? Klik op een dienst in het rooster en kies <strong>"📢 Openstellen voor Intekening"</strong> of klik rechtsboven op <strong>"Nieuwe Openstaande Shift +"</strong>.
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {pendingOpenShifts.map((req) => {
+                      const shift = shifts.find(s => s.id === req.shiftId);
+                      if (!shift) return null;
+                      const originalEmp = employees.find(e => e.id === shift.employeeId);
+                      const candidates = req.candidates || [];
+                      const dayDateInfo = getDayDateInfo(shift.weekNumber || selectedManagerWeek, shift.day);
+
+                      return (
+                        <div 
+                          key={req.id}
+                          className="bg-white rounded-3xl p-5 border-2 border-amber-300 shadow-sm space-y-4 relative overflow-hidden"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-500 text-white shadow-2xs">
+                                  📢 Open Dienst
+                                </span>
+                                <span className="text-[10px] font-bold text-slate-400">Week {shift.weekNumber || selectedManagerWeek}</span>
+                              </div>
+                              <h4 className="font-black text-sm text-slate-800 tracking-tight mt-1">
+                                {dayDateInfo.dayNameFull} {dayDateInfo.shortDate}
+                              </h4>
+                              <p className="text-xs font-bold text-orange-600">
+                                {shift.startTime} - {shift.endTime} • {shift.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                              </p>
+                            </div>
+
+                            <span className={`px-2.5 py-1 text-[10px] font-black uppercase rounded-full border ${
+                              candidates.length > 0 ? 'bg-emerald-100 border-emerald-300 text-emerald-800' : 'bg-slate-100 border-slate-200 text-slate-600'
+                            }`}>
+                              {candidates.length} {candidates.length === 1 ? 'kandidaat' : 'kandidaten'}
+                            </span>
+                          </div>
+
+                          {originalEmp && (
+                            <div className="text-[11px] text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                              Oorspronkelijk gepland: <strong className="text-slate-800">{originalEmp.name}</strong>
+                            </div>
+                          )}
+
+                          {req.reason && (
+                            <div className="text-xs italic bg-amber-50/70 border border-amber-200 text-amber-950 p-2.5 rounded-xl">
+                              "{req.reason}"
+                            </div>
+                          )}
+
+                          {/* Candidates list & assignment */}
+                          <div className="space-y-2 pt-1 border-t border-slate-100">
+                            <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                              <span>Ingetekende teamleden ({candidates.length}):</span>
+                              <span className="text-[9px] font-medium text-slate-400">Kies wie de dienst krijgt</span>
+                            </label>
+
+                            {candidates.length === 0 ? (
+                              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center text-xs text-slate-400 italic">
+                                Nog geen kandidaten. Medewerkers zien deze dienst op hun portaal en kunnen direct intekenen.
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                {candidates.map((cand) => {
+                                  const candEmp = employees.find(e => e.id === cand.employeeId);
+                                  return (
+                                    <div 
+                                      key={cand.employeeId}
+                                      className="bg-emerald-50/60 border border-emerald-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                                    >
+                                      <div>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="font-black text-xs text-slate-850">{cand.employeeName}</span>
+                                          {candEmp && renderStatuutBadge(candEmp.statuut)}
+                                          {candEmp?.experience && (
+                                            <span className="text-[9px] text-slate-500 font-semibold">({candEmp.experience})</span>
+                                          )}
+                                        </div>
+                                        {cand.note && (
+                                          <p className="text-[11px] text-slate-600 italic mt-0.5">"{cand.note}"</p>
+                                        )}
+                                        <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+                                          Ingetekend op: {new Date(cand.signedUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </p>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          onApproveSwap(req.id, cand.employeeId);
+                                          setSixWeeksSuccessMsg(`🎉 Openstaande dienst succesvol toegewezen aan ${cand.employeeName}!`);
+                                          setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+                                        }}
+                                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-1 shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+                                      >
+                                        <Check size={13} className="stroke-[3]" />
+                                        <span>Toewijzen ✓</span>
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex gap-2 pt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeclineSwap(req.id);
+                                setSixWeeksSuccessMsg('Openstelling geannuleerd.');
+                                setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+                              }}
+                              className="w-full py-2 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition cursor-pointer"
+                            >
+                              Sluiten / Verwijderen
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* SECTION B: ONDERLINGE RUILVERZOEKEN TUSSEN MEDEWERKERS */}
+          {(() => {
+            const peerSwaps = swapRequests.filter(r => !r.isOpenShift && r.requesterId !== 'beheerder');
+            return (
+              <div className="space-y-3 pt-4 border-t-2 border-slate-100">
+                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                  <span>🔄 Onderlinge Ruilverzoeken tussen Collega's</span>
+                  <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                    {peerSwaps.length} totaal
+                  </span>
+                </h3>
+
+                {peerSwaps.length === 0 ? (
+                  <div className="bg-white p-8 text-center rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                    <Check size={20} className="text-emerald-500 mx-auto" />
+                    <h4 className="font-bold text-xs text-slate-700">Geen openstaande onderlinge verzoeken</h4>
+                    <p className="text-[11px] text-slate-400">Alle onderlinge ruilingen zijn momenteel verwerkt.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {peerSwaps.map((req) => {
+                      const requester = employees.find(e => e.id === req.requesterId);
+                      const shift = shifts.find(s => s.id === req.shiftId);
+                      const targetEmp = req.targetEmployeeId ? employees.find(e => e.id === req.targetEmployeeId) : null;
+                      
+                      if (!requester || !shift) return null;
+
+                      return (
+                        <div 
+                          key={req.id} 
+                          className={`bg-white rounded-3xl p-5 border-2 shadow-sm space-y-4 relative overflow-hidden ${
+                            req.status === 'approved' ? 'border-emerald-500' : req.status === 'geweigerd' ? 'border-slate-300 bg-slate-50/50' : 'border-orange-100'
+                          }`}
+                        >
+                          <div className="absolute top-4 right-4">
+                            {req.status === 'pending' ? (
+                              <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-orange-100 border border-orange-200 text-orange-950">Wacht op beheerder</span>
+                            ) : req.status === 'approved' ? (
+                              <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-emerald-100 border border-emerald-300 text-emerald-850">Goedgekeurd</span>
+                            ) : (
+                              <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-tight rounded-full bg-slate-100 border border-slate-200 text-slate-600">Geweigerd</span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center space-x-3">
+                            <div 
+                              className="w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-sm uppercase ring-2 ring-orange-200 border border-white"
+                              style={{ backgroundColor: requester.color }}
+                            >
+                              {requester.name.split(' ').map(n => n[0]).join('')}
+                            </div>
+                            <div>
+                              <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight">{requester.name}</h4>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase">Aangevraagd: {req.date}</p>
+                            </div>
+                          </div>
+
+                          <div className="bg-orange-50/40 p-4 rounded-xl border border-orange-100 text-xs text-slate-755 space-y-2 font-medium">
+                            <div className="flex justify-between font-black text-slate-800 uppercase tracking-tight">
+                              <span>Originele Dienst:</span>
+                              <span className="text-orange-600">{DAYS_OF_WEEK[shift.day]}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Tijdstip:</span>
+                              <span className="font-bold text-slate-700">{shift.startTime} - {shift.endTime}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="font-bold text-slate-750">Ruilen met / Overname door:</span>
+                              {targetEmp ? (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-orange-100 border border-orange-200 text-orange-950">
+                                  {targetEmp.name}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] font-black uppercase text-orange-500 tracking-tight bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-100">Open Aanbod</span>
+                              )}
+                            </div>
+                            {shift.notes && (
+                              <div className="pt-2 border-t border-orange-100 text-slate-500 italic">
+                                "{shift.notes}"
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-orange-650 uppercase tracking-wide font-black">Opgegeven Reden:</p>
+                            <blockquote className="bg-orange-100/50 text-orange-950 px-3.5 py-2.5 rounded-xl text-xs italic border border-orange-200/50 font-medium">
+                              "{req.reason}"
+                            </blockquote>
+                          </div>
+
+                          {req.status === 'pending' && (
+                            <div className="flex space-x-2 pt-2">
+                              <button
+                                onClick={() => onDeclineSwap(req.id)}
+                                className="flex-1 py-2.5 border-2 border-orange-200 hover:bg-orange-50 text-orange-700 hover:text-orange-900 text-xs font-black uppercase tracking-tight rounded-xl transition"
+                              >
+                                Weigeren
+                              </button>
+                              <button
+                                onClick={() => onApproveSwap(req.id)}
+                                className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5"
+                              >
+                                <Check size={14} className="stroke-[3]" />
+                                <span>Goedkeuren +</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -2351,13 +2962,37 @@ export default function ManagerDashboard({
       {/* 4. PERSOONEEL TAB */}
       {activeSubTab === 'team' && (
         <div className="space-y-4 font-sans">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Team Overzicht & Rechten</h2>
-              <p className="text-xs text-orange-600 font-bold uppercase">Beheer je personeelsleden, contactgegevens en rollen.</p>
+              <p className="text-xs text-orange-600 font-bold uppercase">Beheer je personeelsleden, contactgegevens, beheerdersrechten en statuten.</p>
             </div>
             
             <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setNewEmp({
+                    name: '',
+                    department: 'zaal',
+                    statuut: 'Vast',
+                    experience: 'Verantwoordelijke',
+                    role: 'beheerder',
+                    email: '',
+                    phone: '',
+                    facebookUrl: '',
+                    birthDate: '',
+                    pin: '1234'
+                  });
+                  setShowEmployeeModal(true);
+                }}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-xs font-black uppercase tracking-tight rounded-xl flex items-center space-x-2 shadow-lg shadow-amber-600/20 transition duration-150 active:scale-95 cursor-pointer"
+                title="Voeg direct een extra beheerder toe met toegang tot het dashboard"
+              >
+                <Crown size={16} className="text-amber-200 stroke-[2.5]" />
+                <span>+ Extra Beheerder Toevoegen</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setShowExcelSyncModal(true)}
@@ -2370,12 +3005,58 @@ export default function ManagerDashboard({
 
               <button
                 type="button"
-                onClick={() => setShowEmployeeModal(true)}
+                onClick={() => {
+                  setNewEmp({
+                    name: '',
+                    department: 'zaal',
+                    statuut: 'Student',
+                    experience: 'Beginner',
+                    role: 'medewerker',
+                    email: '',
+                    phone: '',
+                    facebookUrl: '',
+                    birthDate: '',
+                    pin: '1234'
+                  });
+                  setShowEmployeeModal(true);
+                }}
                 className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase tracking-tight rounded-xl flex items-center space-x-2 shadow-lg transition duration-150 active:scale-95 cursor-pointer"
               >
                 <UserPlus size={16} className="stroke-[3]" />
                 <span>Nieuw Teamlid +</span>
               </button>
+            </div>
+          </div>
+
+          {/* Actieve Beheerders Overzicht Banner */}
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200/80 rounded-2xl p-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black shadow-sm">
+                  <Crown size={16} className="stroke-[2.5]" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-tight text-amber-950">
+                    Actieve Beheerders met Dashboard-Toegang
+                  </h3>
+                  <p className="text-[11px] text-amber-900 font-medium">
+                    Deze personen kunnen inloggen op het Beheerdersdashboard met hun naam/e-mail en persoonlijke PIN.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {employees.filter(e => e.role === 'beheerder').map(admin => (
+                  <span 
+                    key={admin.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black bg-white border border-amber-300 text-amber-950 shadow-2xs"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>{admin.name}</span>
+                    <span className="text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded font-mono">PIN: {admin.pin || '1234'}</span>
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -2560,6 +3241,29 @@ export default function ManagerDashboard({
                         </div>
                       </div>
 
+                      {/* Rol & Rechten (Beheerder toewijzen) */}
+                      <div className="space-y-1 bg-amber-50/70 border border-amber-200 rounded-xl p-2.5">
+                        <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <ShieldCheck size={12} className="text-amber-600" />
+                            <span>Rol & Rechten</span>
+                          </span>
+                          {editEmpRole === 'beheerder' && (
+                            <span className="text-[9px] font-black text-amber-900 bg-amber-200 px-1.5 py-0.2 rounded border border-amber-300">
+                              👑 Beheerder
+                            </span>
+                          )}
+                        </label>
+                        <select
+                          value={editEmpRole}
+                          onChange={(e) => setEditEmpRole(e.target.value as 'medewerker' | 'beheerder')}
+                          className="w-full bg-white border border-slate-300 text-slate-850 rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
+                        >
+                          <option value="medewerker">Medewerker (Personeelsportaal)</option>
+                          <option value="beheerder">👑 Beheerder (Beheerdersdashboard toegang)</option>
+                        </select>
+                      </div>
+
                       <div className="pt-1">
                         <button
                           type="button"
@@ -2647,6 +3351,11 @@ export default function ManagerDashboard({
                               }`}>
                                 {emp.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
                               </span>
+                              {emp.role === 'beheerder' && (
+                                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200 text-amber-950 border border-amber-300 shadow-2xs">
+                                  👑 Beheerder
+                                </span>
+                              )}
                               {renderStatuutBadge(emp.statuut)}
                               {emp.birthDate ? (
                                 <span 
@@ -2667,6 +3376,26 @@ export default function ManagerDashboard({
                                   ⚠️ Geboortedatum ontbreekt
                                 </span>
                               ) : null}
+                              {emp.role === 'beheerder' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-amber-100 text-amber-900 border border-amber-300">
+                                  👑 Beheerder
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onUpdateEmployee({ ...emp, role: 'beheerder' });
+                                    setSixWeeksSuccessMsg(`👑 ${emp.name} is nu Beheerder en heeft toegang tot het Beheerdersdashboard!`);
+                                    setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-900 border border-slate-200 hover:border-amber-300 transition cursor-pointer"
+                                  title={`Geef ${emp.name} beheerdersrechten`}
+                                >
+                                  <Crown size={10} className="text-amber-500" />
+                                  <span>+ Maak Beheerder</span>
+                                </button>
+                              )}
                               {renderExperienceBadge(emp.experience)}
                               {hasAcceptedWeekly ? (
                                 <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-emerald-50 text-emerald-800 border border-emerald-200">
@@ -2696,6 +3425,27 @@ export default function ManagerDashboard({
                             title="Profielfoto maken met camera of uploaden naar Firebase"
                           >
                             <Camera size={13} className="stroke-[2.5]" />
+                          </button>
+
+                          {/* TOGGLE BEHEERDER BUTTON */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextRole = emp.role === 'beheerder' ? 'medewerker' : 'beheerder';
+                              onUpdateEmployee({ ...emp, role: nextRole });
+                              setSixWeeksSuccessMsg(nextRole === 'beheerder' 
+                                ? `👑 ${emp.name} is nu Beheerder en kan inloggen in het Beheerdersdashboard!`
+                                : `${emp.name} is nu ingesteld als gewone medewerker.`);
+                              setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+                            }}
+                            className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                              emp.role === 'beheerder'
+                                ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border-amber-300'
+                                : 'bg-slate-50 hover:bg-amber-50 text-slate-400 hover:text-amber-800 border-slate-200'
+                            }`}
+                            title={emp.role === 'beheerder' ? "Beheerder (klik om te wijzigen naar medewerker)" : "Promoveer naar Beheerder (toegang tot dashboard)"}
+                          >
+                            <ShieldCheck size={13} className="stroke-[2.5]" />
                           </button>
 
                           {/* EDIT BUTTON */}
@@ -2815,6 +3565,8 @@ export default function ManagerDashboard({
 
       {/* SHIFT TOEVOEGEN/BEWERKEN MODAL */}
       {showShiftModal && (() => {
+        const modalWeekNumber = selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek;
+        const currentDayIndex = selectedShift.day !== undefined ? selectedShift.day : 0;
         const currentAssignedEmp = employees.find(e => e.id === selectedShift.employeeId);
         const currentEmpAge = currentAssignedEmp ? calculateAge(currentAssignedEmp.birthDate) : null;
         const isSelectedEmpMinor = currentAssignedEmp ? isMinorStudent(currentAssignedEmp) : false;
@@ -2824,13 +3576,26 @@ export default function ManagerDashboard({
           ? validateMinorShift(
               currentAssignedEmp,
               { startTime: selectedShift.startTime, endTime: selectedShift.endTime, day: selectedShift.day },
-              shifts.filter(s => s.weekNumber === (selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek)),
+              shifts.filter(s => s.weekNumber === modalWeekNumber),
               selectedShift.id
             )
           : { valid: true, isMinor: false, age: null, shiftHours: 0, error: undefined };
 
         const hasValidationError = !currentShiftValidation.valid || Boolean(shiftValidationError);
         const activeErrorMessage = currentShiftValidation.error || shiftValidationError;
+
+        // Ensure all weeks including current week, upcoming weeks, archived weeks, and modalWeek are available
+        const modalWeeks = (() => {
+          const map = new Map<number, WeekMeta>();
+          activeWeeks.forEach(w => map.set(w.weekNumber, w));
+          archivedWeeks.forEach(w => {
+            if (!map.has(w.weekNumber)) map.set(w.weekNumber, w);
+          });
+          if (!map.has(modalWeekNumber)) {
+            map.set(modalWeekNumber, getWeekMeta(modalWeekNumber));
+          }
+          return Array.from(map.values()).sort((a, b) => a.weekNumber - b.weekNumber);
+        })();
 
         return (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
@@ -2887,16 +3652,22 @@ export default function ManagerDashboard({
               <form onSubmit={handleSaveShift} className="space-y-4">
                 
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600">Weekrooster</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-600">Weekrooster</label>
+                    <span className="text-[11px] font-bold text-orange-600">
+                      {getWeekMeta(modalWeekNumber).dateRange}
+                    </span>
+                  </div>
                   <select
-                    value={selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek}
+                    value={modalWeekNumber}
                     onChange={(e) => {
+                      const newWeek = parseInt(e.target.value);
                       setShiftValidationError(null);
-                      setSelectedShift({ ...selectedShift, weekNumber: parseInt(e.target.value) });
+                      setSelectedShift({ ...selectedShift, weekNumber: newWeek });
                     }}
                     className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold cursor-pointer"
                   >
-                    {activeWeeks.map(w => (
+                    {modalWeeks.map(w => (
                       <option key={w.weekNumber} value={w.weekNumber}>
                         {w.label} ({w.dateRange}) {w.isUpcoming ? '• (Vanaf volgende week)' : ''}
                       </option>
@@ -2947,19 +3718,29 @@ export default function ManagerDashboard({
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-600">Dag van de week</label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-600">Dag van de week</label>
+                      <span className="text-[11px] font-black text-orange-600">
+                        {getDayDateInfo(modalWeekNumber, currentDayIndex).shortDate}
+                      </span>
+                    </div>
                     <select
                       required
-                      value={selectedShift.day !== undefined ? selectedShift.day : ''}
+                      value={selectedShift.day !== undefined ? selectedShift.day : 0}
                       onChange={(e) => {
                         setShiftValidationError(null);
                         setSelectedShift({ ...selectedShift, day: parseInt(e.target.value) });
                       }}
-                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                     >
-                      {DAYS_OF_WEEK.map((d, idx) => (
-                        <option key={idx} value={idx}>{d}</option>
-                      ))}
+                      {DAYS_OF_WEEK.map((d, idx) => {
+                        const dayInfo = getDayDateInfo(modalWeekNumber, idx);
+                        return (
+                          <option key={idx} value={idx}>
+                            {d} ({dayInfo.shortDate})
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -3062,6 +3843,25 @@ export default function ManagerDashboard({
                   />
                 </div>
 
+                {/* Openstaande Dienst Toggle */}
+                <div className="bg-amber-50/80 border-2 border-amber-300 rounded-2xl p-3 space-y-1.5">
+                  <label className="flex items-center justify-between cursor-pointer select-none">
+                    <span className="text-xs font-black uppercase tracking-tight text-amber-950 flex items-center gap-1.5">
+                      <Megaphone size={14} className="text-amber-600 stroke-[2.5]" />
+                      <span>📢 Openstaande Dienst (Ruilbord)</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedShift.isOpenShift)}
+                      onChange={(e) => setSelectedShift({ ...selectedShift, isOpenShift: e.target.checked })}
+                      className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500 cursor-pointer"
+                    />
+                  </label>
+                  <p className="text-[11px] text-amber-900 font-medium leading-relaxed">
+                    Stel deze dienst open voor het hele team. Flexi's, studenten en extra's zien dit direct op het Ruilbord en kunnen zich aanmelden als kandidaat.
+                  </p>
+                </div>
+
                 {!selectedShift.isNew && (
                   <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
                     <span>Bevestigd door medewerker:</span>
@@ -3070,6 +3870,82 @@ export default function ManagerDashboard({
                     ) : (
                       <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-medium">Nee</span>
                     )}
+                  </div>
+                )}
+
+                {/* 1-Click Shift-Herinnering voor de Werkdag */}
+                {!selectedShift.isNew && !selectedShift.isOpenShift && currentAssignedEmp && (
+                  <div className="bg-amber-50/80 border-2 border-amber-300 rounded-2xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-tight text-amber-950 flex items-center gap-1.5">
+                        <BellRing size={15} className="text-amber-600 stroke-[2.5]" />
+                        <span>Shift-Herinnering Werkdag</span>
+                      </span>
+                      {selectedShift.lastReminderSentAt && (
+                        <span className="text-[10px] text-amber-900 font-black bg-amber-200/90 px-2 py-0.5 rounded-full border border-amber-300">
+                          Herinnerd om {new Date(selectedShift.lastReminderSentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-900 font-medium leading-relaxed">
+                      Stuur met één klik een officiële herinneringsnotificatie naar <strong>{currentAssignedEmp.name}</strong> ter voorbereiding op de komende werkdag.
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleSendSingleShiftReminder(selectedShift as Shift);
+                        }}
+                        className="flex-1 py-2 px-3 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                      >
+                        <Bell size={13} className="stroke-[2.5]" />
+                        <span>{selectedShift.lastReminderSentAt ? 'Opnieuw Herinnering Sturen' : 'Stuur Shift-Herinnering (1-klik)'}</span>
+                      </button>
+
+                      {currentAssignedEmp.phone && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const wNum = selectedShift.weekNumber || selectedManagerWeek;
+                            const dayIdx = selectedShift.day !== undefined ? selectedShift.day : 0;
+                            const dayInfo = getDayDateInfo(wNum, dayIdx);
+                            const dayName = DAYS_FULL_NL[dayIdx];
+                            const deptLabel = (selectedShift.department || currentAssignedEmp.department) === 'keuken' ? 'Keuken' : 'Zaal';
+                            const raw = currentAssignedEmp.phone.replace(/[^0-9]/g, '');
+                            const intlP = (raw.startsWith('0') && raw.length === 10) ? '32' + raw.substring(1) : raw;
+                            const waMsg = encodeURIComponent(
+                              `Hallo ${currentAssignedEmp.name}! 👋\n\nHerinnering vanuit In De Molen voor je shift:\n📅 ${dayName} ${dayInfo.shortDate}\n⏰ ${selectedShift.startTime} - ${selectedShift.endTime} (${deptLabel})\n\nGelieve je aanwezigheid tijdig te bevestigen in het portaal. Tot dan!`
+                            );
+                            window.open(`https://wa.me/${intlP}?text=${waMsg}`, '_blank');
+                          }}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition flex items-center justify-center gap-1 cursor-pointer active:scale-95"
+                          title={`Open direct WhatsApp gesprek met ${currentAssignedEmp.phone}`}
+                        >
+                          <MessageCircle size={13} />
+                          <span>WhatsApp</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {!selectedShift.isNew && selectedShift.id && onOpenShiftForSwap && !selectedShift.isOpenShift && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedShift.id && onOpenShiftForSwap) {
+                          onOpenShiftForSwap(selectedShift.id, selectedShift.notes || 'Openstaande dienst: wie kan inspringen?');
+                          setShowShiftModal(false);
+                          setSixWeeksSuccessMsg(`📢 Dienst is nu opengesteld op het Ruilbord! Medewerkers kunnen direct intekenen.`);
+                          setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+                        }
+                      }}
+                      className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <ArrowLeftRight size={14} className="stroke-[2.5]" />
+                      <span>📢 Openstellen voor Intekening (Ruilbord)</span>
+                    </button>
                   </div>
                 )}
 
@@ -3311,6 +4187,34 @@ export default function ManagerDashboard({
                   />
                   <p className="text-[10px] text-slate-500">
                     De medewerker gebruikt deze code om persoonlijk in te loggen op het portaal.
+                  </p>
+                </div>
+
+                {/* Rol & Beheerrechten */}
+                <div className="space-y-1.5 bg-amber-50/70 border border-amber-200 rounded-xl p-3">
+                  <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <ShieldCheck size={14} className="text-amber-600" />
+                      <span>Rol & Bevoegdheden</span>
+                    </span>
+                    {newEmp.role === 'beheerder' && (
+                      <span className="text-[10px] font-black text-amber-900 bg-amber-200 px-2 py-0.5 rounded border border-amber-300">
+                        👑 Beheerder
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    value={newEmp.role || 'medewerker'}
+                    onChange={(e) => setNewEmp({ ...newEmp, role: e.target.value as 'medewerker' | 'beheerder' })}
+                    className="w-full bg-white border border-slate-300 text-slate-850 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                  >
+                    <option value="medewerker">Medewerker (Toegang tot Personeelsportaal)</option>
+                    <option value="beheerder">👑 Beheerder (Volledige toegang tot Beheerdersdashboard)</option>
+                  </select>
+                  <p className="text-[10px] text-slate-600 leading-tight">
+                    {newEmp.role === 'beheerder' 
+                      ? '👑 Deze beheerder kan inloggen in het Beheerdersdashboard met zijn/haar naam of e-mail en pincode.'
+                      : 'Medewerkers hebben toegang tot hun eigen shifts, beschikbaarheden en ruilverzoeken.'}
                   </p>
                 </div>
 
@@ -4133,6 +5037,17 @@ export default function ManagerDashboard({
           }}
         />
       )}
+
+      {/* Shift-Herinneringen Komende Werkdag Modal */}
+      <ShiftReminderModal
+        isOpen={showShiftReminderModal}
+        onClose={() => setShowShiftReminderModal(false)}
+        shifts={shifts}
+        employees={employees}
+        weekNumber={selectedManagerWeek}
+        onSendSingleReminder={handleSendSingleShiftReminder}
+        onSendBatchReminders={handleSendBatchReminders}
+      />
 
     </div>
   );

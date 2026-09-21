@@ -1,4 +1,4 @@
-import { WeekMeta } from '../types';
+import { WeekMeta, Employee, EmployeeAvailability, DayAvailability, RecurringFrequency } from '../types';
 
 /**
  * Dynamically computes the ISO 8601 week number and year.
@@ -31,7 +31,7 @@ const MONTHS_SHORT_NL = [
   'jul', 'aug', 'sep', 'okt', 'nov', 'dec'
 ];
 
-const DAYS_SHORT_NL = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
+export const DAYS_SHORT_NL = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'];
 
 /**
  * Returns Monday Date of a given ISO week and year.
@@ -356,3 +356,85 @@ export function getAvailabilityDeadlineInfo(
     friendlyMessage: `Beschikbaarheid voor Week ${targetWeekNumber} (over ${diff} weken) staat open om in te vullen of aan te passen.`
   };
 }
+
+/**
+ * Checks if a recurring availability frequency applies to a given ISO week number.
+ * - 'every_week': applies to all weeks
+ * - 'even_weeks': applies when weekNumber % 2 === 0
+ * - 'odd_weeks': applies when weekNumber % 2 !== 0
+ */
+export function isRecurringApplicableToWeek(frequency: RecurringFrequency = 'every_week', weekNumber: number): boolean {
+  if (frequency === 'every_week') return true;
+  if (frequency === 'even_weeks') return weekNumber % 2 === 0;
+  if (frequency === 'odd_weeks') return weekNumber % 2 !== 0;
+  return false;
+}
+
+export interface EffectiveAvailabilityResult {
+  availability: EmployeeAvailability | null;
+  source: 'weekly' | 'recurring' | 'none';
+  label: string;
+}
+
+/**
+ * Resolves the effective availability for an employee in a given week.
+ * Priority:
+ * 1. An explicit weekly submission (if present in `availabilities`)
+ * 2. An active recurring availability pattern (repeated week-by-week for Flexi, Student, Extra, etc.)
+ * 3. None
+ */
+export function getEffectiveEmployeeAvailability(
+  employee: Employee,
+  weekNumber: number,
+  availabilities: EmployeeAvailability[]
+): EffectiveAvailabilityResult {
+  // 1. Explicit weekly submission
+  const explicit = availabilities.find(a => a.employeeId === employee.id && a.weekNumber === weekNumber);
+  if (explicit && explicit.days && explicit.days.length > 0) {
+    return {
+      availability: explicit,
+      source: 'weekly',
+      label: `Week ${weekNumber} specifiek ingediend`
+    };
+  }
+
+  // 2. Active recurring availability (Flexi, Student, Extra)
+  const rec = employee.recurringAvailability;
+  if (rec && rec.active && rec.days && rec.days.length > 0) {
+    if (isRecurringApplicableToWeek(rec.frequency, weekNumber)) {
+      const days: DayAvailability[] = rec.days.map(rd => ({
+        day: rd.day,
+        status: rd.status || 'available',
+        startTime: rd.startTime || 'Open',
+        endTime: rd.endTime || 'Sluit',
+        notes: rd.notes || ''
+      }));
+
+      const synthetic: EmployeeAvailability = {
+        id: `rec_${employee.id}_wk${weekNumber}`,
+        employeeId: employee.id,
+        weekNumber: weekNumber,
+        days
+      };
+
+      const freqLabel = rec.frequency === 'every_week'
+        ? 'Wekelijks herhaald'
+        : rec.frequency === 'even_weeks'
+          ? '2-wekelijks (Even week)'
+          : '2-wekelijks (Oneven week)';
+
+      return {
+        availability: synthetic,
+        source: 'recurring',
+        label: `Vaste beschikbaarheid (${freqLabel})`
+      };
+    }
+  }
+
+  return {
+    availability: null,
+    source: 'none',
+    label: 'Niet ingevuld'
+  };
+}
+

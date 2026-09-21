@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import { Employee, Shift, Department } from '../types';
 import { 
   generateWhatsAppUrl, 
+  generateWhatsAppMessageText,
   generateTeamWhatsAppSummary, 
+  getShareableAppUrl,
+  PUBLIC_APP_URL,
   generateMailtoUrl, 
   generateIcsCalendarContent, 
   downloadIcsFile,
@@ -217,6 +220,25 @@ export default function NotificationModal({
         {activeTab === 'individual' && (
           <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
             
+            {/* Clickable link banner */}
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📱</span>
+                <div>
+                  <span className="font-extrabold text-emerald-950">Klikbare portaallink voor medewerkers:</span>
+                  <span className="block font-mono text-[11px] text-emerald-700 select-all">{getShareableAppUrl()}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleCopy(getShareableAppUrl(), 'app_url')}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition shrink-0 cursor-pointer"
+              >
+                {copiedText === 'app_url' ? <Check size={13} className="text-white" /> : <Copy size={13} />}
+                <span>{copiedText === 'app_url' ? 'Gekopieerd!' : 'Kopieer Link'}</span>
+              </button>
+            </div>
+
             {/* Quick Bulk Action bar */}
             <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div>
@@ -249,8 +271,8 @@ export default function NotificationModal({
                 displayEmployees.map(emp => {
                   const empShifts = publishedShifts.filter(s => s.employeeId === emp.id);
                   const isAcknowledged = empShifts.length > 0 && empShifts.every(s => s.acknowledged);
-                  const waUrl = generateWhatsAppUrl(emp, publishedShifts, weekNumber, window.location.href);
-                  const mailtoUrl = generateMailtoUrl(emp, publishedShifts, weekNumber, window.location.href);
+                  const waUrl = generateWhatsAppUrl(emp, publishedShifts, weekNumber, getShareableAppUrl());
+                  const mailtoUrl = generateMailtoUrl(emp, publishedShifts, weekNumber, getShareableAppUrl());
                   const isKitchen = emp.department === 'keuken';
 
                   return (
@@ -313,11 +335,25 @@ export default function NotificationModal({
                           target="_blank"
                           rel="noreferrer"
                           className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm active:scale-95"
-                          title="Open WhatsApp chat met vooringevuld werkrooster"
+                          title="Open WhatsApp chat met vooringevuld werkrooster en klikbare link"
                         >
                           <Smartphone size={13} />
                           <span>WhatsApp</span>
                         </a>
+
+                        {/* Copy WhatsApp message button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const text = generateWhatsAppMessageText(emp, publishedShifts, weekNumber, getShareableAppUrl());
+                            handleCopy(text, emp.id);
+                          }}
+                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Kopieer WhatsApp bericht inclusief klikbare link naar klembord"
+                        >
+                          {copiedText === emp.id ? <Check size={13} className="text-emerald-600 stroke-[3]" /> : <Copy size={13} />}
+                          <span>{copiedText === emp.id ? 'Gekopieerd!' : 'Kopieer'}</span>
+                        </button>
 
                         {/* Email button */}
                         <a
@@ -397,13 +433,14 @@ export default function NotificationModal({
                   employees,
                   publishedShifts,
                   weekNumber,
-                  deptFilter === 'all' ? 'alles' : deptFilter
+                  deptFilter === 'all' ? 'alles' : deptFilter,
+                  getShareableAppUrl()
                 )}
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                 <p className="text-[11px] text-slate-500">
-                  💡 Tip: Kopieer dit bericht en plak het direct in jullie WhatsApp team-groep!
+                  💡 Tip: Kopieer dit bericht en plak het direct in jullie WhatsApp team-groep! Bevat de klikbare app link.
                 </p>
 
                 <div className="flex gap-2">
@@ -414,7 +451,8 @@ export default function NotificationModal({
                         employees,
                         publishedShifts,
                         weekNumber,
-                        deptFilter === 'all' ? 'alles' : deptFilter
+                        deptFilter === 'all' ? 'alles' : deptFilter,
+                        getShareableAppUrl()
                       );
                       handleCopy(msg, 'team_msg');
                     }}
@@ -425,12 +463,13 @@ export default function NotificationModal({
                   </button>
 
                   <a
-                    href={`https://wa.me/?text=${encodeURIComponent(
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
                       generateTeamWhatsAppSummary(
                         employees,
                         publishedShifts,
                         weekNumber,
-                        deptFilter === 'all' ? 'alles' : deptFilter
+                        deptFilter === 'all' ? 'alles' : deptFilter,
+                        getShareableAppUrl()
                       )
                     )}`}
                     target="_blank"
@@ -438,7 +477,7 @@ export default function NotificationModal({
                     className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-md transition flex items-center gap-1.5"
                   >
                     <ExternalLink size={14} />
-                    <span>Open in WhatsApp Web</span>
+                    <span>Open in WhatsApp</span>
                   </a>
                 </div>
               </div>

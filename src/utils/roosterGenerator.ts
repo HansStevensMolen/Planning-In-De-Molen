@@ -1,5 +1,6 @@
 import { Shift, Employee, EmployeeAvailability, Department } from '../types';
 import { isMinorStudent, isShiftEndingAfter23, calculateShiftDurationHours } from './employeeAgeUtils';
+import { getEffectiveEmployeeAvailability } from './weekUtils';
 
 export interface RequiredSlot {
   period: 'overdag' | 'avond';
@@ -305,8 +306,8 @@ export function generateSmartAutoPlan(
         let candidateStart = slot.defaultStart;
         let candidateEnd = slot.defaultEnd;
 
-        // 1. Availability check
-        const empAvail = availabilities.find(a => a.employeeId === emp.id && a.weekNumber === weekNumber);
+        // 1. Availability check (supports explicit weekly and recurring week-by-week)
+        const { availability: empAvail } = getEffectiveEmployeeAvailability(emp, weekNumber, availabilities);
         if (empAvail) {
           const dayAvail = empAvail.days.find(d => d.day === day);
           if (dayAvail) {

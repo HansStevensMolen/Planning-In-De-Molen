@@ -7,7 +7,7 @@ import {
   INITIAL_LOGS,
   INITIAL_AVAILABILITIES
 } from './data/mockData';
-import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeAvailability, DayAvailability } from './types';
+import { Employee, Shift, Notice, SwapRequest, SwapCandidate, ChangeLog, EmployeeAvailability, DayAvailability } from './types';
 import ManagerDashboard from './components/ManagerDashboard';
 import StaffPortal from './components/StaffPortal';
 import InDeMolenLogo from './components/InDeMolenLogo';
@@ -178,28 +178,34 @@ export default function App() {
 
   const handleManagerLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    const email = managerEmailInput.trim().toLowerCase();
+    const input = managerEmailInput.trim().toLowerCase();
     const password = managerPasswordInput.trim();
 
     if (!password) {
-      setLoginError('Voer a.u.b. je wachtwoord in.');
+      setLoginError('Voer a.u.b. je pincode of wachtwoord in.');
       return;
     }
 
-    if (password !== '1234') {
-      setLoginError('Ongeldig wachtwoord. Gebruik PIN "1234" om in te loggen.');
-      return;
-    }
-
+    // Find if any registered manager matches the email or name
     const matchedManager = employees.find(emp => 
       emp.role === 'beheerder' && 
-      (emp.email.toLowerCase() === email || 
-       ((email === 'hans.stevens2@gmail.com' || email === 'hans.stevens@gemeenteschoolbierbeek.be') && emp.id === 'emp1'))
+      (emp.email.toLowerCase() === input || 
+       emp.name.toLowerCase() === input ||
+       (input.length >= 3 && emp.name.toLowerCase().includes(input)) ||
+       ((input === 'hans.stevens2@gmail.com' || input === 'hans.stevens@gemeenteschoolbierbeek.be') && emp.id === 'emp1'))
     );
 
+    const isMasterPassword = password === '1234';
+    const isPersonalPinValid = matchedManager && matchedManager.pin && matchedManager.pin === password;
+
+    if (!isMasterPassword && !isPersonalPinValid) {
+      setLoginError('Ongeldige pincode/wachtwoord. Gebruik je persoonlijke pincode of de beheerders-PIN "1234".');
+      return;
+    }
+
     if (matchedManager) {
-      if ((email === 'hans.stevens@gemeenteschoolbierbeek.be' || email === 'hans.stevens2@gmail.com') && matchedManager.email !== email) {
-        const updatedHans = { ...matchedManager, name: 'Hans Stevens', email: email };
+      if ((input === 'hans.stevens@gemeenteschoolbierbeek.be' || input === 'hans.stevens2@gmail.com') && matchedManager.email !== input) {
+        const updatedHans = { ...matchedManager, name: 'Hans Stevens', email: input };
         setEmployees(prev => prev.map(emp => emp.id === 'emp1' ? updatedHans : emp));
       }
       setManagerLoggedIn(true);
@@ -210,13 +216,28 @@ export default function App() {
       const newLog: ChangeLog = {
         id: `log_${Date.now()}`,
         timestamp: Date.now(),
-        user: `${matchedManager.name} (Manager)`,
+        user: `${matchedManager.name} (Beheerder)`,
         action: 'Beheerder Ingelogd',
         details: `${matchedManager.name} is ingelogd op het beheerpaneel`
       };
       setLogs(prev => [newLog, ...prev]);
+    } else if (isMasterPassword && (input === '' || input.includes('admin') || input.includes('hans') || input.includes('beheer') || input.includes('molen') || input.includes('stevens'))) {
+      // Master fallback for administrator
+      setManagerLoggedIn(true);
+      localStorage.setItem('manager_logged_in', 'true');
+      setLoginError(null);
+      
+      const newLog: ChangeLog = {
+        id: `log_${Date.now()}`,
+        timestamp: Date.now(),
+        user: 'Hoofdbeheerder',
+        action: 'Beheerder Ingelogd',
+        details: 'Hoofdbeheerder ingelogd via master pincode'
+      };
+      setLogs(prev => [newLog, ...prev]);
     } else {
-      setLoginError('E-mailadres niet herkend als beheerder. Gebruik hans.stevens2@gmail.com of hans.stevens@gemeenteschoolbierbeek.be');
+      const activeManagers = employees.filter(e => e.role === 'beheerder').map(e => `${e.name}${e.email ? ` (${e.email})` : ''}`).join(', ');
+      setLoginError(`E-mail of naam niet herkend als beheerder. Actieve beheerders: ${activeManagers || 'Hans Stevens'}.`);
     }
   };
 
@@ -747,8 +768,8 @@ export default function App() {
     );
   };
 
-  // Action: Manager approves a shift trade request
-  const handleApproveSwap = (requestId: string) => {
+  // Action: Manager approves a shift trade request or assigns an open shift to a candidate
+  const handleApproveSwap = (requestId: string, assignedCandidateId?: string) => {
     const req = swapRequests.find(r => r.id === requestId);
     if (!req) return;
 
@@ -762,35 +783,44 @@ export default function App() {
     if (targetShift) {
       const oldOwner = employees.find(e => e.id === targetShift.employeeId);
       
-      // Select final recipient
-      let finalReceiverId = req.targetEmployeeId;
+      // Select final recipient (either explicitly assigned candidate or target)
+      let finalReceiverId = assignedCandidateId || req.targetEmployeeId;
       if (!finalReceiverId) {
-        // Automatic assignment to another active colleague with the same role
-        const candidates = employees.filter(e => e.id !== req.requesterId && e.role === oldOwner?.role && e.active);
-        finalReceiverId = candidates.length > 0 ? candidates[0].id : employees[employees.length - 1].id;
+        if (req.candidates && req.candidates.length > 0) {
+          finalReceiverId = req.candidates[0].employeeId;
+        } else {
+          // Automatic assignment to another active colleague
+          const candidates = employees.filter(e => e.id !== req.requesterId && e.role === oldOwner?.role && e.active);
+          finalReceiverId = candidates.length > 0 ? candidates[0].id : employees[employees.length - 1].id;
+        }
       }
 
       const newOwner = employees.find(e => e.id === finalReceiverId);
 
-      // Mutate shift assignment
+      // Mutate shift assignment and remove open shift flag
       const nextShifts = shifts.map(s => s.id === targetShift.id ? { 
         ...s, 
         employeeId: finalReceiverId!,
+        isOpenShift: false,
         acknowledged: false // new colleague needs to view and re-confirm!
       } : s);
       setShifts(nextShifts);
       saveShiftsToCloud(nextShifts);
 
-      addLog(
-        'Ruilverzoek Goedgekeurd',
-        `Dienst op ${DAYS_OF_WEEK[targetShift.day]} verplaatst van ${oldOwner?.name} naar ${newOwner?.name}`
-      );
+      const actionTitle = req.isOpenShift ? 'Openstaande Dienst Toegewezen' : 'Ruilverzoek Goedgekeurd';
+      const logDetail = req.isOpenShift
+        ? `Openstaande dienst op ${DAYS_OF_WEEK[targetShift.day]} (${targetShift.startTime} - ${targetShift.endTime}) toegewezen aan ${newOwner?.name}`
+        : `Dienst op ${DAYS_OF_WEEK[targetShift.day]} verplaatst van ${oldOwner?.name} naar ${newOwner?.name}`;
 
-      // Automated Notice Board post to keep everybody informed of the trade!
+      addLog(actionTitle, logDetail);
+
+      // Automated Notice Board post to keep everybody informed!
       const updateNotice: Notice = {
         id: `notice_swap_${Date.now()}`,
-        title: `🔄 Roosterupdate: Goedgekeurde dienstruil!`,
-        content: `De beheerder heeft ingestemd met de ruil. De dienst op ${DAYS_OF_WEEK[targetShift.day]} van ${targetShift.startTime} tot ${targetShift.endTime} is overgedragen van ${oldOwner?.name} naar ${newOwner?.name}.`,
+        title: req.isOpenShift ? `🎉 Openstaande dienst ingevuld!` : `🔄 Roosterupdate: Goedgekeurde dienstruil!`,
+        content: req.isOpenShift
+          ? `De openstaande dienst op ${DAYS_OF_WEEK[targetShift.day]} (${targetShift.startTime} - ${targetShift.endTime}) is succesvol toegewezen aan ${newOwner?.name}. Bedankt voor het inspringen!`
+          : `De beheerder heeft ingestemd met de ruil. De dienst op ${DAYS_OF_WEEK[targetShift.day]} van ${targetShift.startTime} tot ${targetShift.endTime} is overgedragen van ${oldOwner?.name} naar ${newOwner?.name}.`,
         date: new Date().toISOString().split('T')[0],
         category: 'wijziging',
         author: 'Systeem'
@@ -799,6 +829,132 @@ export default function App() {
       setNotices(nextNotices);
       saveNoticesToCloud(nextNotices);
     }
+  };
+
+  // Action: Manager opens a shift for team candidates to sign up
+  const handleOpenShiftForSwap = (shiftId: string, customReason?: string) => {
+    const targetShift = shifts.find(s => s.id === shiftId);
+    if (!targetShift) return;
+
+    // 1. Mark shift as open in shifts list
+    const nextShifts = shifts.map(s => s.id === shiftId ? { ...s, isOpenShift: true } : s);
+    setShifts(nextShifts);
+    saveShiftsToCloud(nextShifts);
+
+    // 2. Create or reuse SwapRequest for this open shift
+    const existingReq = swapRequests.find(r => r.shiftId === shiftId && r.status === 'pending');
+    if (!existingReq) {
+      const newSwap: SwapRequest = {
+        id: `swap_open_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        shiftId: targetShift.id,
+        requesterId: 'beheerder',
+        reason: customReason || 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!',
+        status: 'pending',
+        date: new Date().toISOString().split('T')[0],
+        isOpenShift: true,
+        candidates: []
+      };
+      const nextSwaps = [newSwap, ...swapRequests];
+      setSwapRequests(nextSwaps);
+      saveSwapRequestsToCloud(nextSwaps);
+    }
+
+    // 3. Post notice on board
+    const dayName = DAYS_OF_WEEK[targetShift.day];
+    const deptName = targetShift.department === 'keuken' ? 'Keuken' : 'Zaal';
+    const notice: Notice = {
+      id: `notice_open_${Date.now()}`,
+      title: `📢 Openstaande dienst beschikbaar: ${dayName} (${targetShift.startTime} - ${targetShift.endTime})`,
+      content: `Er is een openstaande ${deptName}-dienst aangemeld op ${dayName} (${targetShift.startTime} - ${targetShift.endTime}). Geïnteresseerde medewerkers kunnen zich nu intekenen via het Ruilbord in hun portaal!`,
+      date: new Date().toISOString().split('T')[0],
+      category: 'planning',
+      author: 'Beheerder'
+    };
+    const nextNotices = [notice, ...notices];
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+
+    addLog('Dienst Opengesteld', `Dienst op ${dayName} (${targetShift.startTime} - ${targetShift.endTime}) opengesteld voor intekening`);
+  };
+
+  // Action: Manager creates an open shift directly on the schedule and publishes to swap board
+  const handleCreateOpenShift = (shiftData: Omit<Shift, 'id' | 'updatedAt'>, customReason?: string) => {
+    const id = `shift_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const newShift: Shift = {
+      ...shiftData,
+      weekNumber: shiftData.weekNumber || CURRENT_WEEK_NUMBER,
+      id,
+      isOpenShift: true,
+      updatedAt: Date.now()
+    };
+    const nextShifts = [...shifts, newShift];
+    setShifts(nextShifts);
+    saveShiftsToCloud(nextShifts);
+
+    const newSwap: SwapRequest = {
+      id: `swap_open_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      shiftId: id,
+      requesterId: 'beheerder',
+      reason: customReason || 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!',
+      status: 'pending',
+      date: new Date().toISOString().split('T')[0],
+      isOpenShift: true,
+      candidates: []
+    };
+    const nextSwaps = [newSwap, ...swapRequests];
+    setSwapRequests(nextSwaps);
+    saveSwapRequestsToCloud(nextSwaps);
+
+    const dayName = DAYS_OF_WEEK[newShift.day];
+    const deptName = newShift.department === 'keuken' ? 'Keuken' : 'Zaal';
+    const notice: Notice = {
+      id: `notice_open_${Date.now()}`,
+      title: `📢 Openstaande dienst beschikbaar: ${dayName} (${newShift.startTime} - ${newShift.endTime})`,
+      content: `Er is een openstaande ${deptName}-dienst aangemaakt voor ${dayName} (${newShift.startTime} - ${newShift.endTime}) [Week ${newShift.weekNumber}]. Geïnteresseerde medewerkers kunnen zich nu direct intekenen via het Ruilbord in hun portaal!`,
+      date: new Date().toISOString().split('T')[0],
+      category: 'planning',
+      author: 'Beheerder'
+    };
+    const nextNotices = [notice, ...notices];
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+
+    addLog('Openstaande dienst aangemaakt', `Openstaande dienst op ${dayName} (${newShift.startTime} - ${newShift.endTime}) opengesteld voor intekening [Week ${newShift.weekNumber}]`);
+  };
+
+  // Action: Employee signs up as candidate for an open shift
+  const handleSignUpForOpenShift = (swapId: string, employeeId: string, employeeName: string, note?: string) => {
+    const candidate: SwapCandidate = {
+      employeeId,
+      employeeName,
+      signedUpAt: Date.now(),
+      note
+    };
+    const nextSwaps = swapRequests.map(r => {
+      if (r.id !== swapId) return r;
+      const existing = r.candidates || [];
+      if (existing.some(c => c.employeeId === employeeId)) return r;
+      return {
+        ...r,
+        candidates: [...existing, candidate]
+      };
+    });
+    setSwapRequests(nextSwaps);
+    saveSwapRequestsToCloud(nextSwaps);
+    addLog('Intekening op Open Dienst', `${employeeName} heeft zich ingetekend als kandidaat voor een openstaande shift`);
+  };
+
+  // Action: Employee cancels their signup for an open shift
+  const handleCancelSignUpOpenShift = (swapId: string, employeeId: string) => {
+    const nextSwaps = swapRequests.map(r => {
+      if (r.id !== swapId) return r;
+      return {
+        ...r,
+        candidates: (r.candidates || []).filter(c => c.employeeId !== employeeId)
+      };
+    });
+    setSwapRequests(nextSwaps);
+    saveSwapRequestsToCloud(nextSwaps);
   };
 
   // Action: Manager declines trade request
@@ -1079,17 +1235,17 @@ export default function App() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-black uppercase text-slate-600 tracking-tight flex items-center gap-1.5">
                     <Mail size={13} className="text-orange-500 stroke-[2.5]" />
-                    <span>Beheerder E-mailadres</span>
+                    <span>Beheerder E-mail of Naam</span>
                   </label>
                   <input
                     required
-                    type="email"
+                    type="text"
                     value={managerEmailInput}
                     onChange={(e) => {
                       setManagerEmailInput(e.target.value);
                       setLoginError(null);
                     }}
-                    placeholder="vul in: hans.stevens2@gmail.com"
+                    placeholder="Bijv: hans.stevens2@gmail.com of naam beheerder"
                     className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-4 py-3 text-xs font-bold tracking-normal focus:outline-none focus:ring-2 focus:ring-orange-500 font-sans"
                   />
                 </div>
@@ -1107,16 +1263,34 @@ export default function App() {
                       setManagerPasswordInput(e.target.value);
                       setLoginError(null);
                     }}
-                    placeholder="Standaard PIN is 1234"
+                    placeholder="Persoonlijke PIN of beheer-PIN 1234"
                     className="w-full bg-orange-50/20 border-2 border-orange-100 text-slate-800 rounded-xl px-4 py-3 text-xs font-bold tracking-normal focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
-                <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 space-y-1">
-                  <p className="text-[10px] font-black uppercase text-slate-500">Inloggegevens beheerder:</p>
-                  <p className="text-xs font-bold text-slate-700 leading-normal">
-                    E-mail: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">hans.stevens2@gmail.com</code> (of <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">hans.stevens@gemeenteschoolbierbeek.be</code>)<br />
-                    PIN: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">1234</code>
+                <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-black uppercase text-slate-600">Geregistreerde beheerders met toegang:</p>
+                    <span className="text-[9px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full">
+                      👑 {employees.filter(e => e.role === 'beheerder').length} beheerder(s)
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {employees.filter(e => e.role === 'beheerder').map(mgr => (
+                      <div key={mgr.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-amber-500">👑</span>
+                          <span>{mgr.name}</span>
+                          {mgr.email && <span className="text-slate-400 font-normal text-[11px]">({mgr.email})</span>}
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-250">
+                          PIN: {mgr.pin || '1234'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 pt-0.5 leading-tight">
+                    Inloggen kan met het e-mailadres of de naam van een beheerder + persoonlijke pincode of de algemene beheer-PIN <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">1234</code>.
                   </p>
                 </div>
 
@@ -1178,6 +1352,8 @@ export default function App() {
                 onRestoreSchedule={handleRestoreSchedule}
                 onBatchUpdateShifts={handleBatchUpdateShifts}
                 onOpenShareModal={() => setShowShareModal(true)}
+                onOpenShiftForSwap={handleOpenShiftForSwap}
+                onCreateOpenShift={handleCreateOpenShift}
               />
             </div>
           )
@@ -1198,6 +1374,8 @@ export default function App() {
               onUpdateEmployee={handleUpdateEmployee}
               onAddEmployee={handleAddEmployee}
               onUpdateAvailability={handleUpdateAvailability}
+              onSignUpForOpenShift={handleSignUpForOpenShift}
+              onCancelSignUpOpenShift={handleCancelSignUpOpenShift}
             />
           </div>
         )}
