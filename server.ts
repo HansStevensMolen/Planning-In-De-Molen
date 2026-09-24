@@ -27,6 +27,7 @@ async function startServer() {
   const app = express();
 
   app.use(express.json({ limit: "10mb" }));
+  app.use(express.static(path.join(process.cwd(), "public")));
 
   // API Health Check
   app.get("/api/health", (_req: Request, res: Response) => {
@@ -266,7 +267,10 @@ BEZETTINGSNORMEN VAN IN DE MOLEN (STRIKT TE VOLGEN):
   // Vite middleware setup
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: false
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

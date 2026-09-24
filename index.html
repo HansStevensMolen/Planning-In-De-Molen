@@ -1,16 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="nl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <title>Café Planning & Communicatie</title>
     <meta name="description" content="Een overzichtelijke planner en communicatieportaal voor het personeel van Eet-staminée In De Molen te Bierbeek." />
-    <meta property="og:title" content="Café Planning & Communicatie" />
+    
+    <!-- PWA & Mobile Web App Meta -->
+    <meta name="theme-color" content="#ea580c" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="In De Molen" />
+    
+    <!-- OpenGraph -->
+    <meta property="og:title" content="Café Planning & Communicatie - In De Molen" />
     <meta property="og:description" content="Een overzichtelijke planner en communicatieportaal voor het personeel van Eet-staminée In De Molen te Bierbeek." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/pwa-512x512.png" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

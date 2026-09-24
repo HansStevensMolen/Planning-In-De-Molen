@@ -3,6 +3,7 @@ import { Lock, Eye, EyeOff, Check, ShieldCheck, UserCheck, KeyRound, AlertCircle
 import { Employee } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface StaffLoginProps {
   employees: Employee[];
@@ -95,17 +96,22 @@ export default function StaffLogin({
         
         {/* Banner Header with Café In De Molen Branding */}
         <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 p-6 text-white relative">
-          <div className="flex items-center space-x-3 mb-2">
-            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center shadow-inner border border-white/25">
-              <Lock size={22} className="stroke-[2.5]" />
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center shadow-inner border border-white/25 shrink-0">
+                <Lock size={22} className="stroke-[2.5]" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-orange-200">
+                  Beveiligde Toegang
+                </span>
+                <h2 className="text-xl font-black uppercase tracking-tight">
+                  Personeelsportaal Login
+                </h2>
+              </div>
             </div>
-            <div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-orange-200">
-                Beveiligde Toegang
-              </span>
-              <h2 className="text-xl font-black uppercase tracking-tight">
-                Personeelsportaal Login
-              </h2>
+            <div className="bg-white p-1 rounded-xl shadow-xs shrink-0 border border-orange-200">
+              <InDeMolenLogo className="w-20 h-11" />
             </div>
           </div>
           <p className="text-xs text-orange-100 font-medium leading-relaxed">
@@ -359,6 +365,9 @@ export default function StaffLogin({
               Standaard pincode is <span className="font-black bg-orange-100 px-1.5 py-0.5 rounded text-orange-950">1234</span>. Na het inloggen kan je jouw code altijd aanpassen onder <strong>"Mijn Gegevens"</strong>.
             </p>
           </div>
+
+          {/* Smartphone App Install Hint */}
+          <PWAInstallButton variant="banner" />
 
           {/* Switch to Manager login if needed */}
           {onSwitchToManager && (

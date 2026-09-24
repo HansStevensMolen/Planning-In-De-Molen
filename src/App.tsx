@@ -56,6 +56,8 @@ import {
 import { sortEmployeesByFirstName, deduplicateEmployees } from './utils/employeeSortUtils';
 import { CURRENT_WEEK_NUMBER } from './utils/weekUtils';
 import ShareTeamModal from './components/ShareTeamModal';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 const DAYS_OF_WEEK = [
   'Maandag',
@@ -614,6 +616,83 @@ export default function App() {
     addLog('Mededeling geplaatst', `Groepsbericht geplaatst: "${noticeData.title}"`);
   };
 
+  // Action: Delete group notice (Manager)
+  const handleDeleteNotice = (noticeId: string) => {
+    const target = notices.find(n => n.id === noticeId);
+    const nextNotices = notices.filter(n => n.id !== noticeId);
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+    if (target) {
+      addLog('Mededeling Verwijderd', `Bericht "${target.title}" verwijderd door de beheerder`);
+    }
+  };
+
+  // Action: Add comment to a notice (Staff or Manager)
+  const handleAddNoticeComment = (
+    noticeId: string,
+    authorId: string,
+    authorName: string,
+    authorRole: 'beheerder' | 'medewerker',
+    content: string
+  ) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    const newComment = {
+      id: `comment_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      authorId,
+      authorName,
+      authorRole,
+      content: trimmed,
+      createdAt: Date.now()
+    };
+    const nextNotices = notices.map(n => {
+      if (n.id !== noticeId) return n;
+      return {
+        ...n,
+        comments: [...(n.comments || []), newComment]
+      };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+    addLog('Reactie op Mededeling', `${authorName} heeft gereageerd op een mededeling`);
+  };
+
+  // Action: Toggle emoji reaction on notice
+  const handleToggleNoticeReaction = (noticeId: string, emoji: string, employeeId: string) => {
+    const nextNotices = notices.map(n => {
+      if (n.id !== noticeId) return n;
+      const reactions = { ...(n.reactions || {}) };
+      const currentList = reactions[emoji] || [];
+      const hasReacted = currentList.includes(employeeId);
+      if (hasReacted) {
+        const filtered = currentList.filter(id => id !== employeeId);
+        if (filtered.length === 0) {
+          delete reactions[emoji];
+        } else {
+          reactions[emoji] = filtered;
+        }
+      } else {
+        reactions[emoji] = [...currentList, employeeId];
+      }
+      return { ...n, reactions };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
+  // Action: Delete comment on notice
+  const handleDeleteNoticeComment = (noticeId: string, commentId: string) => {
+    const nextNotices = notices.map(n => {
+      if (n.id !== noticeId) return n;
+      return {
+        ...n,
+        comments: (n.comments || []).filter(c => c.id !== commentId)
+      };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
   // Action: Employee marks shift as acknowledged
   const handleAcknowledgeShift = (shiftId: string) => {
     const nextShifts = shifts.map(s => s.id === shiftId ? { ...s, acknowledged: true } : s);
@@ -957,6 +1036,60 @@ export default function App() {
     saveSwapRequestsToCloud(nextSwaps);
   };
 
+  // Action: Employee directly claims / fills themselves into an open shift ("zichzelf invullen")
+  const handleSelfAssignOpenShift = (shiftId: string, employeeId: string) => {
+    const targetShift = shifts.find(s => s.id === shiftId);
+    const emp = employees.find(e => e.id === employeeId);
+    if (!targetShift || !emp) return;
+
+    // Mutate shift assignment: claim open shift
+    const nextShifts = shifts.map(s => s.id === shiftId ? {
+      ...s,
+      employeeId,
+      isOpenShift: false,
+      status: 'published' as const,
+      acknowledged: true, // Auto-acknowledged since employee claimed it themselves
+      updatedAt: Date.now()
+    } : s);
+    setShifts(nextShifts);
+    saveShiftsToCloud(nextShifts);
+
+    // Resolve any matching pending SwapRequest
+    const nextSwaps = swapRequests.map(r => {
+      if (r.shiftId === shiftId && r.status === 'pending') {
+        return { 
+          ...r, 
+          status: 'approved' as const, 
+          targetEmployeeId: employeeId 
+        };
+      }
+      return r;
+    });
+    setSwapRequests(nextSwaps);
+    saveSwapRequestsToCloud(nextSwaps);
+
+    const dayName = DAYS_OF_WEEK[targetShift.day];
+    const deptName = targetShift.department === 'keuken' ? 'Keuken' : 'Zaal';
+
+    addLog(
+      'Zelf Ingevuld op Open Dienst',
+      `${emp.name} heeft zichzelf ingeroosterd op ${dayName} (${targetShift.startTime} - ${targetShift.endTime}) [${deptName}]`
+    );
+
+    // Automatic Notice Board announcement to celebrate and keep everyone in sync
+    const claimNotice: Notice = {
+      id: `notice_claimed_${Date.now()}`,
+      title: `🎉 Open dienst ingevuld door ${emp.name}!`,
+      content: `${emp.name} heeft zich zojuist ingeschreven op de openstaande ${deptName}-dienst voor ${dayName} (${targetShift.startTime} - ${targetShift.endTime}). Bedankt voor het inspringen!`,
+      date: new Date().toISOString().split('T')[0],
+      category: 'planning',
+      author: 'Systeem'
+    };
+    const nextNotices = [claimNotice, ...notices];
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
   // Action: Manager declines trade request
   const handleDeclineSwap = (requestId: string) => {
     const nextSwaps = swapRequests.map(r => r.id === requestId ? { ...r, status: 'geweigerd' as const } : r);
@@ -1005,8 +1138,8 @@ export default function App() {
       <header className="bg-white border-b-4 border-orange-200 shrink-0 shadow-sm">
         <div className="max-w-7xl mx-auto px-8 py-5 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="text-slate-800 hover:text-orange-600 transition shrink-0 bg-slate-50 p-1.5 rounded-2xl border-2 border-slate-200 shadow-inner">
-              <InDeMolenLogo className="w-20 h-12" />
+            <div className="shrink-0 bg-white p-1.5 rounded-2xl border-2 border-orange-200 shadow-sm flex items-center justify-center">
+              <InDeMolenLogo className="w-28 h-14" />
             </div>
             <div>
               <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tight leading-none mb-1">In De Molen</h1>
@@ -1054,6 +1187,9 @@ export default function App() {
               <Share2 size={15} />
               <span>Delen met Team 📲</span>
             </button>
+
+            {/* PWA Smartphone Install Button */}
+            <PWAInstallButton variant="header" sharedUrl={SHARED_APP_URL} />
 
             {/* Cloud Real-time Status Badge */}
             <button
@@ -1343,6 +1479,10 @@ export default function App() {
                 onDeleteEmployee={handleDeleteEmployee}
                 onBulkSyncEmployees={handleBulkSyncEmployees}
                 onAddNotice={handleAddNotice}
+                onDeleteNotice={handleDeleteNotice}
+                onAddNoticeComment={handleAddNoticeComment}
+                onToggleNoticeReaction={handleToggleNoticeReaction}
+                onDeleteNoticeComment={handleDeleteNoticeComment}
                 onApproveSwap={handleApproveSwap}
                 onDeclineSwap={handleDeclineSwap}
                 onUpdateAvailability={(avail) => {
@@ -1354,6 +1494,7 @@ export default function App() {
                 onOpenShareModal={() => setShowShareModal(true)}
                 onOpenShiftForSwap={handleOpenShiftForSwap}
                 onCreateOpenShift={handleCreateOpenShift}
+                onSelfAssignOpenShift={handleSelfAssignOpenShift}
               />
             </div>
           )
@@ -1376,6 +1517,9 @@ export default function App() {
               onUpdateAvailability={handleUpdateAvailability}
               onSignUpForOpenShift={handleSignUpForOpenShift}
               onCancelSignUpOpenShift={handleCancelSignUpOpenShift}
+              onSelfAssignOpenShift={handleSelfAssignOpenShift}
+              onAddNoticeComment={handleAddNoticeComment}
+              onToggleNoticeReaction={handleToggleNoticeReaction}
             />
           </div>
         )}
@@ -1485,6 +1629,9 @@ export default function App() {
           onForceCloudSync={handleForceCloudSync}
         />
       )}
+
+      {/* Offline Status Indicator */}
+      <OfflineIndicator />
 
     </div>
   );

@@ -89,6 +89,15 @@ export interface WeekMeta {
   dayDatesFull?: string[];
 }
 
+export interface NoticeComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole?: 'beheerder' | 'medewerker';
+  content: string;
+  createdAt: number;
+}
+
 export interface Notice {
   id: string;
   title: string;
@@ -98,6 +107,8 @@ export interface Notice {
   author: string;
   targetEmployeeId?: string; // Optioneel gericht aan specifieke medewerker
   shiftId?: string; // Gekoppelde shift voor directe context
+  comments?: NoticeComment[];
+  reactions?: { [emoji: string]: string[] }; // emoji -> array of employeeIds who reacted
 }
 
 export interface SwapCandidate {

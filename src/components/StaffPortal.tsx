@@ -40,7 +40,10 @@ import {
   KeyRound,
   ShieldCheck,
   Archive,
-  Repeat
+  Repeat,
+  Volume2,
+  Bell,
+  AlertOctagon
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department, RecurringAvailability, RecurringShiftPreference, RecurringFrequency } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
@@ -48,6 +51,18 @@ import StaffGuideModal from './StaffGuideModal';
 import StaffProfileModal from './StaffProfileModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import StaffLogin from './StaffLogin';
+import StaffShiftAlarmModal from './StaffShiftAlarmModal';
+import { PWAInstallButton } from './PWAInstallButton';
+import { 
+  isPushNotificationSupported, 
+  getPushNotificationPermission, 
+  requestPushNotificationPermission, 
+  sendShiftReminderNotification, 
+  hasShiftNotificationBeenSent, 
+  markShiftNotificationAsSent, 
+  playAlertChime, 
+  PushNotificationStatus 
+} from '../utils/shiftAlarmUtils';
 import { 
   openWhatsAppForEmployee, 
   exportEmployeeToICS, 
@@ -79,6 +94,15 @@ interface StaffPortalProps {
   onUpdateAvailability: (employeeId: string, weekNumber: number, days: DayAvailability[]) => void;
   onSignUpForOpenShift?: (swapRequestId: string, employeeId: string, employeeName: string, note?: string) => void;
   onCancelSignUpOpenShift?: (swapRequestId: string, employeeId: string) => void;
+  onSelfAssignOpenShift?: (shiftId: string, employeeId: string) => void;
+  onAddNoticeComment?: (
+    noticeId: string,
+    authorId: string,
+    authorName: string,
+    authorRole: 'beheerder' | 'medewerker',
+    content: string
+  ) => void;
+  onToggleNoticeReaction?: (noticeId: string, emoji: string, employeeId: string) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -248,8 +272,15 @@ export default function StaffPortal({
   onAddEmployee,
   onUpdateAvailability,
   onSignUpForOpenShift,
-  onCancelSignUpOpenShift
+  onCancelSignUpOpenShift,
+  onSelfAssignOpenShift,
+  onAddNoticeComment,
+  onToggleNoticeReaction
 }: StaffPortalProps) {
+  // Staff notice replies & self-assign confirmation state
+  const [staffNoticeReplyText, setStaffNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
+  const [selfAssignConfirmShift, setSelfAssignConfirmShift] = useState<Shift | null>(null);
+
   // Authenticated Staff Member ID (Personal Login with PIN)
   const [loggedInStaffId, setLoggedInStaffId] = useState<string | null>(() => {
     try {
@@ -568,6 +599,40 @@ export default function StaffPortal({
 
   const nextUrgentShift = upcomingShifts24h[0] || null;
 
+  // VISUEEL ALARM & PUSH NOTIFICATIE: Diensten binnen 24 uur die nog NIET zijn bevestigd ("Gezien")
+  const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
+  const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
+
+  // Push notification permission state & automated reminder dialog state
+  const [pushStatus, setPushStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
+  const [showReminderModal, setShowReminderModal] = useState<boolean>(false);
+  const [hasAutoTriggeredAlert, setHasAutoTriggeredAlert] = useState<boolean>(false);
+
+  // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij onbevestigde diensten < 24u
+  React.useEffect(() => {
+    if (!currentEmployee || unconfirmedShifts24h.length === 0) return;
+
+    // Verstuur push-notificatie als de permissie is toegekend en nog niet verzonden in deze sessie
+    unconfirmedShifts24h.forEach(alert => {
+      if (!hasShiftNotificationBeenSent(alert.shift.id)) {
+        const sent = sendShiftReminderNotification(currentEmployee, alert);
+        if (sent) {
+          markShiftNotificationAsSent(alert.shift.id);
+        }
+      }
+    });
+
+    // Toon automatisch herinneringsbericht (pop-up) eenmalig per sessie als de gebruiker dit nog niet sloot
+    try {
+      const isDismissed = sessionStorage.getItem(`dismissed_reminder_modal_${currentEmployee.id}`);
+      if (!hasAutoTriggeredAlert && !isDismissed) {
+        setShowReminderModal(true);
+        setHasAutoTriggeredAlert(true);
+        playAlertChime();
+      }
+    } catch {}
+  }, [unconfirmedShifts24h.length, currentEmployee?.id]);
+
   // All published shifts for the team view (filter by Zaal / Keuken / Alle for the selected week)
   const publishedTeamShifts = rosterWeekShifts.filter(s => {
     if (s.status !== 'published') return false;
@@ -581,6 +646,7 @@ export default function StaffPortal({
     setSwapReason('');
     setTargetColleagueId('');
     setSuccessMsg(null);
+    setHasAutoTriggeredAlert(false);
   };
 
   const handleSaveFirstLogin = (e: React.FormEvent) => {
@@ -624,7 +690,60 @@ export default function StaffPortal({
 
   const handleAcknowledgeClick = (shiftId: string) => {
     onAcknowledgeShift(shiftId);
-    setSuccessMsg('Dienst succesvol gelezen & bevestigd! De manager ziet nu een groen vinkje.');
+    playAlertChime();
+    setSuccessMsg('✅ Dienst succesvol gelezen & bevestigd ("Gezien")! De beheerder ziet nu een groen vinkje.');
+    setTimeout(() => setSuccessMsg(null), 5000);
+  };
+
+  const handleAcknowledgeAllUnconfirmed = (shiftIds?: string[]) => {
+    const ids = shiftIds || unconfirmedShifts24h.map(u => u.shift.id);
+    ids.forEach(id => onAcknowledgeShift(id));
+    playAlertChime();
+    setSuccessMsg('🎉 Alle aankomende diensten binnen 24 uur zijn succesvol bevestigd als "Gezien"!');
+    setShowReminderModal(false);
+    setTimeout(() => setSuccessMsg(null), 5000);
+  };
+
+  const handleCloseReminderModal = () => {
+    setShowReminderModal(false);
+    if (currentEmployee) {
+      try {
+        sessionStorage.setItem(`dismissed_reminder_modal_${currentEmployee.id}`, 'true');
+      } catch {}
+    }
+  };
+
+  const handleRequestPushPermission = async () => {
+    const res = await requestPushNotificationPermission();
+    setPushStatus(res);
+    playAlertChime();
+    if (res === 'granted') {
+      setSuccessMsg('🔔 Push-notificaties succesvol ingeschakeld! Je ontvangt direct meldingen bij diensten < 24u.');
+      if (currentEmployee && unconfirmedShifts24h.length > 0) {
+        sendShiftReminderNotification(currentEmployee, unconfirmedShifts24h[0]);
+      }
+    } else if (res === 'denied') {
+      setSuccessMsg('⚠️ Push-notificaties zijn geblokkeerd in je browser-instellingen.');
+    }
+    setTimeout(() => setSuccessMsg(null), 5000);
+  };
+
+  const handleTestNotification = () => {
+    if (!currentEmployee) return;
+    playAlertChime();
+    if (pushStatus === 'granted') {
+      if (unconfirmedShifts24h.length > 0) {
+        sendShiftReminderNotification(currentEmployee, unconfirmedShifts24h[0]);
+      } else {
+        new Notification('🔔 Café In De Molen - Push Test', {
+          body: `Beste ${currentEmployee.name}, push-notificaties werken uitstekend op jouw toestel!`,
+          icon: '/favicon.ico'
+        });
+      }
+      setSuccessMsg('🔔 Test-notificatie is verstuurd naar je browser/toestel!');
+    } else {
+      handleRequestPushPermission();
+    }
     setTimeout(() => setSuccessMsg(null), 5000);
   };
 
@@ -684,12 +803,12 @@ export default function StaffPortal({
       {/* 1. Eenvoudige Header met directe knop naar Handleiding */}
       <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white font-black flex items-center justify-center text-sm shadow-xs">
-            IDM
+          <div className="bg-white p-1 rounded-xl border border-orange-200 shadow-xs shrink-0 flex items-center justify-center">
+            <InDeMolenLogo className="w-20 h-10" />
           </div>
           <div>
             <h1 className="text-base font-black text-slate-800 uppercase tracking-tight">Personeelsportaal</h1>
-            <p className="text-xs text-slate-500 font-medium">In De Molen • Rooster & Beschikbaarheid</p>
+            <p className="text-xs text-orange-600 font-bold">In De Molen • Eet-staminée Bierbeek</p>
           </div>
         </div>
 
@@ -736,6 +855,8 @@ export default function StaffPortal({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <PWAInstallButton variant="header" />
+
           <button
             type="button"
             onClick={handleOpenEditMyProfile}
@@ -795,7 +916,19 @@ export default function StaffPortal({
                 </div>
               </div>
 
-              {unconfirmedShifts.length > 0 ? (
+              {hasUnconfirmedShifts24h ? (
+                <div className="bg-gradient-to-r from-red-600 to-rose-600 text-white px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-md animate-pulse">
+                  <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
+                  <span>🚨 {unconfirmedShifts24h.length} dienst(en) &lt;24u niet bevestigd!</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowReminderModal(true)}
+                    className="ml-1 bg-white text-red-700 hover:bg-red-50 text-[10px] font-black uppercase px-2 py-0.5 rounded-md transition cursor-pointer shadow-xs active:scale-95"
+                  >
+                    Herinnering 📜
+                  </button>
+                </div>
+              ) : unconfirmedShifts.length > 0 ? (
                 <div className="bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5">
                   <AlertTriangle size={14} className="text-amber-600 shrink-0" />
                   <span>{unconfirmedShifts.length} dienst(en) te bevestigen</span>
@@ -865,11 +998,157 @@ export default function StaffPortal({
             </div>
           </div>
 
-          {/* VISUAL INDICATOR: NEXT SHIFT WITHIN 24 HOURS (PROMINENT ALERT BANNER) */}
-          {nextUrgentShift && (
+          {/* VISUEEL ALARM & AUTOMATISCHE HERINNERING: ONBEVESTIGDE DIENST BINNEN 24 UUR */}
+          {hasUnconfirmedShifts24h ? (
+            <div 
+              id="shift-24h-visual-alarm-banner"
+              className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-3xl p-5 sm:p-6 shadow-xl border-2 border-red-300 ring-4 ring-red-400/40 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2 duration-300"
+            >
+              {/* Pulsing beacon decorative background elements */}
+              <div className="absolute -top-12 -right-12 w-48 h-48 bg-white/15 rounded-full blur-2xl pointer-events-none animate-pulse" />
+              <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-black/20 rounded-full blur-xl pointer-events-none" />
+
+              <div className="relative z-10 flex flex-col gap-4">
+                {/* Header of Alarm */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white shrink-0 border border-white/40 shadow-inner">
+                      <span className="relative flex h-6 w-6">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-85" />
+                        <BellRing size={24} className="relative inline-flex stroke-[2.5] text-white" />
+                      </span>
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="bg-white text-red-700 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-red-600 animate-ping inline-block shrink-0" />
+                          <span>🚨 VISUEEL ALARM</span>
+                        </span>
+                        <span className="bg-black/30 text-white font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-white/20 shadow-xs">
+                          {unconfirmedShifts24h.length === 1 ? '1 onbevestigde dienst' : `${unconfirmedShifts24h.length} onbevestigde diensten`} &lt; 24u!
+                        </span>
+                      </div>
+                      <h3 className="text-base sm:text-lg font-black tracking-tight text-white mt-1">
+                        Dienst binnen 24 uur nog niet bevestigd ("Gezien")!
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setShowReminderModal(true)}
+                      className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/30 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 active:scale-95 shadow-xs"
+                      title="Bekijk het volledige automatische herinneringsbericht"
+                    >
+                      <Info size={13} />
+                      <span>Herinneringsbericht</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestNotification}
+                      className="px-3 py-1.5 bg-black/25 hover:bg-black/40 text-white border border-white/25 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      title={pushStatus === 'granted' ? 'Push-notificaties zijn actief' : 'Push-notificaties inschakelen'}
+                    >
+                      <Bell size={13} />
+                      <span>{pushStatus === 'granted' ? 'Push Actief ✓' : 'Push Aanzetten 🔔'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Subtitle / Automatic Reminder Message Teaser */}
+                <p className="text-white/95 text-xs font-medium leading-relaxed bg-black/15 p-3 rounded-2xl border border-white/15">
+                  ⚠️ <strong>Automatische Herinnering:</strong> Beste {currentEmployee.name}, je staat binnen de komende 24 uur ingepland voor onderstaande dienst(en). Deze staat momenteel nog <strong>niet op 'Gezien'</strong>. Bevestig a.u.b. direct zodat het management en je teamleden weten dat de bezetting in orde is!
+                </p>
+
+                {/* Shift Cards within the alarm banner */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {unconfirmedShifts24h.map((alert) => {
+                    const { shift, dayLabel, formattedDate, timeRemainingText, isOngoing, totalHours } = alert;
+                    const dept = (shift.department || currentEmployee.department) === 'keuken' ? 'Keuken' : 'Zaal';
+                    return (
+                      <div 
+                        key={shift.id}
+                        className="bg-white text-slate-900 rounded-2xl p-3.5 shadow-md flex flex-col justify-between gap-3 border-2 border-red-300"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-black text-sm text-slate-900">
+                              {dayLabel}
+                            </span>
+                            <span className="bg-red-100 text-red-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-red-200">
+                              {isOngoing ? '🚨 Nu bezig' : `⏰ ${timeRemainingText}`}
+                            </span>
+                          </div>
+                          <div className="text-xs font-bold text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+                            <span className="bg-slate-100 px-2 py-0.5 rounded-md text-[10px] font-black text-slate-700">
+                              {shift.startTime} – {shift.endTime} ({totalHours}u)
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
+                              dept === 'Keuken' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {dept === 'Keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 font-medium mt-1">
+                            {formattedDate}
+                          </p>
+                          {shift.notes && (
+                            <p className="text-[11px] text-slate-600 italic bg-slate-50 p-1.5 rounded-lg border border-slate-150 mt-1 truncate">
+                              "{shift.notes}"
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => handleAcknowledgeClick(shift.id)}
+                            className="flex-1 py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Check size={14} className="stroke-[3]" />
+                            <span>Dienst Bevestigen ("Gezien")</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Bottom Quick Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/20 text-xs">
+                  <div className="flex items-center gap-2 text-white/90 font-medium">
+                    <span className="text-sm">🔔</span>
+                    <span>Push-notificatie status: <strong>{pushStatus === 'granted' ? 'Ingeschakeld' : 'Niet ingeschakeld'}</strong></span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {unconfirmedShifts24h.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleAcknowledgeAllUnconfirmed()}
+                        className="px-4 py-2 bg-white text-red-700 hover:bg-red-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                      >
+                        <CheckCheck size={14} className="stroke-[3]" />
+                        <span>Alles Bevestigen ({unconfirmedShifts24h.length})</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowReminderModal(true)}
+                      className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      Volledig Bericht Lezen 📜
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : nextUrgentShift ? (
+            /* Standard 24h Upcoming Shift (Already Confirmed) */
             <div 
               id="shift-24h-reminder-banner"
-              className="bg-gradient-to-br from-amber-500 via-orange-500 to-red-500 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-orange-300 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2 duration-300"
+              className="bg-gradient-to-br from-emerald-600 via-teal-600 to-slate-800 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-emerald-400/50 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2 duration-300"
             >
               {/* Decorative subtle background elements */}
               <div className="absolute -top-10 -right-10 w-36 h-36 bg-white/10 rounded-full blur-xl pointer-events-none" />
@@ -878,13 +1157,13 @@ export default function StaffPortal({
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 relative z-10">
                 <div className="flex items-start gap-3.5">
                   <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-white shrink-0 border border-white/30 shadow-inner">
-                    <AlarmClock size={24} className="stroke-[2.5] animate-pulse" />
+                    <AlarmClock size={24} className="stroke-[2.5]" />
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="bg-white text-red-600 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-red-600 animate-ping inline-block shrink-0" />
-                        {nextUrgentShift.isOngoing ? '🚨 Nu Actief' : '⏰ Dienst Binnen 24 Uur!'}
+                      <span className="bg-emerald-200 text-emerald-950 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1.5">
+                        <CheckCheck size={12} className="stroke-[3] text-emerald-700" />
+                        <span>Volgende Dienst Binnen 24 Uur</span>
                       </span>
                       <span className="bg-black/25 text-white font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-white/20 shadow-xs">
                         {nextUrgentShift.timeRemainingText}
@@ -913,21 +1192,10 @@ export default function StaffPortal({
 
                 {/* Quick interactive action buttons */}
                 <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-start lg:justify-end pt-2 lg:pt-0 border-t border-white/20 lg:border-t-0">
-                  {!nextUrgentShift.shift.acknowledged ? (
-                    <button
-                      type="button"
-                      onClick={() => handleAcknowledgeClick(nextUrgentShift.shift.id)}
-                      className="px-4 py-2 bg-white hover:bg-orange-50 active:scale-95 text-orange-950 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer flex items-center gap-1.5"
-                    >
-                      <Check size={14} className="stroke-[3] text-orange-600" />
-                      <span>Dienst Bevestigen</span>
-                    </button>
-                  ) : (
-                    <div className="bg-white/20 border border-white/30 text-white font-black text-xs uppercase tracking-tight px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-xs">
-                      <CheckCheck size={14} className="text-emerald-300 stroke-[3]" />
-                      <span>Gezien & Bevestigd ✓</span>
-                    </div>
-                  )}
+                  <div className="bg-white/20 border border-white/30 text-white font-black text-xs uppercase tracking-tight px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-xs">
+                    <CheckCheck size={14} className="text-emerald-300 stroke-[3]" />
+                    <span>Gezien & Bevestigd ✓</span>
+                  </div>
 
                   <button
                     type="button"
@@ -971,7 +1239,7 @@ export default function StaffPortal({
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* Beschikbaarheid herinnering (compact) */}
           {!availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === NEXT_WEEK_NUMBER) && (
@@ -1002,15 +1270,23 @@ export default function StaffPortal({
         >
           <CalendarIcon size={14} />
           <span>Mijn Rooster</span>
-          {nextUrgentShift && (
+          {hasUnconfirmedShifts24h ? (
             <span 
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-red-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight animate-pulse shadow-xs ml-1"
-              title="Volgende dienst binnen 24 uur!"
+              className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight animate-bounce shadow-md ml-1 ring-2 ring-white"
+              title="🚨 Visueel Alarm: Onbevestigde dienst binnen 24 uur!"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" />
+              <span>🚨 {unconfirmedShifts24h.length} &lt;24u</span>
+            </span>
+          ) : nextUrgentShift ? (
+            <span 
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight shadow-xs ml-1"
+              title="Volgende dienst binnen 24 uur (reeds bevestigd)"
+            >
+              <CheckCheck size={10} className="stroke-[3]" />
               <span>&lt;24u</span>
             </span>
-          )}
+          ) : null}
         </button>
         <button
           id="staff-tab-uren-btn"
@@ -1246,6 +1522,93 @@ export default function StaffPortal({
               </div>
             )}
 
+            {/* Openstaande Diensten in de Planning: Direct Zelf Invullen */}
+            {(() => {
+              const weekOpenShifts = shifts.filter(s =>
+                (s.isOpenShift || s.employeeId === 'open_shift') &&
+                (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedWeek &&
+                s.status === 'published'
+              );
+
+              if (weekOpenShifts.length === 0) return null;
+
+              return (
+                <div className="bg-gradient-to-br from-amber-500/10 via-amber-50 to-orange-50 p-4 rounded-2xl border-2 border-amber-300 shadow-sm space-y-3 text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black text-sm shadow-xs shrink-0">
+                        📢
+                      </span>
+                      <div>
+                        <h4 className="text-xs font-black uppercase tracking-tight text-amber-950 flex items-center gap-1.5">
+                          <span>Openstaande Diensten in Week {selectedWeek}</span>
+                          <span className="bg-amber-300 text-amber-950 px-2 py-0.5 rounded-full text-[10px] font-black uppercase">
+                            {weekOpenShifts.length} {weekOpenShifts.length === 1 ? 'dienst' : 'diensten'}
+                          </span>
+                        </h4>
+                        <p className="text-[11px] font-medium text-amber-800">
+                          Deze diensten staan open in de planning. Schrijf jezelf direct in om in te springen!
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {weekOpenShifts.map((sh) => {
+                      const dayDateInfo = getDayDateInfo(selectedWeek, sh.day);
+                      const isOwnShift = sh.employeeId === activeEmployeeId;
+
+                      return (
+                        <div
+                          key={sh.id}
+                          className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-xs flex flex-col justify-between space-y-2.5"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-black text-slate-800">
+                                {DAYS_OF_WEEK[sh.day]} ({dayDateInfo.shortDate})
+                              </span>
+                              <span className={`px-2 py-0.5 rounded-full font-black text-[9px] uppercase tracking-wider ${
+                                sh.department === 'keuken' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                {sh.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 text-xs font-black text-amber-900">
+                              <Clock size={12} className="text-amber-600" />
+                              <span>{sh.startTime} - {sh.endTime}</span>
+                            </div>
+
+                            {sh.notes && (
+                              <p className="text-[11px] text-slate-600 italic bg-slate-50 p-2 rounded-lg border border-slate-150">
+                                "{sh.notes}"
+                              </p>
+                            )}
+                          </div>
+
+                          {onSelfAssignOpenShift && (
+                            <button
+                              type="button"
+                              disabled={isOwnShift}
+                              onClick={() => {
+                                if (window.confirm(`Wil je jezelf inplannen voor de dienst op ${DAYS_OF_WEEK[sh.day]} (${sh.startTime} - ${sh.endTime})?`)) {
+                                  onSelfAssignOpenShift(sh.id, activeEmployeeId);
+                                }
+                              }}
+                              className="w-full py-2 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                            >
+                              <span>⚡ Ik wil deze dienst werken (Zelf invullen)</span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {personalShifts.length === 0 ? (
               <div className="bg-white p-8 text-center rounded-2xl border border-slate-150 shadow-sm text-slate-400 text-xs">
                 Geen geplande diensten voor jou deze week! Geniet van je vrije tijd.
@@ -1255,19 +1618,28 @@ export default function StaffPortal({
                 {personalShifts.map((sh) => {
                   const alertDetails = getShift24HourDetails(sh, currentTime);
                   const isUrgent = !!alertDetails?.isWithin24Hours;
+                  const isUrgentUnconfirmed = isUrgent && !sh.acknowledged;
                   return (
                     <div 
                       key={sh.id} 
                       className={`bg-white p-4 rounded-2xl border shadow-sm transition space-y-3 relative overflow-hidden ${
-                        isUrgent
-                          ? 'border-red-400 ring-4 ring-red-100 bg-red-50/20 shadow-md'
+                        isUrgentUnconfirmed
+                          ? 'border-2 border-red-500 ring-4 ring-red-200/90 bg-red-50/30 shadow-lg'
+                          : isUrgent
+                          ? 'border-emerald-400 ring-2 ring-emerald-100 bg-emerald-50/10'
                           : (!sh.acknowledged ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-100')
                       }`}
                     >
-                      {isUrgent ? (
-                        <span className="absolute top-0 right-0 px-3 py-1 rounded-bl-xl bg-gradient-to-r from-red-600 to-orange-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1 shadow-xs animate-pulse">
+                      {isUrgentUnconfirmed ? (
+                        <span className="absolute top-0 right-0 px-3 py-1 rounded-bl-xl bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
                           <AlarmClock size={11} className="stroke-[3]" />
-                          <span>{alertDetails?.isOngoing ? 'Nu bezig' : 'Binnen 24 uur'} • {alertDetails?.timeRemainingText}</span>
+                          <span>🚨 ALARM: NOG NIET BEVESTIGD • {alertDetails?.timeRemainingText}</span>
+                        </span>
+                      ) : isUrgent ? (
+                        <span className="absolute top-0 right-0 px-3 py-1 rounded-bl-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1 shadow-xs">
+                          <CheckCheck size={11} className="stroke-[3]" />
+                          <span>Bevestigd ✓ • {alertDetails?.timeRemainingText}</span>
                         </span>
                       ) : (
                         !sh.acknowledged && (
@@ -1307,10 +1679,14 @@ export default function StaffPortal({
                       {!sh.acknowledged ? (
                         <button
                           onClick={() => handleAcknowledgeClick(sh.id)}
-                          className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center justify-center space-x-1.5 duration-100"
+                          className={`flex-1 py-2.5 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center justify-center space-x-1.5 duration-100 ${
+                            isUrgentUnconfirmed
+                              ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 hover:from-red-700 hover:to-amber-700 ring-2 ring-red-300 animate-pulse'
+                              : 'bg-orange-500 hover:bg-orange-600'
+                          }`}
                         >
                           <Check size={14} className="stroke-[3]" />
-                          <span>Bevestigen</span>
+                          <span>{isUrgentUnconfirmed ? '🚨 Nu Bevestigen ("Gezien")' : 'Dienst Bevestigen'}</span>
                         </button>
                       ) : (
                         <div className="flex-1 bg-emerald-100 text-emerald-950 border-2 border-emerald-200 rounded-xl p-2 text-[10px] font-black uppercase tracking-tight flex items-center justify-center gap-1.5">
@@ -1600,7 +1976,21 @@ export default function StaffPortal({
                           </div>
 
                           {/* Action button */}
-                          <div className="pt-2 border-t border-slate-100 mt-2">
+                          <div className="pt-2 border-t border-slate-100 mt-2 space-y-2">
+                            {onSelfAssignOpenShift && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`Weet je zeker dat je deze openstaande dienst direct wilt aannemen? Je wordt meteen ingeroosterd in de planning!`)) {
+                                    onSelfAssignOpenShift(req.shiftId, activeEmployeeId);
+                                  }
+                                }}
+                                className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-md transition duration-150 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                              >
+                                <span>⚡ Direct Jezelf Inplannen (Dienst aannemen)</span>
+                              </button>
+                            )}
+
                             {hasSignedUp ? (
                               <button
                                 type="button"
@@ -1608,7 +1998,7 @@ export default function StaffPortal({
                                 className="w-full py-2 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-xs font-bold rounded-xl border border-slate-200 hover:border-rose-200 transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
                               >
                                 <X size={13} />
-                                <span>Mijn intekening intrekken</span>
+                                <span>Mijn kandidaatstelling intrekken</span>
                               </button>
                             ) : (
                               <button
@@ -1618,10 +2008,10 @@ export default function StaffPortal({
                                     onSignUpForOpenShift(req.id, activeEmployeeId, currentEmployee.name, 'Beschikbaar voor deze shift');
                                   }
                                 }}
-                                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-xs transition duration-150 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                                className="w-full py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold uppercase tracking-tight rounded-xl shadow-2xs transition duration-150 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
                               >
-                                <Check size={14} className="stroke-[3]" />
-                                <span>🙋 Ik kan inspringen! (Intekenen)</span>
+                                <Check size={13} className="stroke-[3]" />
+                                <span>🙋 Ik kan ook inspringen (Aanmelden)</span>
                               </button>
                             )}
                           </div>
@@ -1793,12 +2183,17 @@ export default function StaffPortal({
       {/* 3. GROUP NOTICE BOARD */}
       {activeSubTab === 'berichten' && (
         <div className="space-y-4 font-sans text-left">
-          <div>
-            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-              <Megaphone size={16} className="text-orange-500 shrink-0" />
-              <span>Mededelingen</span>
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">Updates en berichten vanuit de zaak.</p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b-2 border-orange-100 pb-3">
+            <div>
+              <h3 className="font-extrabold text-slate-800 text-sm flex items-center gap-2 uppercase tracking-tight">
+                <Megaphone size={18} className="text-orange-500 shrink-0" />
+                <span>Mededelingen & Communicatie</span>
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Updates, belangrijke berichten en reacties vanuit het team.</p>
+            </div>
+            <span className="text-xs font-black text-orange-950 bg-orange-100 px-3 py-1 rounded-full border border-orange-200 self-start sm:self-auto">
+              💬 Reageer direct op berichten
+            </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
@@ -1806,18 +2201,23 @@ export default function StaffPortal({
               .filter((not) => !not.targetEmployeeId || not.targetEmployeeId === currentEmployee.id)
               .map((not) => {
                 const isPersonalReminder = not.targetEmployeeId === currentEmployee.id;
+                const replyText = staffNoticeReplyText[not.id] || '';
+                const reactions = not.reactions || {};
+                const reactionEmojis = ['👍', '❤️', '👏', '✔️', '🙌'];
+                const comments = not.comments || [];
+
                 return (
                   <div 
                     key={not.id} 
-                    className={`p-5 rounded-3xl shadow-sm border-2 relative overflow-hidden flex flex-col justify-between min-h-[160px] hover:shadow-md transition ${
+                    className={`p-5 rounded-3xl shadow-sm border-2 relative overflow-hidden flex flex-col justify-between space-y-4 transition ${
                       isPersonalReminder
                         ? 'bg-amber-50/70 border-amber-300 ring-2 ring-amber-200'
-                        : 'bg-white border-orange-100'
+                        : 'bg-white border-orange-100 hover:border-orange-200'
                     }`}
                   >
                     <div className="space-y-3">
                       <div className="flex justify-between items-center text-[10px]">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className={`px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
                             {CATEGORY_ICONS[not.category]} {not.category}
                           </span>
@@ -1832,12 +2232,135 @@ export default function StaffPortal({
                       </div>
 
                       <h4 className="font-black text-xs text-slate-800 uppercase tracking-tight leading-snug">{not.title}</h4>
-                      <p className="text-xs text-slate-650 leading-relaxed">{not.content}</p>
+                      <p className="text-xs text-slate-650 leading-relaxed font-medium">{not.content}</p>
                     </div>
 
-                    <div className="pt-3 border-t border-orange-50 text-[10px] text-slate-400 flex justify-between items-center mt-4 font-bold uppercase">
-                      <span>Auteur: <strong className="text-slate-600">{not.author}</strong></span>
-                      <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-250"><CheckCheck size={11} className="stroke-[3.5]" /> Gelezen</span>
+                    {/* Emoji Quick Reactions Bar */}
+                    <div className="pt-2 border-t border-orange-50 space-y-2">
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase">
+                        <span>Auteur: <strong className="text-slate-700">{not.author}</strong></span>
+                        <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-250">
+                          <CheckCheck size={11} className="stroke-[3.5]" /> Gelezen
+                        </span>
+                      </div>
+
+                      {/* Emoji reaction pills */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                        {reactionEmojis.map((emoji) => {
+                          const users = reactions[emoji] || [];
+                          const hasReacted = users.includes(activeEmployeeId);
+                          return (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => onToggleNoticeReaction && onToggleNoticeReaction(not.id, emoji, activeEmployeeId)}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
+                                hasReacted
+                                  ? 'bg-orange-100 text-orange-950 border-orange-300 ring-1 ring-orange-200 shadow-2xs'
+                                  : 'bg-slate-50 hover:bg-orange-50/60 text-slate-600 border-slate-200'
+                              }`}
+                              title={hasReacted ? 'Klik om reactie te verwijderen' : `Reageer met ${emoji}`}
+                            >
+                              <span>{emoji}</span>
+                              {users.length > 0 && (
+                                <span className={`text-[10px] font-black ${hasReacted ? 'text-orange-900' : 'text-slate-500'}`}>
+                                  {users.length}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Comments / Responses Thread */}
+                    <div className="bg-orange-50/25 rounded-2xl p-3 border border-orange-100 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-tight text-slate-700 flex items-center gap-1">
+                          <MessageCircle size={12} className="text-orange-500" />
+                          <span>Reacties ({comments.length})</span>
+                        </span>
+                      </div>
+
+                      {/* Comments list */}
+                      {comments.length > 0 ? (
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                          {comments.map((cmt) => {
+                            const isOwn = cmt.authorId === activeEmployeeId;
+                            return (
+                              <div 
+                                key={cmt.id} 
+                                className={`p-2 rounded-xl text-xs space-y-0.5 border ${
+                                  isOwn 
+                                    ? 'bg-amber-50/80 border-amber-200' 
+                                    : cmt.authorRole === 'beheerder'
+                                      ? 'bg-orange-50/90 border-orange-200'
+                                      : 'bg-white border-slate-200'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between text-[10px]">
+                                  <div className="flex items-center gap-1 font-black">
+                                    <span className={isOwn ? 'text-orange-800' : 'text-slate-800'}>
+                                      {cmt.authorName} {isOwn && '(Jij)'}
+                                    </span>
+                                    <span className={`text-[8.5px] px-1 py-0.2 rounded uppercase ${
+                                      cmt.authorRole === 'beheerder' 
+                                        ? 'bg-amber-200 text-amber-950 font-bold' 
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}>
+                                      {cmt.authorRole === 'beheerder' ? '👑 Beheerder' : 'Collega'}
+                                    </span>
+                                  </div>
+                                  <span className="text-[9px] text-slate-400">
+                                    {new Date(cmt.createdAt).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <p className="text-slate-700 text-xs font-medium leading-relaxed">{cmt.content}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 italic">Plaats als eerste een reactie...</p>
+                      )}
+
+                      {/* Reply input form */}
+                      {onAddNoticeComment && (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!replyText.trim() || !currentEmployee) return;
+                            onAddNoticeComment(
+                              not.id,
+                              activeEmployeeId,
+                              currentEmployee.name,
+                              'medewerker',
+                              replyText.trim()
+                            );
+                            setStaffNoticeReplyText(prev => ({ ...prev, [not.id]: '' }));
+                          }}
+                          className="flex gap-1.5 pt-1"
+                        >
+                          <input
+                            type="text"
+                            value={replyText}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setStaffNoticeReplyText(prev => ({ ...prev, [not.id]: val }));
+                            }}
+                            placeholder={`Reageer als ${currentEmployee.name.split(' ')[0]}...`}
+                            className="flex-1 bg-white border border-orange-200 text-slate-800 placeholder-slate-400 rounded-xl px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                          <button
+                            type="submit"
+                            disabled={!replyText.trim()}
+                            className="px-2.5 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1 transition cursor-pointer shadow-xs active:scale-95 shrink-0"
+                          >
+                            <Send size={11} />
+                            <span>Stuur</span>
+                          </button>
+                        </form>
+                      )}
                     </div>
                   </div>
                 );
@@ -3519,6 +4042,18 @@ export default function StaffPortal({
           shifts={shifts}
           initialWeek={selectedWeek}
           initialDepartment={rosterDeptFilter === 'all' ? 'keuken' : rosterDeptFilter}
+        />
+      )}
+
+      {/* Automatisch Herinneringsbericht & Visueel Alarm Modal (shifts < 24u niet op "Gezien") */}
+      {currentEmployee && (
+        <StaffShiftAlarmModal
+          isOpen={showReminderModal}
+          onClose={handleCloseReminderModal}
+          employee={currentEmployee}
+          unconfirmedAlerts={unconfirmedShifts24h}
+          onAcknowledgeShift={handleAcknowledgeClick}
+          onAcknowledgeAllShifts={handleAcknowledgeAllUnconfirmed}
         />
       )}
 

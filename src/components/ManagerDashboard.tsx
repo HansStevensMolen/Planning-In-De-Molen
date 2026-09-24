@@ -45,7 +45,10 @@ import {
   ShieldCheck,
   Crown,
   Bell,
-  BellRing
+  BellRing,
+  Eye,
+  Info,
+  BarChart3
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta } from '../types';
 import NotificationModal from './NotificationModal';
@@ -56,6 +59,7 @@ import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
+import StaffAvailabilityChart from './StaffAvailabilityChart';
 import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks, getEffectiveEmployeeAvailability, isRecurringApplicableToWeek, DAYS_FULL_NL } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
@@ -99,6 +103,17 @@ interface ManagerDashboardProps {
   onRestoreSchedule?: (restoredShifts: Shift[], weekNumber: number) => void;
   onBatchUpdateShifts?: (newShifts: Shift[], logDetails?: string) => void;
   onOpenShareModal?: () => void;
+  onDeleteNotice?: (noticeId: string) => void;
+  onAddNoticeComment?: (
+    noticeId: string,
+    authorId: string,
+    authorName: string,
+    authorRole: 'beheerder' | 'medewerker',
+    content: string
+  ) => void;
+  onToggleNoticeReaction?: (noticeId: string, emoji: string, employeeId: string) => void;
+  onDeleteNoticeComment?: (noticeId: string, commentId: string) => void;
+  onSelfAssignOpenShift?: (shiftId: string, employeeId: string) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -143,8 +158,17 @@ export default function ManagerDashboard({
   onBatchUpdateShifts,
   onOpenShareModal,
   onOpenShiftForSwap,
-  onCreateOpenShift
+  onCreateOpenShift,
+  onDeleteNotice,
+  onAddNoticeComment,
+  onToggleNoticeReaction,
+  onDeleteNoticeComment,
+  onSelfAssignOpenShift
 }: ManagerDashboardProps) {
+  // Notices deletion & comments state for managers
+  const [noticeToDeleteId, setNoticeToDeleteId] = useState<string | null>(null);
+  const [managerNoticeReplyText, setManagerNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
+
   // Tabs within manager dashboard: Zaal (IDM zaal), Keuken (IDM keuken), Beschikbaarheden (alleen beheerder!), etc.
   const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team'>('zaal');
 
@@ -154,6 +178,7 @@ export default function ManagerDashboard({
   const [managerAvailDeptFilter, setManagerAvailDeptFilter] = useState<'all' | Department>('all');
   const [managerAvailStatuutFilter, setManagerAvailStatuutFilter] = useState<'all' | EmployeeStatuut>('all');
   const [managerAvailExperienceFilter, setManagerAvailExperienceFilter] = useState<'all' | ExperienceLevel>('all');
+  const [showAvailabilityChart, setShowAvailabilityChart] = useState<boolean>(true);
 
   // Six-weeks horizon states
   const [showSixWeeksModal, setShowSixWeeksModal] = useState(false);
@@ -186,6 +211,7 @@ export default function ManagerDashboard({
   const [showExcelSyncModal, setShowExcelSyncModal] = useState(false);
   const [showExcelAvailabilityModal, setShowExcelAvailabilityModal] = useState(false);
   const [showShiftModal, setShowShiftModal] = useState(false);
+  const [selectedAvailabilityDetail, setSelectedAvailabilityDetail] = useState<{ employee: Employee; weekNumber: number } | null>(null);
   const [showQuickNoticeModal, setShowQuickNoticeModal] = useState(false);
   const [isConfirmingDeleteShift, setIsConfirmingDeleteShift] = useState(false);
   const [selectedShift, setSelectedShift] = useState<Partial<Shift> & { isNew: boolean }>({ isNew: true });
@@ -539,28 +565,33 @@ export default function ManagerDashboard({
 
   const handleSaveShift = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedShift.employeeId || selectedShift.day === undefined || !selectedShift.startTime || !selectedShift.endTime) return;
+    const isOpen = Boolean(selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift');
+    const effectiveEmpId = selectedShift.employeeId || (isOpen ? 'open_shift' : '');
+    
+    if (!effectiveEmpId || selectedShift.day === undefined || !selectedShift.startTime || !selectedShift.endTime) return;
 
-    const shiftDept = selectedShift.department || (employees.find(e => e.id === selectedShift.employeeId)?.department) || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
+    const shiftDept = selectedShift.department || (employees.find(e => e.id === effectiveEmpId)?.department) || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
     const targetWeekNumber = selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek;
-    const assignedEmp = employees.find(e => e.id === selectedShift.employeeId);
+    const assignedEmp = employees.find(e => e.id === effectiveEmpId);
 
     // Controleer strikte arbeidswetgeving voor minderjarige studenten (< 18: max 23u00 en max 8u/dag)
-    const minorValidation = validateMinorShift(
-      assignedEmp,
-      { startTime: selectedShift.startTime, endTime: selectedShift.endTime, day: selectedShift.day },
-      shifts.filter(s => s.weekNumber === targetWeekNumber),
-      selectedShift.id
-    );
+    if (assignedEmp) {
+      const minorValidation = validateMinorShift(
+        assignedEmp,
+        { startTime: selectedShift.startTime, endTime: selectedShift.endTime, day: selectedShift.day },
+        shifts.filter(s => s.weekNumber === targetWeekNumber),
+        selectedShift.id
+      );
 
-    if (!minorValidation.valid) {
-      setShiftValidationError(minorValidation.error || 'Deze dienst is wettelijk niet toegestaan voor minderjarige studenten.');
-      return;
+      if (!minorValidation.valid) {
+        setShiftValidationError(minorValidation.error || 'Deze dienst is wettelijk niet toegestaan voor minderjarige studenten.');
+        return;
+      }
     }
 
-    if (selectedShift.isOpenShift && onCreateOpenShift && selectedShift.isNew) {
+    if (isOpen && onCreateOpenShift && selectedShift.isNew) {
       onCreateOpenShift({
-        employeeId: selectedShift.employeeId,
+        employeeId: effectiveEmpId,
         department: shiftDept,
         weekNumber: targetWeekNumber,
         day: selectedShift.day,
@@ -570,30 +601,30 @@ export default function ManagerDashboard({
         status: (selectedShift.status as 'draft' | 'published') || 'published',
         acknowledged: false,
         isOpenShift: true
-      }, selectedShift.notes || 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in via het Ruilbord!');
-      setSixWeeksSuccessMsg('📢 Openstaande dienst direct aangemaakt en gepubliceerd op het Ruilbord voor intekening!');
+      }, selectedShift.notes || 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!');
+      setSixWeeksSuccessMsg('📢 Openstaande dienst direct in de planning opengezet voor intekening door medewerkers!');
       setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
     } else if (selectedShift.isNew) {
       onAddShift({
-        employeeId: selectedShift.employeeId,
+        employeeId: effectiveEmpId,
         department: shiftDept,
         weekNumber: targetWeekNumber,
         day: selectedShift.day,
         startTime: selectedShift.startTime,
         endTime: selectedShift.endTime,
         notes: selectedShift.notes || '',
-        status: (selectedShift.status as 'draft' | 'published') || 'draft',
+        status: (selectedShift.status as 'draft' | 'published') || (isOpen ? 'published' : 'draft'),
         acknowledged: false,
-        isOpenShift: selectedShift.isOpenShift || false
+        isOpenShift: isOpen
       });
-      if (selectedShift.isOpenShift) {
-        setSixWeeksSuccessMsg('📢 Nieuwe dienst aangemaakt als openstaande shift.');
+      if (isOpen) {
+        setSixWeeksSuccessMsg('📢 Nieuwe openstaande shift aangemaakt in de planning.');
         setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
       }
     } else {
       onUpdateShift({
         id: selectedShift.id!,
-        employeeId: selectedShift.employeeId,
+        employeeId: effectiveEmpId,
         department: shiftDept,
         weekNumber: targetWeekNumber,
         day: selectedShift.day,
@@ -602,12 +633,12 @@ export default function ManagerDashboard({
         notes: selectedShift.notes || '',
         acknowledged: selectedShift.acknowledged || false,
         status: (selectedShift.status as 'draft' | 'published') || 'draft',
-        isOpenShift: selectedShift.isOpenShift || false,
+        isOpenShift: isOpen,
         updatedAt: Date.now()
       });
-      if (selectedShift.isOpenShift && onOpenShiftForSwap && selectedShift.id) {
+      if (isOpen && onOpenShiftForSwap && selectedShift.id) {
         onOpenShiftForSwap(selectedShift.id, selectedShift.notes || 'Openstaande dienst');
-        setSixWeeksSuccessMsg('📢 Dienst opengesteld voor intekening op het Ruilbord!');
+        setSixWeeksSuccessMsg('📢 Dienst in de planning opengesteld voor medewerkers om zichzelf in te vullen!');
         setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
       }
     }
@@ -1320,6 +1351,16 @@ export default function ManagerDashboard({
               </button>
 
               <button
+                type="button"
+                onClick={() => setActiveSubTab('beschikbaarheid')}
+                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title="Bekijk de visuele Recharts grafiek van de personeelsbeschikbaarheid per dag"
+              >
+                <BarChart3 size={15} />
+                <span>Beschikbaarheid Grafiek 📊</span>
+              </button>
+
+              <button
                 onClick={() => {
                   setSelectedShift({
                     isNew: true,
@@ -1863,6 +1904,110 @@ export default function ManagerDashboard({
                   </tr>
                 </thead>
                 <tbody className="bg-white">
+                  {/* RIJ: OPENSTAANDE SHIFTEN WAAR MEDEWERKERS ZICHZELF KUNNEN INVULLEN */}
+                  <tr className="bg-amber-50/60 hover:bg-amber-100/40 transition-colors border-b-2 border-amber-300">
+                    {/* Sticky Column: Open Diensten Badge */}
+                    <td className="sticky left-0 z-10 w-52 min-w-[210px] max-w-[210px] px-4 py-3.5 whitespace-nowrap bg-amber-100/95 border-r-2 border-b-2 border-amber-300 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)]">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black text-sm shadow-xs shrink-0 ring-2 ring-amber-300">
+                          📢
+                        </div>
+                        <div className="truncate">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-black text-amber-950 uppercase tracking-tight">Open Shiften</span>
+                            <span className="text-[9px] bg-amber-300 text-amber-950 font-black px-1.5 py-0.2 rounded-full uppercase">Zelf invullen</span>
+                          </div>
+                          <div className="text-[10px] font-bold text-amber-800 truncate">
+                            Medewerkers plannen zichzelf in
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Day Columns */}
+                    {DAYS_OF_WEEK.map((day, dayIdx) => {
+                      const dayOpenShifts = shifts.filter(s =>
+                        (s.isOpenShift || s.employeeId === 'open_shift') &&
+                        s.day === dayIdx &&
+                        (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek &&
+                        (s.department === (isZaal ? 'zaal' : 'keuken') || !s.department)
+                      );
+
+                      return (
+                        <td key={`open-col-${dayIdx}`} className="px-2 py-2.5 border-r border-b border-amber-200 align-top bg-amber-50/30 min-w-[135px]">
+                          <div className="space-y-1.5 min-h-[64px] flex flex-col justify-start">
+                            {dayOpenShifts.map((sh) => {
+                              const swap = swapRequests.find(r => r.shiftId === sh.id);
+                              const candidatesCount = swap?.candidates?.length || 0;
+                              const assignedEmp = sh.employeeId && sh.employeeId !== 'open_shift' ? employees.find(e => e.id === sh.employeeId) : null;
+
+                              return (
+                                <div
+                                  key={sh.id}
+                                  onClick={() => handleOpenEditShift(sh)}
+                                  className="p-2 rounded-xl text-left border-2 border-amber-400 bg-amber-100/80 hover:bg-amber-200/90 hover:border-amber-500 shadow-xs cursor-pointer transition relative group/openshift"
+                                  title="Klik om deze openstaande shift te bewerken of toe te wijzen"
+                                >
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-xs font-black text-amber-950 flex items-center gap-1">
+                                      <Clock size={11} className="text-amber-700 shrink-0" />
+                                      {sh.startTime} - {sh.endTime}
+                                    </span>
+                                    <span className="text-[9px] px-1.5 py-0.2 font-black uppercase rounded bg-amber-500 text-white shadow-2xs">
+                                      Open
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 mt-1">
+                                    <span className="truncate max-w-[85px]">
+                                      {assignedEmp ? `${assignedEmp.name.split(' ')[0]}` : 'Open (iedereen)'}
+                                    </span>
+                                    <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
+                                      candidatesCount > 0 ? 'bg-emerald-200 text-emerald-950' : 'bg-amber-200/80 text-amber-900'
+                                    }`}>
+                                      {candidatesCount > 0 ? `👥 ${candidatesCount}` : '⏳ Open'}
+                                    </span>
+                                  </div>
+
+                                  {sh.notes && (
+                                    <p className="text-[9.5px] italic text-amber-800 line-clamp-1 mt-0.5">
+                                      {sh.notes}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShiftValidationError(null);
+                                setSelectedShift({
+                                  isNew: true,
+                                  weekNumber: selectedManagerWeek,
+                                  day: dayIdx,
+                                  department: isZaal ? 'zaal' : 'keuken',
+                                  isOpenShift: true,
+                                  employeeId: 'open_shift',
+                                  status: 'published',
+                                  startTime: '17:00',
+                                  endTime: '01:00',
+                                  notes: 'Openstaande shift: wie kan er inspringen? Schrijf je direct in!'
+                                });
+                                setShowShiftModal(true);
+                              }}
+                              className="w-full py-1 px-2 rounded-xl text-[10px] font-black uppercase tracking-tight text-amber-800 hover:text-amber-950 bg-amber-100/70 hover:bg-amber-200 border border-dashed border-amber-300 transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 mt-auto"
+                              title={`Nieuwe openstaande shift openzetten voor ${day}`}
+                            >
+                              <Plus size={11} className="stroke-[3]" />
+                              <span>+ Open Dienst</span>
+                            </button>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+
                   {deptEmployees.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-4 py-8 text-center text-xs font-bold text-slate-400 uppercase border-b border-orange-100">
@@ -1899,6 +2044,8 @@ export default function ManagerDashboard({
                             s.day === dayIdx &&
                             (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek
                           );
+                          const empAvailResult = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
+                          const empDayAvail = empAvailResult.availability?.days.find(d => d.day === dayIdx);
                           return (
                             <td key={dayIdx} className="px-2 py-3 border-r border-b border-orange-100 align-top min-h-[96px] min-w-[135px]">
                             <div className="space-y-2 min-h-[64px] flex flex-col justify-start">
@@ -2062,6 +2209,35 @@ export default function ManagerDashboard({
                                 );
                               })}
 
+                              {/* Availability & Preference chip if no shift yet */}
+                              {dayShifts.length === 0 && empDayAvail && (
+                                <div 
+                                  onClick={() => handleOpenAddShift(emp.id, dayIdx)}
+                                  className={`p-1.5 rounded-xl border text-center transition cursor-pointer hover:shadow-xs mb-1 ${
+                                    empDayAvail.status === 'preferred'
+                                      ? 'bg-amber-50/90 border-amber-250 text-amber-950 hover:bg-amber-100'
+                                      : empDayAvail.status === 'available'
+                                        ? 'bg-emerald-50/80 border-emerald-250 text-emerald-950 hover:bg-emerald-100'
+                                        : 'bg-rose-50/80 border-rose-250 text-rose-800 hover:bg-rose-100'
+                                  }`}
+                                  title={`Opgegeven beschikbaarheid: ${empDayAvail.status === 'preferred' ? 'Voorkeur' : empDayAvail.status === 'available' ? 'Beschikbaar' : 'Niet-beschikbaar'}${empDayAvail.status !== 'unavailable' ? ` (${empDayAvail.startTime || 'Open'} - ${empDayAvail.endTime || 'Sluit'})` : ''}${empDayAvail.notes ? `\n"${empDayAvail.notes}"` : ''}. Klik om dienst in te plannen.`}
+                                >
+                                  <div className="flex items-center justify-center gap-1 font-black text-[10px] leading-tight">
+                                    <span>{empDayAvail.status === 'preferred' ? '⭐ Voorkeur' : empDayAvail.status === 'available' ? '✓ Beschikbaar' : '✕ Niet-beschikbaar'}</span>
+                                  </div>
+                                  {empDayAvail.status !== 'unavailable' && (
+                                    <div className="text-[9px] font-black text-slate-700 tracking-tight mt-0.5">
+                                      {empDayAvail.startTime || 'Open'} - {empDayAvail.endTime || 'Sluit'}
+                                    </div>
+                                  )}
+                                  {empDayAvail.notes && (
+                                    <div className="text-[8.5px] italic text-slate-500 truncate mt-0.5 max-w-[120px] mx-auto">
+                                      "{empDayAvail.notes}"
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
                               {/* Create button shown on cell focus/hover */}
                               <button
                                 onClick={() => handleOpenAddShift(emp.id, dayIdx)}
@@ -2159,6 +2335,19 @@ export default function ManagerDashboard({
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
+                  onClick={() => setShowAvailabilityChart(prev => !prev)}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-tight flex items-center space-x-2 transition cursor-pointer border shadow-sm active:scale-95 ${
+                    showAvailabilityChart
+                      ? 'bg-orange-500 text-white border-orange-600 shadow-md shadow-orange-200'
+                      : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
+                  }`}
+                  title="Toon of verberg de visuele Recharts grafiek van de weekbeschikbaarheid"
+                >
+                  <BarChart3 size={15} />
+                  <span>{showAvailabilityChart ? 'Grafiek Verbergen' : 'Visuele Grafiek Tonen 📊'}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setShowExcelAvailabilityModal(true)}
                   className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-emerald-500"
                   title="Excel bestand uploaden of sjabloon downloaden voor bulk beschikbaarheden"
@@ -2230,6 +2419,17 @@ export default function ManagerDashboard({
                 <span className="text-2xl bg-blue-50 p-3 rounded-2xl border-2 border-blue-100 border bg-slate-50">🔒</span>
               </div>
             </div>
+
+            {/* Visuele Grafiek Personeelsbeschikbaarheid per Dag (Recharts) */}
+            {showAvailabilityChart && (
+              <StaffAvailabilityChart
+                employees={employees}
+                shifts={shifts}
+                availabilities={availabilities}
+                weekNumber={selectedManagerWeek}
+                onSelectEmployeeDetail={(emp, wk) => setSelectedAvailabilityDetail({ employee: emp, weekNumber: wk })}
+              />
+            )}
 
             {/* Control Filters Area */}
             <div className="bg-white p-5 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
@@ -2447,14 +2647,17 @@ export default function ManagerDashboard({
                                     emp.name.split(' ').map(n => n[0]).join('')
                                   )}
                                 </span>
-                                <div className="truncate">
-                                  <div className="flex items-center gap-1.5">
-                                    <p className="text-xs font-black text-slate-800 leading-tight uppercase truncate max-w-[130px]" title={emp.name}>{emp.name}</p>
-                                    {(emp.contractDaysPerWeek === 4 || emp.name === "Pat" || emp.name.toLowerCase().includes("matthias") || emp.name.toLowerCase().includes("mathias")) && (
-                                      <span className="text-[8px] font-black bg-purple-100 text-purple-800 border border-purple-200 px-1 py-0.2 rounded shrink-0" title="Fulltime regime: 4 dagen per week">
-                                        4d
-                                      </span>
-                                    )}
+                                <div className="truncate flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <p className="text-xs font-black text-slate-800 leading-tight uppercase truncate max-w-[115px]" title={emp.name}>{emp.name}</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedAvailabilityDetail({ employee: emp, weekNumber: selectedManagerWeek })}
+                                      className="p-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 transition cursor-pointer shrink-0"
+                                      title="Bekijk alle weekdetails en uren van deze medewerker"
+                                    >
+                                      <Eye size={12} />
+                                    </button>
                                   </div>
                                   <span className="text-[9px] font-black uppercase text-orange-600 tracking-wider block truncate">
                                     {emp.statuut} {emp.contractDaysPerWeek === 4 ? '(4d)' : ''} ({emp.experience})
@@ -2499,43 +2702,72 @@ export default function ManagerDashboard({
                               const dayAvail = employeeAvail?.days.find(d => d.day === dayIdx);
                               
                               let bgClass = 'bg-slate-50/50 text-slate-400';
-                              let badgeText = '—';
+                              let badgeText = 'Geen opgave';
                               let icon = '⚪';
                               let hasNotes = false;
 
                               if (dayAvail) {
                                 hasNotes = !!dayAvail.notes?.trim();
                                 if (dayAvail.status === 'preferred') {
-                                  bgClass = 'bg-amber-50/60 border-amber-250 text-amber-950 font-extrabold';
+                                  bgClass = 'bg-amber-50/70 border-amber-300 text-amber-950 font-extrabold';
                                   badgeText = 'Voorkeur';
                                   icon = '⭐';
                                 } else if (dayAvail.status === 'available') {
-                                  bgClass = 'bg-emerald-50/60 border-emerald-250 text-emerald-950';
+                                  bgClass = 'bg-emerald-50/60 border-emerald-300 text-emerald-950';
                                   badgeText = 'Beschikbaar';
                                   icon = '✓';
                                 } else if (dayAvail.status === 'unavailable') {
-                                  bgClass = 'bg-rose-50/60 border-rose-250 text-rose-800';
+                                  bgClass = 'bg-rose-50/60 border-rose-300 text-rose-800';
                                   badgeText = 'Niet-beschikbaar';
                                   icon = '✕';
                                 }
                               }
 
                               return (
-                                <td key={dayIdx} className={`px-2 py-3 border-r border-b border-slate-200/70 text-center text-[10px] font-bold min-w-[125px] ${bgClass}`}>
-                                  <div className="flex flex-col items-center justify-center space-y-0.5">
-                                    <span className="text-[11px] font-black flex items-center justify-center gap-0.5">
-                                      {isFromRecurring && <span className="text-[9px] text-indigo-600 font-bold" title="Vaste herhaling">🔁</span>}
-                                      <span>{icon} {badgeText}</span>
-                                    </span>
+                                <td 
+                                  key={dayIdx} 
+                                  onClick={() => setSelectedAvailabilityDetail({ employee: emp, weekNumber: selectedManagerWeek })}
+                                  className={`px-2 py-2.5 border-r border-b border-slate-200/70 text-center min-w-[140px] cursor-pointer transition hover:bg-orange-100/50 hover:shadow-xs group/cell ${bgClass}`}
+                                  title="Klik om alle weekdetails te bekijken"
+                                >
+                                  <div className="flex flex-col items-center justify-center space-y-1">
+                                    <div className="flex items-center justify-center gap-1">
+                                      {isFromRecurring && <span className="text-[10px]" title="Vaste herhaling">🔁</span>}
+                                      {dayAvail ? (
+                                        dayAvail.status === 'preferred' ? (
+                                          <span className="px-2 py-0.5 rounded-full bg-amber-200/95 text-amber-950 font-black text-[10.5px] inline-flex items-center gap-1 shadow-2xs border border-amber-300">
+                                            <span>⭐</span>
+                                            <span>Voorkeur</span>
+                                          </span>
+                                        ) : dayAvail.status === 'available' ? (
+                                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-950 font-black text-[10.5px] inline-flex items-center gap-1 shadow-2xs border border-emerald-300">
+                                            <span>✓</span>
+                                            <span>Beschikbaar</span>
+                                          </span>
+                                        ) : (
+                                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 font-black text-[10px] inline-flex items-center gap-0.5 shadow-2xs border border-rose-200">
+                                            <span>✕</span>
+                                            <span>Niet-beschikbaar</span>
+                                          </span>
+                                        )
+                                      ) : (
+                                        <span className="text-slate-400 text-[10px] font-semibold italic">Geen opgave</span>
+                                      )}
+                                    </div>
+
+                                    {/* Uren / Tijdsvenster: Van wanneer tot wanneer */}
                                     {dayAvail && dayAvail.status !== 'unavailable' && (dayAvail.startTime || dayAvail.endTime) && (
-                                      <span className="text-[8.5px] font-black tracking-tight text-orange-900 bg-orange-100 border border-orange-200 px-1 py-0.2 rounded mt-0.5 block leading-tight">
-                                        {dayAvail.startTime || 'Open'} - {dayAvail.endTime || 'Sluit'}
-                                      </span>
+                                      <div className="inline-flex items-center gap-1 text-[10px] font-black text-slate-900 bg-white/95 border border-slate-300 px-2 py-0.5 rounded-md shadow-2xs">
+                                        <Clock size={10} className="text-orange-600 shrink-0" />
+                                        <span>{dayAvail.startTime || 'Open'} - {dayAvail.endTime || 'Sluit'}</span>
+                                      </div>
                                     )}
+
+                                    {/* Opmerkingen / Toelichting */}
                                     {hasNotes && (
-                                      <span className="text-[9px] text-slate-500 italic block leading-none font-medium text-center bg-white/75 px-1 py-0.5 border rounded-md" title={dayAvail?.notes}>
-                                        "{dayAvail?.notes}"
-                                      </span>
+                                      <div className="text-[9px] text-slate-700 italic bg-amber-50/90 border border-amber-200 px-1.5 py-0.5 rounded text-center leading-tight max-w-[130px] truncate" title={dayAvail?.notes}>
+                                        💬 "{dayAvail?.notes}"
+                                      </div>
                                     )}
                                   </div>
                                 </td>
@@ -2929,31 +3161,189 @@ export default function ManagerDashboard({
 
           {/* Active Notices list */}
           <div className="md:col-span-2 space-y-4">
-            <h3 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight">Actieve Berichten op het Personeelspaneel</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight">Actieve Berichten op het Personeelspaneel</h3>
+              <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
+                {notices.length} {notices.length === 1 ? 'bericht' : 'berichten'}
+              </span>
+            </div>
             
             <div className="space-y-4">
-              {notices.map((not) => (
-                <div key={not.id} className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-start space-x-4">
-                  <span className={`w-2.5 h-12 rounded-full shrink-0 ${
-                    not.category === 'planning' ? 'bg-blue-400' : 
-                    not.category === 'wijziging' ? 'bg-orange-400' : 
-                    not.category === 'belangrijk' ? 'bg-rose-500' : 'bg-slate-400'
-                  }`} />
-                  <div className="space-y-2 flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
-                        {not.category}
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-bold uppercase">{not.date}</span>
-                    </div>
-                    <h4 className="font-black text-xs text-slate-800 font-sans uppercase tracking-tight">{not.title}</h4>
-                    <p className="text-xs text-slate-650 leading-relaxed font-sans">{not.content}</p>
-                    <div className="pt-2 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400">
-                      <span className="font-bold">Geplaatst door: <strong className="text-slate-600">{not.author}</strong></span>
-                    </div>
-                  </div>
+              {notices.length === 0 ? (
+                <div className="bg-white p-8 text-center rounded-3xl border-2 border-dashed border-orange-200 text-slate-400 text-xs font-bold uppercase">
+                  Er zijn momenteel geen actieve mededelingen.
                 </div>
-              ))}
+              ) : (
+                notices.map((not) => {
+                  const replyText = managerNoticeReplyText[not.id] || '';
+                  const totalComments = not.comments?.length || 0;
+                  const reactions = not.reactions || {};
+                  const reactionEntries = Object.entries(reactions).filter(([_, users]) => users.length > 0);
+
+                  return (
+                    <div key={not.id} className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 space-y-4 relative">
+                      <div className="flex items-start space-x-3.5">
+                        <span className={`w-2.5 h-12 rounded-full shrink-0 ${
+                          not.category === 'planning' ? 'bg-blue-400' : 
+                          not.category === 'wijziging' ? 'bg-orange-400' : 
+                          not.category === 'belangrijk' ? 'bg-rose-500' : 'bg-slate-400'
+                        }`} />
+                        <div className="space-y-2 flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border border-current ${CATEGORY_COLORS[not.category]}`}>
+                              {not.category}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400 font-bold uppercase">{not.date}</span>
+                              
+                              {/* Delete Notice Button for Manager */}
+                              {onDeleteNotice && (
+                                noticeToDeleteId === not.id ? (
+                                  <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 px-2 py-1 rounded-xl shadow-xs">
+                                    <span className="text-[10px] font-black text-rose-700">Wissen?</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        onDeleteNotice(not.id);
+                                        setNoticeToDeleteId(null);
+                                      }}
+                                      className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-black cursor-pointer shadow-xs transition active:scale-95"
+                                    >
+                                      Ja, wis
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setNoticeToDeleteId(null)}
+                                      className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer transition"
+                                    >
+                                      Nee
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setNoticeToDeleteId(not.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
+                                    title="Mededeling verwijderen"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </div>
+
+                          <h4 className="font-black text-xs text-slate-800 font-sans uppercase tracking-tight">{not.title}</h4>
+                          <p className="text-xs text-slate-650 leading-relaxed font-sans">{not.content}</p>
+
+                          <div className="pt-2 border-t border-slate-100 flex flex-wrap justify-between items-center text-[10px] text-slate-400 gap-2">
+                            <span className="font-bold">Geplaatst door: <strong className="text-slate-600">{not.author}</strong></span>
+                            
+                            {/* Reactions Summary */}
+                            {reactionEntries.length > 0 && (
+                              <div className="flex items-center gap-1.5">
+                                {reactionEntries.map(([emoji, userIds]) => (
+                                  <span key={emoji} className="bg-orange-50 border border-orange-200 text-slate-700 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                                    {emoji} {userIds.length}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Comments & Replies Section */}
+                      <div className="bg-slate-50/80 rounded-2xl p-3.5 border border-slate-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black uppercase tracking-tight text-slate-700 flex items-center gap-1.5">
+                            <MessageCircle size={13} className="text-orange-500" />
+                            <span>Reacties van Medewerkers ({totalComments})</span>
+                          </span>
+                        </div>
+
+                        {/* List existing comments */}
+                        {not.comments && not.comments.length > 0 ? (
+                          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                            {not.comments.map((cmt) => (
+                              <div key={cmt.id} className="bg-white p-2.5 rounded-xl border border-slate-200 text-xs shadow-2xs space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-black text-slate-800 text-[11px]">{cmt.authorName}</span>
+                                    <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase ${
+                                      cmt.authorRole === 'beheerder'
+                                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}>
+                                      {cmt.authorRole === 'beheerder' ? '👑 Beheerder' : 'Medewerker'}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[9px] text-slate-400">
+                                      {new Date(cmt.createdAt).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' })} • {new Date(cmt.createdAt).toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' })}
+                                    </span>
+                                    {onDeleteNoticeComment && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onDeleteNoticeComment(not.id, cmt.id)}
+                                        className="text-slate-300 hover:text-rose-500 p-0.5 rounded transition cursor-pointer"
+                                        title="Verwijder deze reactie"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                <p className="text-slate-700 text-xs font-medium leading-snug">{cmt.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 italic">Nog geen reacties geplaatst op dit bericht.</p>
+                        )}
+
+                        {/* Manager quick reply form */}
+                        {onAddNoticeComment && (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              if (!replyText.trim()) return;
+                              onAddNoticeComment(
+                                not.id,
+                                'beheerder_hans',
+                                'Hans Stevens',
+                                'beheerder',
+                                replyText.trim()
+                              );
+                              setManagerNoticeReplyText(prev => ({ ...prev, [not.id]: '' }));
+                            }}
+                            className="flex gap-2 pt-1"
+                          >
+                            <input
+                              type="text"
+                              value={replyText}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setManagerNoticeReplyText(prev => ({ ...prev, [not.id]: val }));
+                              }}
+                              placeholder="Reageer als beheerder (Hans Stevens)..."
+                              className="flex-1 bg-white border border-slate-250 text-slate-800 placeholder-slate-400 rounded-xl px-3 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-orange-500"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!replyText.trim()}
+                              className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1 transition cursor-pointer shadow-xs active:scale-95 shrink-0"
+                            >
+                              <Send size={12} />
+                              <span>Reageren</span>
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -3563,6 +3953,181 @@ export default function ManagerDashboard({
       )}
 
 
+      {/* MEDEWERKER BESCHIKBAARHEID DETAIL OVERZICHT MODAL */}
+      {selectedAvailabilityDetail && (() => {
+        const targetEmp = selectedAvailabilityDetail.employee;
+        const targetWk = selectedAvailabilityDetail.weekNumber;
+        const meta = getWeekMeta(targetWk);
+        const effResult = getEffectiveEmployeeAvailability(targetEmp, targetWk, availabilities);
+        const effAvail = effResult.availability;
+        const isFromRec = effResult.source === 'recurring';
+
+        const scheduledShifts = shifts.filter(s => 
+          s.employeeId === targetEmp.id && 
+          (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWk
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
+            <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl border-2 border-orange-200 overflow-hidden flex flex-col max-h-[92vh]">
+              {/* Header */}
+              <div className="px-6 py-4 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 text-white flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span 
+                    className="w-10 h-10 rounded-2xl overflow-hidden flex items-center justify-center font-black text-sm text-white uppercase shadow-md border-2 border-white/80 shrink-0"
+                    style={{ backgroundColor: targetEmp.color }}
+                  >
+                    {targetEmp.avatarUrl ? (
+                      <img src={targetEmp.avatarUrl} alt={targetEmp.name} className="w-full h-full object-cover" />
+                    ) : (
+                      targetEmp.name.split(' ').map(n => n[0]).join('')
+                    )}
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-black uppercase tracking-tight">{targetEmp.name}</h3>
+                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/20 text-white border border-white/30">
+                        {targetEmp.statuut}
+                      </span>
+                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/20 text-white border border-white/30">
+                        {targetEmp.department === 'keuken' ? 'Keuken' : 'Zaal'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-orange-100 font-medium">
+                      Beschikbaarheidsdetails • <strong>Week {targetWk}</strong> ({meta.dateRange})
+                      {isFromRec && ' • 🔁 Vaste herhaling'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAvailabilityDetail(null)}
+                  className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-6 space-y-4 overflow-y-auto flex-1 text-left">
+                <div className="flex items-center justify-between text-xs text-slate-600 pb-2 border-b border-slate-100">
+                  <span>Overzicht van alle ingediende voorkeuren & beschikbare uren:</span>
+                  {effAvail ? (
+                    <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                      ✓ Beschikbaarheid ingediend
+                    </span>
+                  ) : (
+                    <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                      ⚠️ Nog niet ingediend door medewerker
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-2.5">
+                  {DAYS_OF_WEEK.map((dName, dIdx) => {
+                    const dInfo = getDayDateInfo(targetWk, dIdx);
+                    const dAvail = effAvail?.days.find(d => d.day === dIdx);
+                    const dShifts = scheduledShifts.filter(s => s.day === dIdx);
+
+                    const status = dAvail?.status || 'none';
+                    const isPref = status === 'preferred';
+                    const isAv = status === 'available';
+                    const isUn = status === 'unavailable';
+
+                    return (
+                      <div 
+                        key={dIdx}
+                        className={`p-3.5 rounded-2xl border transition ${
+                          isPref ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-200' :
+                          isAv ? 'bg-emerald-50/60 border-emerald-300 ring-1 ring-emerald-200' :
+                          isUn ? 'bg-rose-50/60 border-rose-250 text-rose-950' :
+                          'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-24 shrink-0">
+                              <span className="font-black text-xs uppercase text-slate-800 block">{dName}</span>
+                              <span className="text-[11px] font-bold text-orange-700">{dInfo.shortDate}</span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {isPref ? (
+                                <span className="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 font-black text-xs inline-flex items-center gap-1 border border-amber-300 shadow-2xs">
+                                  ⭐ Voorkeur
+                                </span>
+                              ) : isAv ? (
+                                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-950 font-black text-xs inline-flex items-center gap-1 border border-emerald-300 shadow-2xs">
+                                  ✓ Beschikbaar
+                                </span>
+                              ) : isUn ? (
+                                <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-900 font-black text-xs inline-flex items-center gap-1 border border-rose-200 shadow-2xs">
+                                  ✕ Niet-beschikbaar
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">Geen opgave</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Uren & Shift status */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            {(isPref || isAv) && (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border border-slate-200 shadow-2xs text-xs font-black text-slate-800">
+                                <Clock size={12} className="text-orange-600" />
+                                <span>Van: <strong>{dAvail?.startTime || 'Open'}</strong> tot <strong>{dAvail?.endTime || 'Sluit'}</strong></span>
+                              </div>
+                            )}
+
+                            {dShifts.length > 0 ? (
+                              <span className="text-[11px] font-black px-2.5 py-1 rounded-xl bg-purple-100 text-purple-900 border border-purple-200">
+                                📅 Shift ingepland: {dShifts.map(s => `${s.startTime}-${s.endTime}`).join(', ')}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedAvailabilityDetail(null);
+                                  handleOpenAddShift(targetEmp.id, dIdx);
+                                }}
+                                className="px-2.5 py-1 text-[11px] font-black rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-950 border border-orange-300 transition cursor-pointer active:scale-95 flex items-center gap-1"
+                              >
+                                <Plus size={12} className="stroke-[3]" />
+                                <span>Plan Dienst</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {dAvail?.notes && (
+                          <div className="mt-2 text-xs italic text-slate-700 bg-white/80 p-2 rounded-xl border border-slate-200/80">
+                            💬 Toelichting van {targetEmp.name}: "{dAvail.notes}"
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <p className="text-xs text-slate-500 font-medium">
+                  💡 Tip: Je kunt in het toevoegen/bewerken venster van een dienst direct met één klik de gewenste uren overnemen.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAvailabilityDetail(null)}
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+                >
+                  Sluiten
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* SHIFT TOEVOEGEN/BEWERKEN MODAL */}
       {showShiftModal && (() => {
         const modalWeekNumber = selectedShift.weekNumber !== undefined ? selectedShift.weekNumber : selectedManagerWeek;
@@ -3680,20 +4245,32 @@ export default function ManagerDashboard({
                     <label className="text-xs font-bold text-slate-600">Medewerker</label>
                     <select
                       required
-                      value={selectedShift.employeeId || ''}
+                      value={selectedShift.isOpenShift && (!selectedShift.employeeId || selectedShift.employeeId === 'open_shift') ? 'open_shift' : (selectedShift.employeeId || '')}
                       onChange={(e) => {
                         setShiftValidationError(null);
                         const empId = e.target.value;
-                        const emp = employees.find(x => x.id === empId);
-                        setSelectedShift({ 
-                          ...selectedShift, 
-                          employeeId: empId,
-                          department: emp?.department || selectedShift.department || 'zaal'
-                        });
+                        if (empId === 'open_shift') {
+                          setSelectedShift({
+                            ...selectedShift,
+                            employeeId: 'open_shift',
+                            isOpenShift: true,
+                            status: 'published'
+                          });
+                        } else {
+                          const emp = employees.find(x => x.id === empId);
+                          setSelectedShift({ 
+                            ...selectedShift, 
+                            employeeId: empId,
+                            department: emp?.department || selectedShift.department || 'zaal'
+                          });
+                        }
                       }}
                       className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="" disabled>Kies medewerker...</option>
+                      <option value="open_shift" className="font-black text-amber-900 bg-amber-100">
+                        📢 OPEN DIENST (Zelf inplannen door medewerkers)
+                      </option>
                       {sortEmployeesByFirstName(employees).map(e => (
                         <option key={e.id} value={e.id}>
                           {e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut}{e.birthDate && calculateAge(e.birthDate) ? ` - ${calculateAge(e.birthDate)}j` : ''})
@@ -3714,6 +4291,46 @@ export default function ManagerDashboard({
                       <option value="keuken">🍳 Keuken (IDM Keuken)</option>
                     </select>
                   </div>
+                </div>
+
+                {/* Banner: Openstellen voor Zelf-Inplannen */}
+                <div className={`p-3 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 ${
+                  selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift'
+                    ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-200'
+                    : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5 font-black text-xs uppercase tracking-tight text-slate-800">
+                      <span>📢 Openstellen voor Zelf-Inplannen</span>
+                      {(selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift') && (
+                        <span className="text-[9px] bg-amber-400 text-amber-950 font-black px-1.5 py-0.2 rounded-full uppercase">
+                          Actief
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-medium">
+                      Zet deze shift open zodat personeelsleden zichzelf hierop in het portaal kunnen inroosteren.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextOpen = !(selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift');
+                      setSelectedShift({
+                        ...selectedShift,
+                        isOpenShift: nextOpen,
+                        employeeId: nextOpen && (!selectedShift.employeeId || selectedShift.employeeId === '') ? 'open_shift' : selectedShift.employeeId,
+                        status: nextOpen ? 'published' : selectedShift.status
+                      });
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer active:scale-95 shrink-0 border ${
+                      selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift'
+                        ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-sm'
+                        : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+                    }`}
+                  >
+                    {selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift' ? '✓ Opengezet' : '+ Openzetten'}
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -3757,6 +4374,83 @@ export default function ManagerDashboard({
                     </select>
                   </div>
                 </div>
+
+                {/* Medewerker Beschikbaarheidsindicator & 1-Klik Uren Overname */}
+                {currentAssignedEmp && (() => {
+                  const empAvailData = getEffectiveEmployeeAvailability(currentAssignedEmp, modalWeekNumber, availabilities);
+                  const dayAvailInfo = empAvailData.availability?.days.find(d => d.day === currentDayIndex);
+                  
+                  if (!dayAvailInfo) {
+                    return (
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2.5 flex items-center justify-between text-xs text-slate-600">
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <Info size={14} className="text-slate-400" />
+                          <span>Geen specifieke beschikbaarheid opgegeven voor {DAYS_OF_WEEK[currentDayIndex]}</span>
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  const isPreferred = dayAvailInfo.status === 'preferred';
+                  const isAvail = dayAvailInfo.status === 'available';
+                  const isUnavail = dayAvailInfo.status === 'unavailable';
+
+                  return (
+                    <div className={`p-3 rounded-2xl border text-xs space-y-1.5 ${
+                      isPreferred ? 'bg-amber-50/90 border-amber-300 text-amber-950 ring-1 ring-amber-200' :
+                      isAvail ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 ring-1 ring-emerald-200' :
+                      'bg-rose-50/90 border-rose-300 text-rose-950 ring-1 ring-rose-200'
+                    }`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 font-black uppercase text-[11px]">
+                          <span>{isPreferred ? '⭐ Voorkeur Medewerker' : isAvail ? '✓ Beschikbaar' : '✕ Niet-beschikbaar'}</span>
+                          {empAvailData.source === 'recurring' && (
+                            <span className="text-[8.5px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-900 border border-indigo-200 font-bold lowercase">
+                              🔁 vaste herhaling
+                            </span>
+                          )}
+                        </div>
+                        {(isPreferred || isAvail) && (dayAvailInfo.startTime || dayAvailInfo.endTime) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShiftValidationError(null);
+                              setSelectedShift({
+                                ...selectedShift,
+                                startTime: dayAvailInfo.startTime || 'Open',
+                                endTime: dayAvailInfo.endTime || 'Sluit'
+                              });
+                            }}
+                            className="text-[10px] font-black uppercase bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 px-2 py-1 rounded-lg shadow-2xs transition cursor-pointer flex items-center gap-1 active:scale-95"
+                            title="Klik om de opgegeven uren direct in te vullen"
+                          >
+                            <Zap size={11} className="fill-orange-500 text-orange-500" />
+                            <span>Neem uren over ({dayAvailInfo.startTime || 'Open'} - {dayAvailInfo.endTime || 'Sluit'})</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {(isPreferred || isAvail) && (
+                        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-800">
+                          <Clock size={12} className="text-orange-600 shrink-0" />
+                          <span>Opgegeven uren: <strong className="text-orange-950 bg-white/90 px-1.5 py-0.5 rounded border border-orange-200">{dayAvailInfo.startTime || 'Open'} tot {dayAvailInfo.endTime || 'Sluit'}</strong></span>
+                        </div>
+                      )}
+
+                      {dayAvailInfo.notes && (
+                        <p className="text-[10.5px] italic text-slate-700 bg-white/80 p-1.5 rounded-lg border border-slate-200/80">
+                          Toelichting: "{dayAvailInfo.notes}"
+                        </p>
+                      )}
+
+                      {isUnavail && (
+                        <p className="text-[11px] font-black text-rose-700">
+                          ⚠️ Let op: {currentAssignedEmp.name} heeft aangegeven niet beschikbaar te zijn op {DAYS_OF_WEEK[currentDayIndex]}!
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">

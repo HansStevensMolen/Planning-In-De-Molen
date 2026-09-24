@@ -12,8 +12,11 @@ import {
   Calendar,
   X,
   RefreshCw,
-  Info
+  Info,
+  Apple,
+  Download
 } from 'lucide-react';
+import SmartphoneInstallModal from './SmartphoneInstallModal';
 
 interface ShareTeamModalProps {
   isOpen: boolean;
@@ -39,6 +42,7 @@ export default function ShareTeamModal({
   const [copied, setCopied] = useState(false);
   const [syncingManual, setSyncingManual] = useState(false);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
+  const [showSmartphoneModal, setShowSmartphoneModal] = useState(false);
 
   if (!isOpen) return null;
 
@@ -226,8 +230,8 @@ export default function ShareTeamModal({
           </p>
         </div>
 
-        {/* WhatsApp Instant Share Button */}
-        <div className="mb-6">
+        {/* WhatsApp Instant Share Button & Smartphone PWA Guide */}
+        <div className="mb-6 space-y-3">
           <a
             href={whatsappUrl}
             target="_blank"
@@ -237,6 +241,20 @@ export default function ShareTeamModal({
             <MessageSquare size={18} />
             <span>Deel direct in de Team WhatsApp-Groep 💬</span>
           </a>
+
+          <button
+            type="button"
+            onClick={() => setShowSmartphoneModal(true)}
+            className="w-full py-3 px-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase rounded-2xl flex items-center justify-between shadow-md shadow-orange-500/15 transition active:scale-95 cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Smartphone size={17} />
+              <span>Hoe zet personeel dit als app op hun smartphone? (Android & iOS)</span>
+            </div>
+            <span className="bg-white/20 px-2 py-0.5 rounded-lg text-[10px] tracking-normal font-bold">
+              Bekijk Gids 📲
+            </span>
+          </button>
         </div>
 
         {/* Step-by-Step Explanation for Team Members */}
@@ -296,6 +314,13 @@ export default function ShareTeamModal({
             Sluiten
           </button>
         </div>
+
+        {/* Smartphone Install Guide Modal */}
+        <SmartphoneInstallModal
+          isOpen={showSmartphoneModal}
+          onClose={() => setShowSmartphoneModal(false)}
+          sharedUrl={sharedUrl}
+        />
       </div>
     </div>
   );

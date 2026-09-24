@@ -47,6 +47,9 @@ Kan je onverwacht toch niet? Ga naar 'Ruilen / Overdragen', kies je shift en gee
 📢 *5. Mededelingen & Collega's:*
 Check het mededelingenbord voor belangrijk café-nieuws en vind onder 'Collega's' elkaars nummer om snel te bellen of appen.
 
+📱 *6. Zet de app op je smartphone (Android & iPhone):*
+Je kan dit portaal als een echte app op je startscherm zetten! Android: tik in Chrome op de 3 puntjes en 'App installeren'. iPhone: tik in Safari op 'Deel' en kies 'Zet op beginscherm'.
+
 Heb je vragen? Vraag het gerust aan Hans! Tot snel op de vloer! 🍻`;
 
     navigator.clipboard.writeText(guideText).then(() => {
@@ -100,6 +103,15 @@ Heb je vragen? Vraag het gerust aan Hans! Tot snel op de vloer! 🍻`;
       color: "bg-emerald-500 text-white",
       desc: "Onder 'Mededelingen' lees je belangrijke updates over het café, speciale evenementen en sluitingsdagen. In de tab 'Collega's' vind je de contactgegevens van het hele team om elkaar snel te bereiken.",
       tip: "Met één klik kun je een collega direct bellen of een WhatsApp-bericht sturen."
+    },
+    {
+      num: 6,
+      title: "Zet als App op je Smartphone (Android & iPhone)",
+      badge: "Echte app op startscherm",
+      icon: Smartphone,
+      color: "bg-rose-500 text-white",
+      desc: "Je kunt dit portaal rechtstreeks als app op je telefoon zetten! Op Android tik je in Chrome op de 3 puntjes en 'App installeren'. Op iPhone tik je in Safari op het Deel-icoontje (vierkant met pijltje omhoog) en kies je 'Zet op beginscherm'.",
+      tip: "De app opent dan in volledig scherm zonder browserbalk, onthoudt je gegevens en stuurt push-herinneringen voor je diensten!"
     }
   ];
 
@@ -127,7 +139,7 @@ Heb je vragen? Vraag het gerust aan Hans! Tot snel op de vloer! 🍻`;
             </div>
           </div>
           <p className="text-xs text-orange-100 font-medium leading-relaxed max-w-xl">
-            Welkom bij het personeelsportaal van <strong>Eet-staminée In De Molen</strong>! Hieronder vind je in 5 duidelijke stappen hoe je je rooster bekijkt, je uren doorgeeft en diensten regelt.
+            Welkom bij het personeelsportaal van <strong>Eet-staminée In De Molen</strong>! Hieronder vind je in 6 duidelijke stappen hoe je je rooster bekijkt, je uren doorgeeft, diensten regelt en de app op je smartphone zet.
           </p>
         </div>
 
