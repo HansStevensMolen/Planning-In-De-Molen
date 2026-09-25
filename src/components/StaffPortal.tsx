@@ -45,7 +45,7 @@ import {
   Bell,
   AlertOctagon
 } from 'lucide-react';
-import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department, RecurringAvailability, RecurringShiftPreference, RecurringFrequency } from '../types';
+import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department, RecurringAvailability, RecurringShiftPreference, RecurringFrequency, AppSettings } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
 import StaffProfileModal from './StaffProfileModal';
 import SchedulePrintModal from './SchedulePrintModal';
@@ -103,6 +103,7 @@ interface StaffPortalProps {
     content: string
   ) => void;
   onToggleNoticeReaction?: (noticeId: string, emoji: string, employeeId: string) => void;
+  appSettings?: AppSettings;
 }
 
 const DAYS_OF_WEEK = [
@@ -275,7 +276,8 @@ export default function StaffPortal({
   onCancelSignUpOpenShift,
   onSelfAssignOpenShift,
   onAddNoticeComment,
-  onToggleNoticeReaction
+  onToggleNoticeReaction,
+  appSettings
 }: StaffPortalProps) {
   // Staff notice replies & self-assign confirmation state
   const [staffNoticeReplyText, setStaffNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
@@ -415,12 +417,13 @@ export default function StaffPortal({
   // Active Employee object
   const currentEmployee = employees.find(e => e.id === activeEmployeeId);
 
-  // Only Flexi, Student and Extra can enter fixed/recurring availability
+  // Flexi, Student, Extra (and Vast) can enter fixed/recurring availability
   const isFlexiStudentExtra = Boolean(
     currentEmployee && (
       currentEmployee.statuut === 'Flexi' ||
       currentEmployee.statuut === 'Student' ||
-      currentEmployee.statuut === 'Extra'
+      currentEmployee.statuut === 'Extra' ||
+      currentEmployee.statuut === 'Vast'
     )
   );
 
@@ -1633,43 +1636,8 @@ export default function StaffPortal({
                 <span className="text-[9px] text-orange-600 font-black bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md uppercase tracking-tight animate-pulse">Live</span>
               </div>
 
-              {/* Department filter tabs for staff + Print PDF button */}
+              {/* Print PDF button */}
               <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center bg-white p-1 rounded-xl border border-orange-200 text-xs font-bold shadow-xs">
-                  <button
-                    type="button"
-                    onClick={() => setRosterDeptFilter('all')}
-                    className={`px-3 py-1 rounded-lg transition text-[11px] font-black uppercase tracking-tight ${
-                      rosterDeptFilter === 'all'
-                        ? 'bg-orange-500 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-orange-600'
-                    }`}
-                  >
-                    Alles
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRosterDeptFilter('zaal')}
-                    className={`px-3 py-1 rounded-lg transition text-[11px] font-black uppercase tracking-tight ${
-                      rosterDeptFilter === 'zaal'
-                        ? 'bg-orange-500 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-orange-600'
-                    }`}
-                  >
-                    🍽️ Zaal (IDM)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRosterDeptFilter('keuken')}
-                    className={`px-3 py-1 rounded-lg transition text-[11px] font-black uppercase tracking-tight ${
-                      rosterDeptFilter === 'keuken'
-                        ? 'bg-orange-500 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-orange-600'
-                    }`}
-                  >
-                    🍳 Keuken (IDM)
-                  </button>
-                </div>
 
                 <button
                   type="button"
@@ -2281,6 +2249,30 @@ export default function StaffPortal({
       {activeSubTab === 'beschikbaarheid' && (
         <div className="space-y-6 font-sans text-left">
           
+          {/* Manager Lock Banner if Availability Submissions Disabled */}
+          {appSettings?.availabilitySubmissionEnabled === false && (
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in duration-200">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-rose-200">
+                  <Lock size={22} className="stroke-[2.5]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="bg-rose-200 text-rose-900 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-rose-300">
+                      🔒 Gesloten door Beheerder
+                    </span>
+                  </div>
+                  <h4 className="text-base font-black text-rose-950 mt-1">
+                    Doorgeven van beschikbaarheden is momenteel uitgeschakeld
+                  </h4>
+                  <p className="text-xs text-rose-800 font-medium mt-0.5">
+                    {appSettings?.availabilityLockMessage || 'De planning voor de komende weken is afgerond door Hans Stevens. Je kunt je ingediende beschikbaarheid en vaste shiften hieronder bekijken, maar momenteel niet meer wijzigen.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Header */}
           <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -2289,12 +2281,16 @@ export default function StaffPortal({
                 <span>Beschikbaarheid Doorgeven</span>
               </h3>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Duid per dag aan wanneer je kunt werken voor de huidige week en de komende 5 weken (vertrouwelijk voor de beheerder).
+                Duid per dag aan wanneer je kunt werken voor de huidige week en de komende weken (vertrouwelijk voor de beheerder).
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold text-orange-800 bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-xl">
-                🗓️ Huidige week + 5 komende weken open
+              <span className={`text-[11px] font-bold border px-3 py-1.5 rounded-xl ${
+                appSettings?.availabilitySubmissionEnabled === false
+                  ? 'text-rose-800 bg-rose-50 border-rose-200'
+                  : 'text-emerald-850 bg-emerald-50 border-emerald-200 text-emerald-800'
+              }`}>
+                {appSettings?.availabilitySubmissionEnabled === false ? '🔒 Invoer Gesloten' : '🗓️ Open voor invoer'}
               </span>
             </div>
           </div>
@@ -2696,7 +2692,29 @@ export default function StaffPortal({
                 </div>
               )}
 
-              {/* Week Selection Hub */}
+              {/* Prompt to set fixed availability for Flexi/Student/Extra if not set yet */}
+              {isFlexiStudentExtra && !currentEmployee?.recurringAvailability?.active && (
+                <div className="bg-gradient-to-r from-orange-50 to-amber-50 p-4 rounded-2xl border-2 border-orange-200/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xl">🔁</span>
+                    <div>
+                      <h4 className="font-extrabold text-xs text-orange-950 uppercase tracking-tight">
+                        Werk je vaak op vaste dagen/uren ({currentEmployee?.statuut})?
+                      </h4>
+                      <p className="text-[11px] text-orange-900 font-medium">
+                        Stel je vaste shiften éénmalig in via 'Vaste Beschikbaarheid', zodat je ze niet elke week opnieuw hoeft in te vullen!
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAvailViewMode('recurring')}
+                    className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-black uppercase tracking-tight rounded-xl transition cursor-pointer shrink-0 shadow-xs"
+                  >
+                    <span>Vaste Shiften Instellen 🔁</span>
+                  </button>
+                </div>
+              )}
               <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-1">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1">
@@ -2822,10 +2840,34 @@ export default function StaffPortal({
             
             {/* Status compact info */}
             {(() => {
-              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER);
+              const isSubmissionDisabledByManager = appSettings?.availabilitySubmissionEnabled === false;
+              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER) || isSubmissionDisabledByManager;
               const isCurrentWeek = selectedWeek === CURRENT_WEEK_NUMBER;
               const isNextWeek = selectedWeek === NEXT_WEEK_NUMBER;
               const deadlineInfo = getAvailabilityDeadlineInfo(selectedWeek, CURRENT_WEEK_NUMBER);
+
+              if (isSubmissionDisabledByManager) {
+                return (
+                  <div className="bg-rose-50 border border-rose-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950 shadow-xs">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-rose-200 border border-rose-300 flex items-center justify-center shrink-0 text-rose-900 mt-0.5">
+                        <Lock size={16} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-sm text-rose-950">Invoer van beschikbaarheden is vergrendeld</span>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 border border-rose-300">
+                            Gesloten door beheerder
+                          </span>
+                        </div>
+                        <p className="text-xs text-rose-900 mt-1 leading-relaxed">
+                          {appSettings?.availabilityLockMessage || 'Het doorgeven van beschikbaarheden is momenteel uitgeschakeld door de beheerder (Hans Stevens). Je kunt je eerdere invoer hieronder bekijken, maar momenteel niet aanpassen.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
 
               if (isCurrentWeek) {
                 return (
@@ -2926,7 +2968,8 @@ export default function StaffPortal({
           {/* Main Availability Matrix */}
           <div className="bg-white p-6 rounded-3xl border-2 border-orange-100 shadow-sm space-y-6">
             {(() => {
-              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER);
+              const isSubmissionDisabledByManager = appSettings?.availabilitySubmissionEnabled === false;
+              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER) || isSubmissionDisabledByManager;
               return (
                 <>
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b pb-3 border-orange-50">
@@ -2937,7 +2980,7 @@ export default function StaffPortal({
                         </h4>
                         {isSelectedLocked ? (
                           <span className="text-[10px] font-black uppercase text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                            <Lock size={11} /> Alleen-lezen (Vastgelegd)
+                            <Lock size={11} /> {isSubmissionDisabledByManager ? 'Alleen-lezen (Beheerder Gesloten)' : 'Alleen-lezen (Vastgelegd)'}
                           </span>
                         ) : (
                           <span className="text-[10px] font-black uppercase text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
@@ -2947,7 +2990,9 @@ export default function StaffPortal({
                       </div>
                       <p className="text-[11px] text-orange-950 font-medium mt-0.5">
                         {isSelectedLocked
-                          ? '🔒 Beschikbaarheden voor deze week liggen vast en kunnen niet gewijzigd worden.'
+                          ? isSubmissionDisabledByManager 
+                            ? '🔒 Het doorgeven van beschikbaarheden is momenteel uitgeschakeld door de beheerder.'
+                            : '🔒 Beschikbaarheden voor deze week liggen vast en kunnen niet gewijzigd worden.'
                           : 'Maandag t/m zaterdag zijn we gewoon open • Zon- en feestdagen vanaf 10u00 open.'}
                       </p>
                     </div>
@@ -3169,7 +3214,11 @@ export default function StaffPortal({
                       <div className="flex items-center gap-2 text-xs text-slate-600">
                         <Lock size={16} className="text-amber-600 shrink-0" />
                         <span>
-                          Beschikbaarheden voor <strong>Week {selectedWeek}</strong> {selectedWeek === CURRENT_WEEK_NUMBER ? '(huidige week)' : selectedWeek === NEXT_WEEK_NUMBER ? '(volgende week)' : ''} liggen vast en kunnen niet gewijzigd worden.
+                          {isSubmissionDisabledByManager ? (
+                            <span>Het doorgeven van beschikbaarheden is momenteel <strong>uitgeschakeld door de beheerder</strong>.</span>
+                          ) : (
+                            <span>Beschikbaarheden voor <strong>Week {selectedWeek}</strong> liggen vast en kunnen niet meer gewijzigd worden.</span>
+                          )}
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
@@ -3277,41 +3326,10 @@ export default function StaffPortal({
               )}
             </div>
 
-            {/* Department Filter Tabs */}
-            <div className="flex items-center gap-1 bg-white p-1 rounded-2xl border-2 border-orange-100 shadow-sm shrink-0">
-              <button
-                type="button"
-                onClick={() => setColleagueDeptFilter('all')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer ${
-                  colleagueDeptFilter === 'all'
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-orange-600'
-                }`}
-              >
-                Alle ({employees.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setColleagueDeptFilter('zaal')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer ${
-                  colleagueDeptFilter === 'zaal'
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-orange-600'
-                }`}
-              >
-                🍽️ Zaal ({employees.filter(e => e.department === 'zaal').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setColleagueDeptFilter('keuken')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer ${
-                  colleagueDeptFilter === 'keuken'
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-orange-600'
-                }`}
-              >
-                🍳 Keuken ({employees.filter(e => e.department === 'keuken').length})
-              </button>
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-500 shrink-0">
+              <span className="bg-orange-50 text-orange-900 border border-orange-200 px-3 py-1.5 rounded-xl font-black uppercase text-[11px]">
+                {employees.length} Collega's
+              </span>
             </div>
           </div>
 

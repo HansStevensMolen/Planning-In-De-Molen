@@ -36,8 +36,10 @@ import {
   Employee,
   Notice,
   SwapRequest,
-  ChangeLog
+  ChangeLog,
+  AppSettings
 } from '../types';
+import { CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER } from '../utils/weekUtils';
 
 // 1. Initialize Firebase App
 let app: FirebaseApp;
@@ -689,6 +691,79 @@ export async function fetchLogsFromCloud(): Promise<ChangeLog[] | null> {
     console.warn('[Firebase] Could not fetch logs from Firestore:', error);
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// APP SETTINGS (AVAILABILITY SUBMISSION TOGGLE, ETC.)
+// ---------------------------------------------------------------------------
+
+export async function saveAppSettingsToCloud(settings: Partial<AppSettings>): Promise<void> {
+  try {
+    const docRef = doc(db, 'settings', 'general');
+    const payload = sanitizeForFirestore({
+      ...settings,
+      updatedAt: Date.now()
+    });
+    await setDoc(docRef, payload, { merge: true });
+    // Cache locally
+    const current = getLocalAppSettings();
+    localStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
+  } catch (error) {
+    console.warn('[Firebase] Could not save app settings to Firestore:', error);
+    const current = getLocalAppSettings();
+    localStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
+  }
+}
+
+export function getLocalAppSettings(): AppSettings {
+  try {
+    const saved = localStorage.getItem('cafe_app_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed.lockedWeeks)) {
+        parsed.lockedWeeks = [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER];
+      }
+      return parsed;
+    }
+  } catch {}
+  return {
+    availabilitySubmissionEnabled: true,
+    lockedWeeks: [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER],
+    availabilityLockMessage: 'Het doorgeven van beschikbaarheden voor deze week is afgesloten door de beheerder.'
+  };
+}
+
+export async function fetchAppSettingsFromCloud(): Promise<AppSettings> {
+  try {
+    const docRef = doc(db, 'settings', 'general');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const data = docSnap.data() as AppSettings;
+      localStorage.setItem('cafe_app_settings', JSON.stringify(data));
+      return data;
+    }
+  } catch (error) {
+    console.warn('[Firebase] Could not fetch app settings from Firestore:', error);
+  }
+  return getLocalAppSettings();
+}
+
+export function subscribeToAppSettings(callback: (settings: AppSettings) => void): () => void {
+  try {
+    const docRef = doc(db, 'settings', 'general');
+    return onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as AppSettings;
+        localStorage.setItem('cafe_app_settings', JSON.stringify(data));
+        callback(data);
+      }
+    }, (err) => {
+      console.warn('[Firebase] Error in settings listener:', err);
+    });
+  } catch (e) {
+    console.warn('[Firebase] Failed to setup settings listener:', e);
+    return () => {};
+  }
 }
 
 // ---------------------------------------------------------------------------

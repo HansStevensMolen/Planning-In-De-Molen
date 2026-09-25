@@ -1,4 +1,4 @@
-import { WeekMeta, Employee, EmployeeAvailability, DayAvailability, RecurringFrequency } from '../types';
+import { WeekMeta, Employee, EmployeeAvailability, DayAvailability, RecurringFrequency, AppSettings } from '../types';
 
 /**
  * Dynamically computes the ISO 8601 week number and year.
@@ -279,15 +279,45 @@ export function isWeekArchived(weekNumber: number, currentWeek: number = CURRENT
 
 /**
  * Controleert of de beschikbaarheden voor een bepaalde week vergrendeld zijn (niet gewijzigd kunnen worden).
- * Zowel de huidige week (CURRENT_WEEK_NUMBER) als de volgende week (CURRENT_WEEK_NUMBER + 1)
- * liggen vast en kunnen NIET gewijzigd worden door medewerkers.
- * Pas vanaf 2 weken vooruit (weekNumber >= CURRENT_WEEK_NUMBER + 2) kunnen beschikbaarheden worden ingediend of aangepast.
+ * Wordt dynamisch per week gecontroleerd aan de hand van de door de beheerder ingestelde vergrendelde weken.
  */
 export function isWeekAvailabilityLocked(
   targetWeekNumber: number,
-  currentWeekNumber: number = CURRENT_WEEK_NUMBER
+  currentWeekNumber: number = CURRENT_WEEK_NUMBER,
+  settings?: AppSettings
 ): boolean {
+  // 1. Indien het doorgeven globaal is uitgeschakeld door de beheerder: ALLES vergrendeld
+  if (settings && settings.availabilitySubmissionEnabled === false) {
+    return true;
+  }
+
+  // 2. Gearchiveerde weken uit het verleden zijn altijd vergrendeld
+  if (targetWeekNumber < currentWeekNumber) {
+    return true;
+  }
+
+  // 3. Indien de beheerder een lijst met vergrendelde weken heeft geconfigureerd:
+  if (settings && Array.isArray(settings.lockedWeeks)) {
+    return settings.lockedWeeks.includes(targetWeekNumber);
+  }
+
+  // 4. Standaard fallback indien nog geen instellingen zijn opgeslagen:
+  // Huidige week en volgende week zijn standaard vergrendeld
   return targetWeekNumber <= currentWeekNumber + 1;
+}
+
+/**
+ * Wisselt de status van een week (vergrendeld <-> geopend).
+ */
+export function toggleWeekInLockedList(
+  weekNumber: number,
+  currentLockedWeeks: number[] = [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER]
+): number[] {
+  if (currentLockedWeeks.includes(weekNumber)) {
+    return currentLockedWeeks.filter(w => w !== weekNumber);
+  } else {
+    return [...currentLockedWeeks, weekNumber].sort((a, b) => a - b);
+  }
 }
 
 /**
@@ -295,20 +325,22 @@ export function isWeekAvailabilityLocked(
  */
 export function isAvailabilityPastDeadline(
   targetWeekNumber: number,
-  currentWeekNumber: number = CURRENT_WEEK_NUMBER
+  currentWeekNumber: number = CURRENT_WEEK_NUMBER,
+  settings?: AppSettings
 ): boolean {
-  return targetWeekNumber <= currentWeekNumber + 1;
+  return isWeekAvailabilityLocked(targetWeekNumber, currentWeekNumber, settings);
 }
 
 export function getAvailabilityDeadlineInfo(
   targetWeekNumber: number,
-  currentWeekNumber: number = CURRENT_WEEK_NUMBER
+  currentWeekNumber: number = CURRENT_WEEK_NUMBER,
+  settings?: AppSettings
 ) {
+  const isLocked = isWeekAvailabilityLocked(targetWeekNumber, currentWeekNumber, settings);
   const diff = targetWeekNumber - currentWeekNumber;
   const isPast = diff < 0;
   const isCurrent = diff === 0;
   const isNext = diff === 1;
-  const isLocked = diff <= 1;
 
   if (isPast) {
     return {
@@ -322,38 +354,26 @@ export function getAvailabilityDeadlineInfo(
     };
   }
 
-  if (isCurrent) {
+  if (isLocked) {
     return {
       isLocked: true,
       isLate: false,
-      isCurrent: true,
-      isNext: false,
-      weeksBeforeStart: 0,
-      badgeText: 'Huidige week (vastgelegd)',
-      friendlyMessage: `Huidige week (Week ${targetWeekNumber}): Het werkrooster loopt al. De beschikbaarheden liggen vast en kunnen niet meer gewijzigd worden.`
-    };
-  }
-
-  if (isNext) {
-    return {
-      isLocked: true,
-      isLate: false,
-      isCurrent: false,
-      isNext: true,
-      weeksBeforeStart: 1,
-      badgeText: 'Volgende week (vastgelegd)',
-      friendlyMessage: `Volgende week (Week ${targetWeekNumber}): Het werkrooster is reeds definitief opgemaakt. De beschikbaarheden liggen vast en kunnen niet meer gewijzigd worden.`
+      isCurrent,
+      isNext,
+      weeksBeforeStart: diff,
+      badgeText: 'Vergrendeld door beheerder',
+      friendlyMessage: `Beschikbaarheid voor Week ${targetWeekNumber} is vergrendeld door de beheerder (Hans Stevens). Je kunt je beschikbaarheid alleen inkijken.`
     };
   }
 
   return {
     isLocked: false,
     isLate: false,
-    isCurrent: false,
-    isNext: false,
+    isCurrent,
+    isNext,
     weeksBeforeStart: diff,
-    badgeText: `Over ${diff} weken (open)`,
-    friendlyMessage: `Beschikbaarheid voor Week ${targetWeekNumber} (over ${diff} weken) staat open om in te vullen of aan te passen.`
+    badgeText: isCurrent ? 'Huidige week (open)' : isNext ? 'Volgende week (open)' : `Over ${diff} weken (open)`,
+    friendlyMessage: `Beschikbaarheid voor Week ${targetWeekNumber} staat open om in te vullen of aan te passen.`
   };
 }
 

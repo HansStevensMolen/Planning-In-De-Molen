@@ -51,8 +51,13 @@ import {
   subscribeToCloudAllAvailabilities,
   saveLogsToCloud,
   fetchLogsFromCloud,
-  formatDutchDateTime
+  formatDutchDateTime,
+  saveAppSettingsToCloud,
+  fetchAppSettingsFromCloud,
+  subscribeToAppSettings,
+  getLocalAppSettings
 } from './services/firebase';
+import { AppSettings } from './types';
 import { sortEmployeesByFirstName, deduplicateEmployees } from './utils/employeeSortUtils';
 import { CURRENT_WEEK_NUMBER } from './utils/weekUtils';
 import ShareTeamModal from './components/ShareTeamModal';
@@ -257,6 +262,38 @@ export default function App() {
 
   // Automatic WhatsApp Share Notification Modal State
   const [autoWhatsAppModalData, setAutoWhatsAppModalData] = useState<AutoWhatsAppModalData | null>(null);
+
+  // Global App Settings (e.g. Availability Submissions enabled/locked by manager)
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => getLocalAppSettings());
+
+  // Subscribe to live App Settings from Firestore
+  useEffect(() => {
+    fetchAppSettingsFromCloud().then(settings => {
+      if (settings) setAppSettings(settings);
+    });
+    const unsubscribe = subscribeToAppSettings((newSettings) => {
+      setAppSettings(newSettings);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleUpdateAppSettings = (newSettings: Partial<AppSettings>) => {
+    const updated: AppSettings = { ...appSettings, ...newSettings };
+    setAppSettings(updated);
+    saveAppSettingsToCloud(updated);
+    if (newSettings.availabilitySubmissionEnabled !== undefined) {
+      addLog(
+        'Instellingen Gewijzigd',
+        `Beschikbaarheden doorgeven is nu ${newSettings.availabilitySubmissionEnabled ? 'OPENGESCHAKELD 🟢' : 'VERGRENDELD / GESLOTEN 🔒'} voor medewerkers`
+      );
+    }
+    if (newSettings.lockedWeeks !== undefined) {
+      addLog(
+        'Week-Vergrendeling Gewijzigd',
+        `Vergrendelde weken voor beschikbaarheden bijgewerkt: ${newSettings.lockedWeeks.length > 0 ? newSettings.lockedWeeks.map(w => `Week ${w}`).join(', ') : 'Alle weken geopend 🟢'}`
+      );
+    }
+  };
 
   // Sync to localStorage
   useEffect(() => {
@@ -1559,6 +1596,8 @@ export default function App() {
                 onSelfAssignOpenShift={handleSelfAssignOpenShift}
                 onShareWhatsAppSchedule={handleShareWhatsAppSchedule}
                 onShareWhatsAppNotice={handleShareWhatsAppNotice}
+                appSettings={appSettings}
+                onUpdateAppSettings={handleUpdateAppSettings}
               />
             </div>
           )
@@ -1574,6 +1613,7 @@ export default function App() {
               notices={notices}
               swapRequests={swapRequests}
               availabilities={availabilities}
+              appSettings={appSettings}
               onAcknowledgeShift={handleAcknowledgeShift}
               onAddSwapRequest={handleAddSwapRequest}
               onUpdateEmployee={handleUpdateEmployee}

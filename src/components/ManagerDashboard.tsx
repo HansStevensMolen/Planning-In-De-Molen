@@ -51,7 +51,7 @@ import {
   Info,
   BarChart3
 } from 'lucide-react';
-import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta } from '../types';
+import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta, AppSettings } from '../types';
 import NotificationModal from './NotificationModal';
 import BackupManagerModal from './BackupManagerModal';
 import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
@@ -117,6 +117,8 @@ interface ManagerDashboardProps {
   onSelfAssignOpenShift?: (shiftId: string, employeeId: string) => void;
   onShareWhatsAppSchedule?: (weekNumber: number) => void;
   onShareWhatsAppNotice?: (notice: Notice) => void;
+  appSettings?: AppSettings;
+  onUpdateAppSettings?: (settings: Partial<AppSettings>) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -168,7 +170,9 @@ export default function ManagerDashboard({
   onDeleteNoticeComment,
   onSelfAssignOpenShift,
   onShareWhatsAppSchedule,
-  onShareWhatsAppNotice
+  onShareWhatsAppNotice,
+  appSettings,
+  onUpdateAppSettings
 }: ManagerDashboardProps) {
   // Notices deletion & comments state for managers
   const [noticeToDeleteId, setNoticeToDeleteId] = useState<string | null>(null);
@@ -297,6 +301,35 @@ export default function ManagerDashboard({
     setAutoPlanWeek(nextW);
     setSixWeeksSuccessMsg(`Week ${nextW} (${getWeekMeta(nextW).dateRange}) is automatisch toegevoegd aan de planningstool!`);
     setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Actions: Week-by-week Availability Locking by Manager
+  const handleToggleWeekLock = (weekNum: number) => {
+    const currentLocked = Array.isArray(appSettings?.lockedWeeks)
+      ? [...appSettings.lockedWeeks]
+      : [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER];
+
+    const isLocked = currentLocked.includes(weekNum);
+    const nextList = isLocked
+      ? currentLocked.filter(w => w !== weekNum)
+      : [...currentLocked, weekNum].sort((a, b) => a - b);
+
+    onUpdateAppSettings?.({ lockedWeeks: nextList });
+  };
+
+  const handleLockAllWeeks = () => {
+    const allNums = activeWeeks.map(w => w.weekNumber);
+    const currentLocked = Array.isArray(appSettings?.lockedWeeks) ? appSettings.lockedWeeks : [];
+    const merged = Array.from(new Set([...currentLocked, ...allNums])).sort((a, b) => a - b);
+    onUpdateAppSettings?.({ lockedWeeks: merged });
+  };
+
+  const handleUnlockAllWeeks = () => {
+    onUpdateAppSettings?.({ lockedWeeks: [], availabilitySubmissionEnabled: true });
+  };
+
+  const handleResetDefaultWeeksLock = () => {
+    onUpdateAppSettings?.({ lockedWeeks: [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER] });
   };
 
   // Action: Copy previous week's schedule to current week
@@ -1201,7 +1234,7 @@ export default function ManagerDashboard({
         </div>
       ) : null}
 
-      {/* Sub Navigation Tabs - Named exactly according to official instructions */}
+      {/* Sub Navigation Tabs */}
       <div className="bg-white rounded-2xl shadow-sm border-2 border-orange-100 p-1 flex flex-wrap gap-1 md:gap-0">
         <button
           onClick={() => setActiveSubTab('zaal')}
@@ -1209,17 +1242,8 @@ export default function ManagerDashboard({
             activeSubTab === 'zaal' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
           }`}
         >
-          <UtensilsCrossed size={16} />
-          <span>Zaal</span>
-        </button>
-        <button
-          onClick={() => setActiveSubTab('keuken')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
-            activeSubTab === 'keuken' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Utensils size={16} />
-          <span>Keuken</span>
+          <CalendarIcon size={16} />
+          <span>Planning & Rooster</span>
         </button>
         <button
           onClick={() => setActiveSubTab('beschikbaarheid')}
@@ -1284,16 +1308,15 @@ export default function ManagerDashboard({
 
       {/* Content Areas */}
 
-      {/* 1. PLANNING TAB: ZAAL (IDM) EN KEUKEN (IDM KEUKEN) */}
+      {/* 1. PLANNING TAB */}
       {(activeSubTab === 'zaal' || activeSubTab === 'keuken') && (() => {
-        const activeDept: Department = activeSubTab === 'keuken' ? 'keuken' : 'zaal';
-        const isZaal = activeDept === 'zaal';
+        const activeDept: Department = 'zaal';
+        const isZaal = true;
         const deptEmployees = sortEmployeesByFirstName(
           employees.filter(emp => {
-            const matchDept = isZaal ? (emp.department || 'zaal') === 'zaal' : emp.department === 'keuken';
             const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
             const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
-            return matchDept && matchStatuut && matchExperience;
+            return matchStatuut && matchExperience;
           })
         );
 
@@ -1303,16 +1326,14 @@ export default function ManagerDashboard({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">
-                  {isZaal ? 'Planning Zaalpersoneel (Zaal)' : 'Planning Keukenpersoneel (Keuken)'}
+                  Weekplanning & Rooster (In De Molen)
                 </h2>
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${isZaal ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-orange-100 text-orange-900 border border-orange-300'}`}>
-                  {isZaal ? '🍽️ Zaalpersoneel' : '🍳 Keukenpersoneel'}
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-900 border border-orange-300">
+                  📋 Alle Medewerkers ({deptEmployees.length})
                 </span>
               </div>
               <p className="text-xs text-orange-600 font-bold uppercase">
-                {isZaal 
-                  ? 'Planning voor zaalbediening, bar, terras en zaalverantwoordelijken • Klik op een vak om in te plannen'
-                  : 'Planning voor chef-koks, souschefs, koud/warm-bereiding en afwas • Klik op een vak om in te plannen'}
+                Centraal weekrooster voor alle medewerkers • Klik op een vak om in te plannen
               </p>
             </div>
 
@@ -1400,8 +1421,8 @@ export default function ManagerDashboard({
                     department: activeDept,
                     weekNumber: selectedManagerWeek,
                     day: 0,
-                    startTime: activeDept === 'keuken' ? '15:00' : '17:00',
-                    endTime: activeDept === 'keuken' ? '23:00' : '01:00',
+                    startTime: '17:00',
+                    endTime: '01:00',
                     notes: '',
                     status: 'draft',
                     acknowledged: false
@@ -1425,7 +1446,7 @@ export default function ManagerDashboard({
                     weekNumber: selectedManagerWeek,
                     day: 4, // Vrijdag
                     startTime: '11:30',
-                    endTime: activeDept === 'keuken' ? '23:00' : '01:00',
+                    endTime: '01:00',
                     notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!',
                     status: 'published',
                     acknowledged: false
@@ -2396,6 +2417,74 @@ export default function ManagerDashboard({
                   <Database size={15} className="text-orange-400" />
                   <span>💾 Cloud Backups & Archief</span>
                 </button>
+              </div>
+            </div>
+
+            {/* Master Toggle: Beschikbaarheden Doorgeven Inschakelen / Uitschakelen */}
+            <div className={`p-4 sm:p-5 rounded-3xl border-2 transition-all shadow-sm ${
+              appSettings?.availabilitySubmissionEnabled !== false
+                ? 'bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100 border-emerald-300'
+                : 'bg-gradient-to-r from-rose-50 via-amber-50 to-rose-100 border-rose-300'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start sm:items-center gap-3.5">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm ${
+                    appSettings?.availabilitySubmissionEnabled !== false
+                      ? 'bg-emerald-600 text-white shadow-emerald-200'
+                      : 'bg-rose-600 text-white shadow-rose-200'
+                  }`}>
+                    {appSettings?.availabilitySubmissionEnabled !== false ? <Sparkles size={24} /> : <Lock size={24} />}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        appSettings?.availabilitySubmissionEnabled !== false
+                          ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                          : 'bg-rose-200 text-rose-900 border border-rose-300'
+                      }`}>
+                        {appSettings?.availabilitySubmissionEnabled !== false ? '🟢 Doorgeven Geopend' : '🔒 Doorgeven Uitgeschakeld'}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-bold">Beheerders-controle</span>
+                    </div>
+                    <h3 className="text-base font-black text-slate-900 tracking-tight mt-1">
+                      {appSettings?.availabilitySubmissionEnabled !== false
+                        ? 'Personeel kan momenteel beschikbaarheden invullen'
+                        : 'Doorgeven van beschikbaarheden is vergrendeld voor personeel'}
+                    </h3>
+                    <p className="text-xs text-slate-600 font-medium">
+                      {appSettings?.availabilitySubmissionEnabled !== false
+                        ? 'Collega\'s (flexi, extra, student) kunnen via hun personeelsportaal beschikbaarheden voor komende weken doorgeven.'
+                        : 'Medewerkers kunnen momenteel geen nieuwe beschikbaarheden indienen of aanpassen in hun portaal.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const current = appSettings?.availabilitySubmissionEnabled !== false;
+                      onUpdateAppSettings?.({ availabilitySubmissionEnabled: !current });
+                    }}
+                    className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-tight flex items-center gap-2 transition cursor-pointer shadow-md active:scale-95 text-white ${
+                      appSettings?.availabilitySubmissionEnabled !== false
+                        ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/25'
+                        : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/25'
+                    }`}
+                  >
+                    {appSettings?.availabilitySubmissionEnabled !== false ? (
+                      <>
+                        <Lock size={15} />
+                        <span>Nu Uitschakelen (Vergrendelen)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={15} />
+                        <span>Nu Openstellen voor Personeel</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
