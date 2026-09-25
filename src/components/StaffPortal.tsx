@@ -47,7 +47,6 @@ import {
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailability, Department, RecurringAvailability, RecurringShiftPreference, RecurringFrequency } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
-import StaffGuideModal from './StaffGuideModal';
 import StaffProfileModal from './StaffProfileModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import StaffLogin from './StaffLogin';
@@ -80,6 +79,7 @@ import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabili
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
 import { calculateShiftDurationHours } from '../utils/employeeAgeUtils';
+import { buildMessengerUrl } from '../utils/whatsappNotificationUtils';
 
 interface StaffPortalProps {
   employees: Employee[];
@@ -406,9 +406,6 @@ export default function StaffPortal({
 
   // Info message
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  // Staff Guide modal state
-  const [showStaffGuideModal, setShowStaffGuideModal] = useState<boolean>(false);
 
   // Calendar integration modal state
   const [showCalendarModal, setShowCalendarModal] = useState<boolean>(false);
@@ -772,12 +769,6 @@ export default function StaffPortal({
   if (!loggedInStaffId || !currentEmployee) {
     return (
       <div className="space-y-6 font-sans">
-        {showStaffGuideModal && (
-          <StaffGuideModal
-            isOpen={showStaffGuideModal}
-            onClose={() => setShowStaffGuideModal(false)}
-          />
-        )}
         <StaffLogin
           employees={employees}
           onLoginSuccess={handleStaffLoginSuccess}
@@ -800,8 +791,8 @@ export default function StaffPortal({
   return (
     <div className="space-y-6 font-sans">
       
-      {/* 1. Eenvoudige Header met directe knop naar Handleiding */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      {/* 1. Eenvoudige Header */}
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="bg-white p-1 rounded-xl border border-orange-200 shadow-xs shrink-0 flex items-center justify-center">
             <InDeMolenLogo className="w-20 h-10" />
@@ -811,16 +802,6 @@ export default function StaffPortal({
             <p className="text-xs text-orange-600 font-bold">In De Molen • Eet-staminée Bierbeek</p>
           </div>
         </div>
-
-        <button
-          type="button"
-          onClick={() => setShowStaffGuideModal(true)}
-          className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer self-end sm:self-auto"
-          title="Bekijk de handleiding"
-        >
-          <BookOpen size={14} className="text-orange-600" />
-          <span>Uitleg / Handleiding</span>
-        </button>
       </div>
 
       {/* Persoonlijke sessie & account balk */}
@@ -998,149 +979,76 @@ export default function StaffPortal({
             </div>
           </div>
 
-          {/* VISUEEL ALARM & AUTOMATISCHE HERINNERING: ONBEVESTIGDE DIENST BINNEN 24 UUR */}
+          {/* ONBEVESTIGDE DIENST BINNEN 24 UUR */}
           {hasUnconfirmedShifts24h ? (
             <div 
               id="shift-24h-visual-alarm-banner"
-              className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-3xl p-5 sm:p-6 shadow-xl border-2 border-red-300 ring-4 ring-red-400/40 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2 duration-300"
+              className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-3xl p-4 sm:p-5 shadow-lg border-2 border-red-300 relative overflow-hidden transition-all animate-in fade-in duration-200"
             >
-              {/* Pulsing beacon decorative background elements */}
-              <div className="absolute -top-12 -right-12 w-48 h-48 bg-white/15 rounded-full blur-2xl pointer-events-none animate-pulse" />
-              <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-black/20 rounded-full blur-xl pointer-events-none" />
-
-              <div className="relative z-10 flex flex-col gap-4">
-                {/* Header of Alarm */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white shrink-0 border border-white/40 shadow-inner">
-                      <span className="relative flex h-6 w-6">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-85" />
-                        <BellRing size={24} className="relative inline-flex stroke-[2.5] text-white" />
-                      </span>
-                    </div>
+              <div className="relative z-10 flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-white shrink-0">
+                      <BellRing size={20} className="stroke-[2.5]" />
+                    </span>
                     <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="bg-white text-red-700 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-red-600 animate-ping inline-block shrink-0" />
-                          <span>🚨 VISUEEL ALARM</span>
-                        </span>
-                        <span className="bg-black/30 text-white font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-white/20 shadow-xs">
-                          {unconfirmedShifts24h.length === 1 ? '1 onbevestigde dienst' : `${unconfirmedShifts24h.length} onbevestigde diensten`} &lt; 24u!
-                        </span>
-                      </div>
-                      <h3 className="text-base sm:text-lg font-black tracking-tight text-white mt-1">
-                        Dienst binnen 24 uur nog niet bevestigd ("Gezien")!
+                      <h3 className="text-sm sm:text-base font-black tracking-tight">
+                        ⚠️ Bevestig je dienst van vandaag/morgen ("Gezien")
                       </h3>
+                      <p className="text-[11px] text-white/90 font-medium">
+                        Laat weten dat je aanwezig zult zijn door hieronder op bevestigen te klikken.
+                      </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                  {unconfirmedShifts24h.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => setShowReminderModal(true)}
-                      className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/30 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 active:scale-95 shadow-xs"
-                      title="Bekijk het volledige automatische herinneringsbericht"
+                      onClick={() => handleAcknowledgeAllUnconfirmed()}
+                      className="px-3.5 py-1.5 bg-white text-red-700 hover:bg-red-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
                     >
-                      <Info size={13} />
-                      <span>Herinneringsbericht</span>
+                      <CheckCheck size={14} className="stroke-[3]" />
+                      <span>Alles Bevestigen ({unconfirmedShifts24h.length})</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleTestNotification}
-                      className="px-3 py-1.5 bg-black/25 hover:bg-black/40 text-white border border-white/25 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 active:scale-95"
-                      title={pushStatus === 'granted' ? 'Push-notificaties zijn actief' : 'Push-notificaties inschakelen'}
-                    >
-                      <Bell size={13} />
-                      <span>{pushStatus === 'granted' ? 'Push Actief ✓' : 'Push Aanzetten 🔔'}</span>
-                    </button>
-                  </div>
+                  )}
                 </div>
 
-                {/* Subtitle / Automatic Reminder Message Teaser */}
-                <p className="text-white/95 text-xs font-medium leading-relaxed bg-black/15 p-3 rounded-2xl border border-white/15">
-                  ⚠️ <strong>Automatische Herinnering:</strong> Beste {currentEmployee.name}, je staat binnen de komende 24 uur ingepland voor onderstaande dienst(en). Deze staat momenteel nog <strong>niet op 'Gezien'</strong>. Bevestig a.u.b. direct zodat het management en je teamleden weten dat de bezetting in orde is!
-                </p>
-
                 {/* Shift Cards within the alarm banner */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   {unconfirmedShifts24h.map((alert) => {
                     const { shift, dayLabel, formattedDate, timeRemainingText, isOngoing, totalHours } = alert;
                     const dept = (shift.department || currentEmployee.department) === 'keuken' ? 'Keuken' : 'Zaal';
                     return (
                       <div 
                         key={shift.id}
-                        className="bg-white text-slate-900 rounded-2xl p-3.5 shadow-md flex flex-col justify-between gap-3 border-2 border-red-300"
+                        className="bg-white text-slate-900 rounded-2xl p-3 shadow-md flex items-center justify-between gap-3 border border-red-200"
                       >
-                        <div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-black text-sm text-slate-900">
-                              {dayLabel}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-black text-xs text-slate-900 truncate">
+                              {dayLabel} • {formattedDate}
                             </span>
-                            <span className="bg-red-100 text-red-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-red-200">
-                              {isOngoing ? '🚨 Nu bezig' : `⏰ ${timeRemainingText}`}
-                            </span>
-                          </div>
-                          <div className="text-xs font-bold text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
-                            <span className="bg-slate-100 px-2 py-0.5 rounded-md text-[10px] font-black text-slate-700">
-                              {shift.startTime} – {shift.endTime} ({totalHours}u)
-                            </span>
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
-                              dept === 'Keuken' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {dept === 'Keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                            <span className="bg-red-100 text-red-800 text-[9px] font-black px-1.5 py-0.2 rounded-full shrink-0">
+                              {isOngoing ? 'Nu bezig' : timeRemainingText}
                             </span>
                           </div>
-                          <p className="text-[11px] text-slate-500 font-medium mt-1">
-                            {formattedDate}
-                          </p>
-                          {shift.notes && (
-                            <p className="text-[11px] text-slate-600 italic bg-slate-50 p-1.5 rounded-lg border border-slate-150 mt-1 truncate">
-                              "{shift.notes}"
-                            </p>
-                          )}
+                          <div className="text-xs font-bold text-slate-600 mt-0.5">
+                            <span>{shift.startTime} – {shift.endTime} ({totalHours}u)</span>
+                            <span className="ml-1.5 text-[10px] text-slate-400">• {dept}</span>
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => handleAcknowledgeClick(shift.id)}
-                            className="flex-1 py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
-                          >
-                            <Check size={14} className="stroke-[3]" />
-                            <span>Dienst Bevestigen ("Gezien")</span>
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAcknowledgeClick(shift.id)}
+                          className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition cursor-pointer flex items-center gap-1 shrink-0"
+                        >
+                          <Check size={14} className="stroke-[3]" />
+                          <span>Bevestigen</span>
+                        </button>
                       </div>
                     );
                   })}
-                </div>
-
-                {/* Bottom Quick Action Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/20 text-xs">
-                  <div className="flex items-center gap-2 text-white/90 font-medium">
-                    <span className="text-sm">🔔</span>
-                    <span>Push-notificatie status: <strong>{pushStatus === 'granted' ? 'Ingeschakeld' : 'Niet ingeschakeld'}</strong></span>
-                  </div>
-
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {unconfirmedShifts24h.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleAcknowledgeAllUnconfirmed()}
-                        className="px-4 py-2 bg-white text-red-700 hover:bg-red-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
-                      >
-                        <CheckCheck size={14} className="stroke-[3]" />
-                        <span>Alles Bevestigen ({unconfirmedShifts24h.length})</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowReminderModal(true)}
-                      className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-                    >
-                      Volledig Bericht Lezen 📜
-                    </button>
-                  </div>
                 </div>
               </div>
             </div>
@@ -3609,16 +3517,27 @@ export default function StaffPortal({
                         <p className="text-xs text-slate-600 mb-2 truncate">
                           {selectedColleagueForModal.facebookUrl}
                         </p>
-                        <a
-                          href={selectedColleagueForModal.facebookUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#1877F2] hover:bg-[#0C63D4] text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"
-                        >
-                          <Facebook size={15} />
-                          <span>Open Facebook Profiel</span>
-                          <ExternalLink size={13} />
-                        </a>
+                        <div className="grid grid-cols-2 gap-2">
+                          <a
+                            href={selectedColleagueForModal.facebookUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-[#1877F2] hover:bg-[#0C63D4] text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"
+                          >
+                            <Facebook size={14} />
+                            <span>Facebook</span>
+                            <ExternalLink size={11} />
+                          </a>
+                          <a
+                            href={buildMessengerUrl(selectedColleagueForModal.facebookUrl)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"
+                          >
+                            <MessageCircle size={14} />
+                            <span>Messenger 💬</span>
+                          </a>
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-2">
@@ -3638,14 +3557,6 @@ export default function StaffPortal({
                       </div>
                     )}
                   </div>
-
-              {/* Privacy Notice regarding Experience Level / Niveau */}
-              <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-3 flex items-start gap-2.5 text-[11px] text-amber-900 leading-relaxed">
-                <Info size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <strong>Vertrouwelijk personeelsbeleid:</strong> Ervaringsniveaus (beginner/gemiddeld/ervaren), evaluaties en contractstatuten zijn strikt vertrouwelijk en enkel in te kijken door de beheerder (Hans Stevens).
-                </div>
-              </div>
 
               {/* Close Button */}
               <button
@@ -4012,14 +3923,6 @@ export default function StaffPortal({
 
           </div>
         </div>
-      )}
-
-      {/* Staff Step-by-Step Guide Modal */}
-      {showStaffGuideModal && (
-        <StaffGuideModal
-          isOpen={showStaffGuideModal}
-          onClose={() => setShowStaffGuideModal(false)}
-        />
       )}
 
       {/* Staff Self-Service Profile Modal (Naam, Telefoonnummer, Facebook) */}

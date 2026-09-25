@@ -58,6 +58,13 @@ import { CURRENT_WEEK_NUMBER } from './utils/weekUtils';
 import ShareTeamModal from './components/ShareTeamModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import AutoWhatsAppModal, { AutoWhatsAppModalData } from './components/AutoWhatsAppModal';
+import InAppNotificationBanner from './components/InAppNotificationBanner';
+import { 
+  generateScheduleUpdateWhatsAppText, 
+  generateNoticeWhatsAppText,
+  isAutoWhatsAppPromptEnabled 
+} from './utils/whatsappNotificationUtils';
 
 const DAYS_OF_WEEK = [
   'Maandag',
@@ -247,6 +254,9 @@ export default function App() {
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
   const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'error' | 'idle'>('idle');
   const [lastCloudSyncTime, setLastCloudSyncTime] = useState<string | null>(null);
+
+  // Automatic WhatsApp Share Notification Modal State
+  const [autoWhatsAppModalData, setAutoWhatsAppModalData] = useState<AutoWhatsAppModalData | null>(null);
 
   // Sync to localStorage
   useEffect(() => {
@@ -510,6 +520,21 @@ export default function App() {
     setNotices(nextNotices);
     saveNoticesToCloud(nextNotices);
 
+    // Auto WhatsApp prompt for schedule publication
+    if (isAutoWhatsAppPromptEnabled()) {
+      setAutoWhatsAppModalData({
+        isOpen: true,
+        type: 'schedule_publish',
+        title: `Planning ${weekLabel} Gepubliceerd!`,
+        subtitle: `Het rooster staat direct live in het personeelsportaal en op het mededelingenbord. Deel dit direct in de WhatsApp teamgroep:`,
+        defaultMessage: generateScheduleUpdateWhatsAppText({
+          weekNumber: targetWeek || CURRENT_WEEK_NUMBER,
+          shiftsCount: draftCount,
+          notes: `${draftCount} diensten zijn zojuist officieel gepubliceerd.`
+        })
+      });
+    }
+
     // Automatic Cloud Backup Snapshot of the finalized schedule
     const weekForBackup = targetWeek || CURRENT_WEEK_NUMBER;
     const weekShifts = publishedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === weekForBackup);
@@ -614,6 +639,43 @@ export default function App() {
     setNotices(nextNotices);
     saveNoticesToCloud(nextNotices);
     addLog('Mededeling geplaatst', `Groepsbericht geplaatst: "${noticeData.title}"`);
+
+    // Auto WhatsApp prompt for notice publication
+    if (isAutoWhatsAppPromptEnabled()) {
+      setAutoWhatsAppModalData({
+        isOpen: true,
+        type: 'notice_posted',
+        title: `Bericht geplaatst: "${newNotice.title}"`,
+        subtitle: `Het bericht staat direct live in het personeelsportaal en op het mededelingenbord. Deel dit direct via WhatsApp:`,
+        defaultMessage: generateNoticeWhatsAppText(newNotice)
+      });
+    }
+  };
+
+  // Action: Manual trigger to share any schedule week via WhatsApp
+  const handleShareWhatsAppSchedule = (targetWeek: number) => {
+    const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek && s.status === 'published');
+    setAutoWhatsAppModalData({
+      isOpen: true,
+      type: 'schedule_update',
+      title: `Deel Rooster Week ${targetWeek}`,
+      subtitle: `Stuur de actuele weekplanning van Week ${targetWeek} direct via WhatsApp naar de teamgroep:`,
+      defaultMessage: generateScheduleUpdateWhatsAppText({
+        weekNumber: targetWeek,
+        shiftsCount: weekShifts.length
+      })
+    });
+  };
+
+  // Action: Manual trigger to share a notice via WhatsApp
+  const handleShareWhatsAppNotice = (notice: Notice) => {
+    setAutoWhatsAppModalData({
+      isOpen: true,
+      type: 'notice_posted',
+      title: `Deel Bericht: "${notice.title}"`,
+      subtitle: `Stuur dit mededelingenbord-bericht direct via WhatsApp naar het team:`,
+      defaultMessage: generateNoticeWhatsAppText(notice)
+    });
   };
 
   // Action: Delete group notice (Manager)
@@ -1495,6 +1557,8 @@ export default function App() {
                 onOpenShiftForSwap={handleOpenShiftForSwap}
                 onCreateOpenShift={handleCreateOpenShift}
                 onSelfAssignOpenShift={handleSelfAssignOpenShift}
+                onShareWhatsAppSchedule={handleShareWhatsAppSchedule}
+                onShareWhatsAppNotice={handleShareWhatsAppNotice}
               />
             </div>
           )
@@ -1627,6 +1691,19 @@ export default function App() {
           cloudSyncStatus={cloudSyncStatus}
           lastSyncTime={lastCloudSyncTime}
           onForceCloudSync={handleForceCloudSync}
+        />
+      )}
+
+      {/* Floating In-App Real-time Notification Banner for updates & notices */}
+      <InAppNotificationBanner
+        latestNotice={notices.length > 0 ? notices[0] : null}
+      />
+
+      {/* Automatic WhatsApp Sharing Modal */}
+      {autoWhatsAppModalData && (
+        <AutoWhatsAppModal
+          data={autoWhatsAppModalData}
+          onClose={() => setAutoWhatsAppModalData(null)}
         />
       )}
 

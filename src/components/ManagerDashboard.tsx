@@ -25,6 +25,7 @@ import {
   Copy,
   ExternalLink,
   MessageCircle,
+  MessageSquare,
   Download,
   Database,
   HardDrive,
@@ -114,6 +115,8 @@ interface ManagerDashboardProps {
   onToggleNoticeReaction?: (noticeId: string, emoji: string, employeeId: string) => void;
   onDeleteNoticeComment?: (noticeId: string, commentId: string) => void;
   onSelfAssignOpenShift?: (shiftId: string, employeeId: string) => void;
+  onShareWhatsAppSchedule?: (weekNumber: number) => void;
+  onShareWhatsAppNotice?: (notice: Notice) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -163,7 +166,9 @@ export default function ManagerDashboard({
   onAddNoticeComment,
   onToggleNoticeReaction,
   onDeleteNoticeComment,
-  onSelfAssignOpenShift
+  onSelfAssignOpenShift,
+  onShareWhatsAppSchedule,
+  onShareWhatsAppNotice
 }: ManagerDashboardProps) {
   // Notices deletion & comments state for managers
   const [noticeToDeleteId, setNoticeToDeleteId] = useState<string | null>(null);
@@ -1057,6 +1062,20 @@ export default function ManagerDashboard({
               <span>Mededeling Plaatsen</span>
             </button>
 
+            {/* Directe knop: Deel Rooster via WhatsApp / Messenger */}
+            {onShareWhatsAppSchedule && (
+              <button
+                id="quick-action-whatsapp-schedule-btn"
+                type="button"
+                onClick={() => onShareWhatsAppSchedule(selectedManagerWeek)}
+                className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-emerald-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-emerald-600/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
+                title="Deel de actuele weekplanning direct via WhatsApp of Facebook Messenger in de teamgroep"
+              >
+                <MessageSquare size={17} className="stroke-[2.5]" />
+                <span>Deel Rooster (WhatsApp / Messenger) 💬</span>
+              </button>
+            )}
+
             {/* Quick jump to notice board if there are active notices */}
             {notices.length > 0 && (
               <button
@@ -1138,13 +1157,26 @@ export default function ManagerDashboard({
               </p>
             </div>
           </div>
-          <button 
-            onClick={() => onPublishAllDrafts(selectedManagerWeek)}
-            className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
-          >
-            <CheckCheck size={16} />
-            <span>Publiceer Week {selectedManagerWeek} Rooster ({loggedDraftShiftsCount})</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <button 
+              onClick={() => onPublishAllDrafts(selectedManagerWeek)}
+              className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
+            >
+              <CheckCheck size={16} />
+              <span>Publiceer Week {selectedManagerWeek} Rooster ({loggedDraftShiftsCount})</span>
+            </button>
+            {onShareWhatsAppSchedule && (
+              <button 
+                type="button"
+                onClick={() => onShareWhatsAppSchedule(selectedManagerWeek)}
+                className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 shrink-0 cursor-pointer"
+                title="Deel de planning direct via WhatsApp of Facebook Messenger"
+              >
+                <MessageSquare size={15} />
+                <span>Deel WhatsApp / Messenger</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : totalDraftShiftsCount > 0 ? (
         <div className="bg-amber-50 rounded-3xl border-2 border-amber-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
@@ -3195,6 +3227,19 @@ export default function ManagerDashboard({
                             </span>
                             <div className="flex items-center gap-2">
                               <span className="text-[10px] text-slate-400 font-bold uppercase">{not.date}</span>
+
+                              {/* Direct Share button for Notice (WhatsApp & Messenger) */}
+                              {onShareWhatsAppNotice && (
+                                <button
+                                  type="button"
+                                  onClick={() => onShareWhatsAppNotice(not)}
+                                  className="flex items-center gap-1 px-2.5 py-1 bg-gradient-to-r from-emerald-50 to-blue-50 hover:from-emerald-100 hover:to-blue-100 text-slate-800 border border-slate-300 rounded-xl text-[10px] font-black transition cursor-pointer active:scale-95"
+                                  title="Deel deze mededeling via WhatsApp of Facebook Messenger in de teamgroep"
+                                >
+                                  <MessageSquare size={11} className="text-emerald-600" />
+                                  <span>Deel (WhatsApp / Messenger)</span>
+                                </button>
+                              )}
                               
                               {/* Delete Notice Button for Manager */}
                               {onDeleteNotice && (
