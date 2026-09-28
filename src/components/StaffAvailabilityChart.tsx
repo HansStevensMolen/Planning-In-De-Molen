@@ -147,6 +147,18 @@ export default function StaffAvailabilityChart({
         }
       });
 
+      // Sort availableList: Vast first, then Flexi, Student, Extra, then alphabetically
+      availableList.sort((a, b) => {
+        const isVastA = a.emp.statuut === 'Vast';
+        const isVastB = b.emp.statuut === 'Vast';
+        if (isVastA && !isVastB) return -1;
+        if (!isVastA && isVastB) return 1;
+        const statRank = (s: string) => s === 'Vast' ? 0 : s === 'Flexi' ? 1 : s === 'Student' ? 2 : 3;
+        const diff = statRank(a.emp.statuut) - statRank(b.emp.statuut);
+        if (diff !== 0) return diff;
+        return a.emp.name.localeCompare(b.emp.name, 'nl', { sensitivity: 'base' });
+      });
+
       // Scheduled shifts for this day and week
       const dayShifts = shifts.filter(s => {
         const sWeek = s.weekNumber !== undefined ? s.weekNumber : weekNumber;

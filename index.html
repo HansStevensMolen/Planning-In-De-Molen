@@ -17,7 +17,7 @@
               } catch (e) {
                 str = '';
               }
-              if (str && (str.indexOf('[vite]') !== -1 || str.indexOf('vite-hmr') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('24678') !== -1)) {
+              if (str && (str.indexOf('[vite]') !== -1 || str.indexOf('[app]') !== -1 || str.indexOf('send was called before connect') !== -1 || str.indexOf('vite-hmr') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('24678') !== -1)) {
                 return;
               }
             }
@@ -28,7 +28,7 @@
         if (typeof window !== 'undefined') {
           window.addEventListener('error', function(event) {
             var msg = event && (event.message || (event.error && event.error.message)) || '';
-            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
+            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('[app]') !== -1 || msg.indexOf('send was called before connect') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
               event.stopImmediatePropagation();
               event.preventDefault();
               return true;
@@ -38,7 +38,7 @@
           window.addEventListener('unhandledrejection', function(event) {
             var reason = event && event.reason;
             var msg = reason && (reason.message || String(reason)) || '';
-            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
+            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('[app]') !== -1 || msg.indexOf('send was called before connect') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
               event.stopImmediatePropagation();
               event.preventDefault();
               return true;

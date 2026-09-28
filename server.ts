@@ -1,3 +1,4 @@
+import "./src/utils/fixDirname";
 import express, { Request, Response } from "express";
 import path from "path";
 import dotenv from "dotenv";
@@ -297,8 +298,52 @@ BEZETTINGSNORMEN VAN IN DE MOLEN (STRIKT TE VOLGEN):
         middlewareMode: true,
         hmr: false
       },
+      logLevel: "silent",
       appType: "spa",
     });
+
+    // Intercept /@vite/client to provide a silent dummy transport and prevent WebSocket connection errors in sandbox
+    app.get("/@vite/client", async (req: Request, res: Response, next) => {
+      try {
+        const result = await vite.transformRequest("/@vite/client");
+        if (!result?.code) return next();
+        
+        let code = result.code;
+        
+        const startIdx = code.indexOf("const transport = normalizeModuleRunnerTransport(");
+        const endIdx = code.indexOf("let willUnload = false;");
+        
+        if (startIdx !== -1 && endIdx !== -1) {
+          const dummyTransport = `const transport = {
+  async connect(handlers) {
+    if (handlers && typeof handlers.onMessage === "function") {
+      try { handlers.onMessage({ type: "connected" }); } catch(e) {}
+    }
+  },
+  async disconnect() {},
+  async send() {},
+  async invoke() { return undefined; }
+};
+`;
+          code = code.substring(0, startIdx) + dummyTransport + code.substring(endIdx);
+        }
+        
+        // Prevent throwing errors on un-connected send or invoke
+        code = code.replaceAll('throw new Error("send was called before connect");', "return;");
+        code = code.replaceAll('throw new Error("invoke was called before connect");', "return undefined;");
+        // Silence internal console messages
+        code = code.replaceAll('console.debug(`[vite] connected.`);', "/* connected */");
+        code = code.replaceAll("[vite]", "");
+        code = code.replaceAll("[app]", "");
+
+        res.setHeader("Content-Type", "application/javascript");
+        res.setHeader("Cache-Control", "no-cache");
+        return res.send(code);
+      } catch (err) {
+        return next(err);
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");

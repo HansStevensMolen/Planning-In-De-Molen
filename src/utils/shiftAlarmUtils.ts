@@ -218,3 +218,57 @@ export function generateAutomatedReminderText(
 
   return `Beste ${employee.name},\n\nDit is een automatische herinnering van Café In De Molen:\nJe hebt ${count === 1 ? 'een dienst' : `${count} diensten`} binnen 24 uur die nog niet gemarkeerd zijn als 'Gezien'.\n\n${shiftLines}\n\nGelieve je aanwezigheid zo snel mogelijk te bevestigen in het personeelsportaal zodat het team weet dat je paraat staat!\n\nMet vriendelijke groeten,\nCafé In De Molen`;
 }
+
+/**
+ * Dispatches an urgent native browser Push Notification when a shift was modified or cancelled.
+ */
+export function sendShiftChangeNotification(
+  employee: Employee,
+  noticeTitle: string,
+  noticeContent: string,
+  noticeId: string
+): boolean {
+  if (!isPushNotificationSupported() || Notification.permission !== 'granted') {
+    return false;
+  }
+
+  try {
+    const notification = new Notification(`⚠️ In De Molen: ${noticeTitle}`, {
+      body: noticeContent,
+      icon: '/favicon.ico',
+      tag: `shift-change-${noticeId}`,
+      requireInteraction: true
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+
+    sessionStorage.setItem(`shift_change_notif_sent_${noticeId}`, 'true');
+    return true;
+  } catch (err) {
+    console.error('Failed to trigger shift change notification:', err);
+    return false;
+  }
+}
+
+/**
+ * Checks if a shift change notification was already dispatched in this browser session.
+ */
+export function hasShiftChangeNotificationBeenSent(noticeId: string): boolean {
+  try {
+    return sessionStorage.getItem(`shift_change_notif_sent_${noticeId}`) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Marks a shift change notification as sent in sessionStorage.
+ */
+export function markShiftChangeNotificationAsSent(noticeId: string): void {
+  try {
+    sessionStorage.setItem(`shift_change_notif_sent_${noticeId}`, 'true');
+  } catch {}
+}
