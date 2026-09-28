@@ -53,6 +53,7 @@ import {
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta, AppSettings } from '../types';
 import NotificationModal from './NotificationModal';
+import SendWeekScheduleModal from './SendWeekScheduleModal';
 import BackupManagerModal from './BackupManagerModal';
 import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
 import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
@@ -72,7 +73,13 @@ import {
   isStudentMissingBirthDate,
   validateMinorShift,
   isShiftEndingAfter23,
-  calculateShiftDurationHours
+  calculateShiftDurationHours,
+  calculateEmployeeWeeklyHours,
+  checkWeeklyHoursCompliance,
+  getShiftTimingDetails,
+  getOfficialClosingTime,
+  getSluitActualEndTime,
+  getHulpsluitActualEndTime
 } from '../utils/employeeAgeUtils';
 import { CAFE_OPENING_HOURS, CAFE_SUMMARY_OPENING_HOURS } from '../utils/openingHours';
 
@@ -119,6 +126,8 @@ interface ManagerDashboardProps {
   onShareWhatsAppNotice?: (notice: Notice) => void;
   appSettings?: AppSettings;
   onUpdateAppSettings?: (settings: Partial<AppSettings>) => void;
+  onAcknowledgeShift?: (shiftId: string, confirmed?: boolean, by?: string) => void;
+  onBulkAcknowledgeWeek?: (weekNumber: number, confirmed?: boolean) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -172,7 +181,9 @@ export default function ManagerDashboard({
   onShareWhatsAppSchedule,
   onShareWhatsAppNotice,
   appSettings,
-  onUpdateAppSettings
+  onUpdateAppSettings,
+  onAcknowledgeShift,
+  onBulkAcknowledgeWeek
 }: ManagerDashboardProps) {
   // Notices deletion & comments state for managers
   const [noticeToDeleteId, setNoticeToDeleteId] = useState<string | null>(null);
@@ -205,6 +216,8 @@ export default function ManagerDashboard({
 
   // Modals state
   const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [showSendWeekScheduleModal, setShowSendWeekScheduleModal] = useState(false);
+  const [sendTargetWeek, setSendTargetWeek] = useState<number>(selectedManagerWeek);
   const [showShiftReminderModal, setShowShiftReminderModal] = useState(false);
   const [reminderToast, setReminderToast] = useState<{
     shiftId: string;
@@ -1095,6 +1108,21 @@ export default function ManagerDashboard({
               <span>Mededeling Plaatsen</span>
             </button>
 
+            {/* Directe knop: Shiften Versturen naar Personeel (Kies Week) */}
+            <button
+              id="quick-action-send-shifts-btn"
+              type="button"
+              onClick={() => {
+                setSendTargetWeek(selectedManagerWeek);
+                setShowSendWeekScheduleModal(true);
+              }}
+              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-teal-600 via-emerald-600 to-teal-700 hover:from-teal-700 hover:to-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-emerald-600/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
+              title="Kies van welke week je de shiften naar het personeel verstuurt (via WhatsApp, Notificaties of Portaal)"
+            >
+              <Send size={17} className="stroke-[2.5]" />
+              <span>Shiften Sturen (Kies Week) 📤</span>
+            </button>
+
             {/* Directe knop: Deel Rooster via WhatsApp / Messenger */}
             {onShareWhatsAppSchedule && (
               <button
@@ -1139,15 +1167,42 @@ export default function ManagerDashboard({
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
-          <div className="p-3 bg-emerald-500 rounded-2xl text-white shadow-lg shadow-emerald-100 shrink-0">
-            <FileCheck size={24} />
+        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-4">
+            <div className="p-3 bg-emerald-500 rounded-2xl text-white shadow-lg shadow-emerald-100 shrink-0">
+              <FileCheck size={24} />
+            </div>
+            <div>
+              <p className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-wide">Gezien/Bevestigd</p>
+              <h3 className="text-2xl font-black text-slate-800 mt-1">{confirmationRate}%</h3>
+              <p className="text-xs text-slate-500">{confirmedShiftsCount} van de {publishedShiftsCount} bevestigd</p>
+            </div>
           </div>
-          <div>
-            <p className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-wide">Gezien/Bevestigd</p>
-            <h3 className="text-2xl font-black text-slate-800 mt-1">{confirmationRate}%</h3>
-            <p className="text-xs text-slate-500">{confirmedShiftsCount} van de {publishedShiftsCount} bevestigd</p>
-          </div>
+          {publishedShiftsCount > confirmedShiftsCount && (
+            <button
+              type="button"
+              onClick={() => {
+                const unconfirmed = activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published');
+                if (onBulkAcknowledgeWeek) {
+                  onBulkAcknowledgeWeek(selectedManagerWeek, true);
+                } else if (onBatchUpdateShifts) {
+                  const updated = shifts.map(s => {
+                    if ((s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'published') {
+                      return { ...s, acknowledged: true, acknowledgedBy: 'Hans Stevens (Beheerder)', acknowledgedAt: Date.now() };
+                    }
+                    return s;
+                  });
+                  onBatchUpdateShifts(updated, `Alle shiften van Week ${selectedManagerWeek} bevestigd door beheerder`);
+                }
+                setSixWeeksSuccessMsg(`✅ Alle ${unconfirmed.length} openstaande shiften van Week ${selectedManagerWeek} zijn direct bevestigd door beheerder Hans Stevens!`);
+                setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+              }}
+              className="px-2.5 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border border-emerald-300 rounded-xl text-[10px] font-black uppercase tracking-tight transition cursor-pointer active:scale-95 shadow-2xs shrink-0"
+              title="Bevestig alle openstaande shiften van deze week in één klik als beheerder"
+            >
+              Bevestig ({publishedShiftsCount - confirmedShiftsCount} ✓)
+            </button>
+          )}
         </div>
 
         <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
@@ -1197,6 +1252,18 @@ export default function ManagerDashboard({
             >
               <CheckCheck size={16} />
               <span>Publiceer Week {selectedManagerWeek} Rooster ({loggedDraftShiftsCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSendTargetWeek(selectedManagerWeek);
+                setShowSendWeekScheduleModal(true);
+              }}
+              className="px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 shrink-0 cursor-pointer"
+              title="Kies van welke week je de shiften wilt versturen naar het personeel"
+            >
+              <Send size={15} />
+              <span>Shiften Sturen (Kies Week) 📤</span>
             </button>
             {onShareWhatsAppSchedule && (
               <button 
@@ -1383,6 +1450,19 @@ export default function ManagerDashboard({
                   <span>Delen met Team 🔗</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSendTargetWeek(selectedManagerWeek);
+                  setShowSendWeekScheduleModal(true);
+                }}
+                className="px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title="Kies van welke week je de shiften wilt versturen naar het personeel"
+              >
+                <Send size={15} />
+                <span>📤 Shiften Sturen (Kies Week)</span>
+              </button>
 
               <button
                 onClick={() => setShowNotificationModal(true)}
@@ -1648,6 +1728,36 @@ export default function ManagerDashboard({
                   }`}>
                     {isCurrentWeekSelectedArchived ? `📦 Week ${selectedManagerWeek} (Archief)` : `Week ${selectedManagerWeek} actief`}
                   </span>
+
+                  {/* 1-click week lock toggle pill for manager */}
+                  {!isCurrentWeekSelectedArchived && (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleWeekLock(selectedManagerWeek)}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border transition cursor-pointer flex items-center gap-1 active:scale-95 ${
+                        isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
+                          ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
+                          : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-emerald-300'
+                      }`}
+                      title={
+                        isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
+                          ? 'Beschikbaarheid is vergrendeld. Klik om te openen voor personeel.'
+                          : 'Beschikbaarheid staat open. Klik om te vergrendelen.'
+                      }
+                    >
+                      {isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings) ? (
+                        <>
+                          <Lock size={9} />
+                          <span>Beschikbaarheid Dicht</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                          <span>Beschikbaarheid Open</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500 font-bold mt-0.5">
                   {getWeekMeta(selectedManagerWeek).label} • {getWeekMeta(selectedManagerWeek).dateRange}
@@ -1761,6 +1871,34 @@ export default function ManagerDashboard({
 
             {/* Quick helper: copy previous week & clear week & print PDF */}
             <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {/* Quick bulk acknowledge all shifts for selectedManagerWeek */}
+              {activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const unconfirmedCount = activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length;
+                    if (onBulkAcknowledgeWeek) {
+                      onBulkAcknowledgeWeek(selectedManagerWeek, true);
+                    } else if (onBatchUpdateShifts) {
+                      const updated = shifts.map(s => {
+                        if ((s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'published') {
+                          return { ...s, acknowledged: true, acknowledgedBy: 'Hans Stevens (Beheerder)', acknowledgedAt: Date.now() };
+                        }
+                        return s;
+                      });
+                      onBatchUpdateShifts(updated, `Alle shiften van Week ${selectedManagerWeek} bevestigd door beheerder`);
+                    }
+                    setSixWeeksSuccessMsg(`✅ Alle ${unconfirmedCount} openstaande shiften van Week ${selectedManagerWeek} zijn bevestigd door beheerder Hans Stevens!`);
+                    setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+                  }}
+                  className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-300 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-xs active:scale-95"
+                  title={`Bevestig alle ${activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length} onbevestigde shiften van Week ${selectedManagerWeek} in één klik als beheerder`}
+                >
+                  <Check size={14} className="text-emerald-600 stroke-[3]" />
+                  <span>Bevestig Alle Shiften ({activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length} ✓)</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowSchedulePrintModal(true)}
@@ -1882,43 +2020,138 @@ export default function ManagerDashboard({
             const publishedCount = currentWeekShifts.filter(s => !s.isOpenShift && s.status === 'published').length;
             const acknowledgedCount = currentWeekShifts.filter(s => s.acknowledged).length;
 
+            // Urencontrole & Overwerkbewaking voor de geselecteerde week
+            const empComplianceList = deptEmployees.map(emp => {
+              const hours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+              const compliance = checkWeeklyHoursCompliance(emp, hours);
+              return { emp, ...compliance };
+            });
+
+            const overtimeList = empComplianceList.filter(c => c.isOvertime);
+            const underhoursVastList = empComplianceList.filter(c => c.isVastUnderhours);
+
             return (
-              <div className="bg-white rounded-3xl p-4 border-2 border-orange-100 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
-                    <span>📊 Voortgang Week {selectedManagerWeek}</span>
-                    <span className="text-slate-500 font-bold text-[11px]">({isZaal ? 'Zaal' : 'Keuken'})</span>:
-                  </span>
-                </div>
+              <div className="bg-white rounded-3xl p-4 border-2 border-orange-100 shadow-xs flex flex-col gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
+                      <span>📊 Voortgang Week {selectedManagerWeek}</span>
+                      <span className="text-slate-500 font-bold text-[11px]">({isZaal ? 'Zaal' : 'Keuken'})</span>:
+                    </span>
+                  </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Open Chip */}
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs" title="Openstaande shiften waarop personeel kan intekenen">
-                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                    <span>{openCount} Open</span>
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Open Chip */}
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs" title="Openstaande shiften waarop personeel kan intekenen">
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      <span>{openCount} Open</span>
+                    </span>
 
-                  {/* Ontwerp Chip */}
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs" title="Concept-shiften die nog niet definitief gepubliceerd zijn">
-                    <span className="w-2 h-2 rounded-full bg-slate-400" />
-                    <span>{draftCount} Ontwerp</span>
-                  </span>
+                    {/* Ontwerp Chip */}
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs" title="Concept-shiften die nog niet definitief gepubliceerd zijn">
+                      <span className="w-2 h-2 rounded-full bg-slate-400" />
+                      <span>{draftCount} Ontwerp</span>
+                    </span>
 
-                  {/* Gepubliceerd Chip */}
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs" title="Gepubliceerde shiften, zichtbaar voor medewerkers">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span>{publishedCount} Gepubliceerd</span>
-                    {publishedCount > 0 && (
-                      <span className="text-[10px] text-emerald-700 font-bold ml-0.5" title="Waarvan gezien door medewerker">
-                        ({acknowledgedCount} ✓)
+                    {/* Gepubliceerd Chip */}
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs" title="Gepubliceerde shiften, zichtbaar voor medewerkers">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <span>{publishedCount} Gepubliceerd</span>
+                      {publishedCount > 0 && (
+                        <span className="text-[10px] text-emerald-700 font-bold ml-0.5" title="Waarvan gezien door medewerker">
+                          ({acknowledgedCount} ✓)
+                        </span>
+                      )}
+                    </span>
+
+                    {/* Visuele Waarschuwing Chip: Overwerk (> 45 uur) */}
+                    {overtimeList.length > 0 && (
+                      <span 
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-rose-100 text-rose-950 border-2 border-rose-400 shadow-2xs animate-pulse cursor-pointer" 
+                        title={`Overwerk waarschuwing: ${overtimeList.map(item => `${item.emp.name} (${item.hours}u, +${item.excessHours}u te veel)`).join(', ')}. Limiet is 45u per week om overwerk te voorkomen!`}
+                      >
+                        <AlertTriangle size={13} className="text-rose-600 shrink-0" />
+                        <span>{overtimeList.length}x Overwerk (&gt;45u) ⚠️</span>
                       </span>
                     )}
-                  </span>
 
-                  <span className="text-[11px] font-bold text-slate-400 pl-1">
-                    Totaal: {currentWeekShifts.length}
-                  </span>
+                    {/* Visuele Waarschuwing Chip: Vaste medewerker onder contractnorm (< 42 uur) */}
+                    {underhoursVastList.length > 0 && (
+                      <span 
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border-2 border-amber-400 shadow-2xs cursor-pointer" 
+                        title={`Contractnorm waarschuwing: ${underhoursVastList.map(item => `${item.emp.name} (${item.hours}u / 42u, tekort van ${item.shortageHours}u)`).join(', ')}. Vaste krachten moeten 42u per week ingepland worden!`}
+                      >
+                        <CircleAlert size={13} className="text-amber-700 shrink-0" />
+                        <span>{underhoursVastList.length}x Vast &lt; 42u ⚠️</span>
+                      </span>
+                    )}
+
+                    <span className="text-[11px] font-bold text-slate-400 pl-1">
+                      Totaal: {currentWeekShifts.length}
+                    </span>
+                  </div>
                 </div>
+
+                {/* Uitgebreide Waarschuwingsbanner als er overwerk of vaste krachten onder de norm zijn */}
+                {(overtimeList.length > 0 || underhoursVastList.length > 0) && (
+                  <div className="pt-3 border-t border-orange-100 flex flex-col gap-2">
+                    {overtimeList.length > 0 && (
+                      <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3 text-xs text-rose-950 flex items-start gap-2.5 shadow-2xs animate-in fade-in">
+                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between flex-wrap gap-1">
+                            <span className="font-black uppercase tracking-tight text-rose-900 text-[11px]">
+                              ⚠️ Overwerk Voorkomen (&gt; 45 uur ingepland in Week {selectedManagerWeek})
+                            </span>
+                            <span className="text-[10px] bg-rose-200 text-rose-900 font-black px-2 py-0.5 rounded-full uppercase">
+                              {overtimeList.length} {overtimeList.length === 1 ? 'medewerker heeft >45u' : 'medewerkers hebben >45u'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-rose-800 mt-0.5 font-medium">
+                            Om overwerk en overbelasting te voorkomen mag een medewerker maximaal 45 uur per week ingepland worden. Pas de diensten aan voor onderstaande {overtimeList.length === 1 ? 'medewerker' : 'medewerkers'}:
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {overtimeList.map(({ emp, hours, excessHours }) => (
+                              <span key={emp.id} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border-2 border-rose-300 font-bold text-xs text-rose-900 shadow-2xs">
+                                <span>{emp.name} ({emp.statuut}):</span>
+                                <span className="font-black text-rose-600 bg-rose-100 px-1.5 py-0.2 rounded-md">{hours}u</span>
+                                <span className="text-rose-500 font-bold text-[10px]">(+{excessHours}u overwerk)</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {underhoursVastList.length > 0 && (
+                      <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 text-xs text-amber-950 flex items-start gap-2.5 shadow-2xs animate-in fade-in">
+                        <CircleAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between flex-wrap gap-1">
+                            <span className="font-black uppercase tracking-tight text-amber-900 text-[11px]">
+                              ⚠️ Vaste Krachten Onder Contractnorm (&lt; 42 uur in Week {selectedManagerWeek})
+                            </span>
+                            <span className="text-[10px] bg-amber-200 text-amber-900 font-black px-2 py-0.5 rounded-full uppercase">
+                              {underhoursVastList.length} {underhoursVastList.length === 1 ? 'vaste kracht onder 42u' : 'vaste krachten onder 42u'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-amber-800 mt-0.5 font-medium">
+                            Vaste medewerkers hebben een voltijdse contractnorm van 42 uur per week. Plan extra uren of shifts in om aan de vereiste 42 uur te geraken:
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {underhoursVastList.map(({ emp, hours, shortageHours }) => (
+                              <span key={emp.id} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border-2 border-amber-300 font-bold text-xs text-amber-900 shadow-2xs">
+                                <span>{emp.name}:</span>
+                                <span className="font-black text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded-md">{hours}u</span>
+                                <span className="text-amber-800 font-semibold text-[10px]">/ 42u norm (tekort van {shortageHours}u)</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -2068,11 +2301,31 @@ export default function ManagerDashboard({
                       </td>
                     </tr>
                   ) : (
-                    deptEmployees.map((emp) => (
-                      <tr key={emp.id} className="hover:bg-orange-50/20 transition-colors group">
+                    deptEmployees.map((emp) => {
+                      const empHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+                      const compliance = checkWeeklyHoursCompliance(emp, empHours);
+                      const { isOvertime, isVastUnderhours, isVastOptimal, excessHours, shortageHours } = compliance;
+
+                      return (
+                      <tr 
+                        key={emp.id} 
+                        className={`transition-colors group ${
+                          isOvertime 
+                            ? 'bg-rose-50/25 hover:bg-rose-100/35' 
+                            : isVastUnderhours 
+                              ? 'bg-amber-50/20 hover:bg-amber-100/30' 
+                              : 'hover:bg-orange-50/20'
+                        }`}
+                      >
                         {/* Employee Info Column - Sticky */}
-                        <td className="sticky left-0 z-10 w-52 min-w-[210px] max-w-[210px] px-4 py-4 whitespace-nowrap bg-white group-hover:bg-orange-50/90 border-r-2 border-b border-orange-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] transition-colors">
-                          <div className="flex items-center space-x-3">
+                        <td className={`sticky left-0 z-10 w-52 min-w-[210px] max-w-[210px] px-3.5 py-3.5 whitespace-nowrap border-r-2 border-b border-orange-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] transition-colors ${
+                          isOvertime
+                            ? 'bg-rose-50/95 group-hover:bg-rose-100/95 border-l-4 border-l-rose-500'
+                            : isVastUnderhours
+                              ? 'bg-amber-50/90 group-hover:bg-amber-100/90 border-l-4 border-l-amber-500'
+                              : 'bg-white group-hover:bg-orange-50/90'
+                        }`}>
+                          <div className="flex items-center space-x-2.5">
                             <div 
                               className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shadow-sm text-white uppercase ring-2 ring-orange-200 border border-white shrink-0"
                               style={{ backgroundColor: emp.color }}
@@ -2083,9 +2336,65 @@ export default function ManagerDashboard({
                                 emp.name.split(' ').map(n => n[0]).join('')
                               )}
                             </div>
-                            <div className="truncate">
-                              <div className="text-xs font-black text-slate-800 truncate" title={emp.name}>{emp.name}</div>
-                              <div className="text-[10px] font-black text-orange-600 uppercase tracking-wide truncate">{emp.statuut} ({emp.experience})</div>
+                            <div className="truncate flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="text-xs font-black text-slate-800 truncate" title={emp.name}>{emp.name}</div>
+                                <span className={`text-[10px] font-black px-1.5 py-0.2 rounded-md shrink-0 ${
+                                  isOvertime
+                                    ? 'bg-rose-200 text-rose-950 font-black'
+                                    : isVastUnderhours
+                                      ? 'bg-amber-200 text-amber-950 font-black'
+                                      : isVastOptimal
+                                        ? 'bg-emerald-100 text-emerald-900 font-extrabold'
+                                        : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  {empHours}u
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-black text-orange-600 uppercase tracking-wide truncate">
+                                {emp.statuut} ({emp.experience})
+                              </div>
+
+                              {/* Visuele Waarschuwing Overwerk (> 45u) */}
+                              {isOvertime && (
+                                <div 
+                                  className="mt-1 px-1.5 py-0.5 rounded-lg bg-rose-100 text-rose-950 border border-rose-400 flex items-center gap-1 font-black text-[9.5px] shadow-2xs animate-pulse"
+                                  title={`⚠️ OVERWERK WAARSCHUWING: ${emp.name} heeft al ${empHours}u ingepland in week ${selectedManagerWeek}! Limiet is 45u om overwerk te voorkomen (+${excessHours}u overwerk).`}
+                                >
+                                  <AlertTriangle size={11} className="shrink-0 text-rose-600" />
+                                  <span className="truncate">&gt;45u: Overwerk! (+{excessHours}u)</span>
+                                </div>
+                              )}
+
+                              {/* Visuele Waarschuwing Vaste Kracht Onder Contractnorm (< 42u) */}
+                              {isVastUnderhours && (
+                                <div 
+                                  className="mt-1 px-1.5 py-0.5 rounded-lg bg-amber-100 text-amber-950 border border-amber-400 flex items-center gap-1 font-black text-[9.5px] shadow-2xs"
+                                  title={`⚠️ CONTRACTNORM WAARSCHUWING: ${emp.name} is een vaste kracht maar geraakt niet aan 42u/week (${empHours}u ingepland, tekort van ${shortageHours}u).`}
+                                >
+                                  <CircleAlert size={11} className="shrink-0 text-amber-700" />
+                                  <span className="truncate">&lt;42u: Tekort van {shortageHours}u</span>
+                                </div>
+                              )}
+
+                              {/* Vaste Kracht Optimaal Bereikt (42u - 45u) */}
+                              {isVastOptimal && (
+                                <div 
+                                  className="mt-1 px-1.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-300 flex items-center gap-1 font-bold text-[9.5px]"
+                                  title={`✓ ${emp.name} zit met ${empHours}u mooi op contractnorm (42-45u/week).`}
+                                >
+                                  <Check size={10} className="shrink-0 text-emerald-600 stroke-[3]" />
+                                  <span className="truncate">✓ Op norm (42-45u)</span>
+                                </div>
+                              )}
+
+                              {/* Niet-vast personeel binnen normale uren */}
+                              {!isOvertime && emp.statuut !== 'Vast' && (
+                                <div className="mt-0.5 text-[9.5px] font-semibold text-slate-500 flex items-center gap-1">
+                                  <Clock size={9} className="shrink-0 text-slate-400" />
+                                  <span>{empHours}u deze week</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -2209,25 +2518,72 @@ export default function ManagerDashboard({
                                       >
                                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                                         <span>Gepubliceerd</span>
-                                        {sh.acknowledged ? (
-                                          <span className="text-emerald-700 font-black text-[9px] ml-0.5" title="Gezien door medewerker">✓</span>
-                                        ) : (
-                                          <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping ml-0.5" title="Nog niet bevestigd door medewerker" />
-                                        )}
+                                        {/* 1-Click Bevestiging door Beheerder / Personeel Toggle */}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newAck = !sh.acknowledged;
+                                            if (onAcknowledgeShift) {
+                                              onAcknowledgeShift(sh.id, newAck, 'Hans Stevens (Beheerder)');
+                                            } else {
+                                              onUpdateShift({
+                                                ...sh,
+                                                acknowledged: newAck,
+                                                acknowledgedBy: newAck ? 'Hans Stevens (Beheerder)' : undefined,
+                                                acknowledgedAt: newAck ? Date.now() : undefined
+                                              });
+                                            }
+                                          }}
+                                          className={`ml-1 inline-flex items-center gap-0.5 text-[8px] font-black uppercase px-1.5 py-0.2 rounded-md transition active:scale-95 cursor-pointer shadow-2xs ${
+                                            sh.acknowledged
+                                              ? 'bg-emerald-200 hover:bg-rose-200 text-emerald-950 hover:text-rose-950 border border-emerald-400'
+                                              : 'bg-rose-200 hover:bg-emerald-200 text-rose-950 hover:text-emerald-950 border border-rose-400 animate-pulse'
+                                          }`}
+                                          title={
+                                            sh.acknowledged
+                                              ? `Dienst is bevestigd (${sh.acknowledgedBy || 'medewerker'}). Klik om te herroepen.`
+                                              : 'Dienst is nog niet bevestigd. Klik om als beheerder direct te bevestigen (Gezien)!'
+                                          }
+                                        >
+                                          {sh.acknowledged ? (
+                                            <>
+                                              <span className="text-emerald-800 font-black">✓</span>
+                                              <span>Akkoord</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span className="w-1.5 h-1.5 bg-rose-600 rounded-full" />
+                                              <span>Bevestig?</span>
+                                            </>
+                                          )}
+                                        </button>
                                       </span>
                                     )}
 
                                     {/* Role badge (Sluit, Hulpsluit, Overdag) */}
-                                    {(sh.endTime === 'Sluit' || (sh.notes?.toLowerCase().includes('sluit') && !sh.notes?.toLowerCase().includes('hulpsluit'))) && (
-                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
-                                        🌙 Sluit
-                                      </span>
-                                    )}
-                                    {(sh.endTime === 'Hulpsluit' || sh.notes?.toLowerCase().includes('hulpsluit')) && (
-                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
-                                        🌓 Hulpsluit
-                                      </span>
-                                    )}
+                                    {(sh.endTime === 'Sluit' || (sh.notes?.toLowerCase().includes('sluit') && !sh.notes?.toLowerCase().includes('hulpsluit'))) && (() => {
+                                      const timing = getShiftTimingDetails(sh);
+                                      return (
+                                        <span 
+                                          className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200"
+                                          title={timing.explanation}
+                                        >
+                                          🌙 Sluit ({timing.calculatedEndTimeStr} • {timing.durationHours}u)
+                                        </span>
+                                      );
+                                    })()}
+                                    {(sh.endTime === 'Hulpsluit' || sh.notes?.toLowerCase().includes('hulpsluit')) && (() => {
+                                      const timing = getShiftTimingDetails(sh);
+                                      return (
+                                        <span 
+                                          className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200"
+                                          title={timing.explanation}
+                                        >
+                                          🌓 Hulpsluit (00u00 • {timing.durationHours}u)
+                                        </span>
+                                      );
+                                    })()}
                                     {(sh.endTime === '18u00' || sh.notes?.toLowerCase().includes('overdag') || sh.notes?.toLowerCase().includes('dagdienst')) && (
                                       <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
                                         ☀️ Overdag
@@ -2303,7 +2659,8 @@ export default function ManagerDashboard({
                         );
                       })}
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -2349,6 +2706,24 @@ export default function ManagerDashboard({
             <span className="flex items-center space-x-1 font-bold text-[11px] text-slate-500">
               <span className="inline-block w-2 h-2 bg-rose-500 rounded-full animate-ping" />
               <span>Nog niet bevestigd</span>
+            </span>
+
+            {/* Overwerk Legenda (> 45u) */}
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-rose-900 border-l border-orange-200 pl-3">
+              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-rose-100 text-rose-950 border border-rose-300 shadow-2xs">
+                <AlertTriangle size={10} className="text-rose-600" />
+                <span>&gt;45u Overwerk</span>
+              </span>
+              <span>Overwerk voorkomen (&gt;45u limiet)</span>
+            </span>
+
+            {/* Vaste Kracht Onder Norm Legenda (< 42u) */}
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-amber-900 border-l border-orange-200 pl-3">
+              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs">
+                <CircleAlert size={10} className="text-amber-700" />
+                <span>&lt;42u Vast</span>
+              </span>
+              <span>Vaste kracht onder norm (&lt;42u contract)</span>
             </span>
           </div>
         </div>
@@ -2510,6 +2885,127 @@ export default function ManagerDashboard({
               </button>
             </div>
 
+            {/* Dedicated Week-per-Week Availability Lock Control Card */}
+            <div className="bg-white rounded-3xl border-2 border-orange-200/90 p-5 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-orange-100 pb-3">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xl">🗓️</span>
+                    <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">
+                      Week-per-week Vergrendeling Beschikbaarheden
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-900 border border-orange-200">
+                      Beheerderspaneel
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Kies per week of medewerkers (flexi, extra, student) nog beschikbaarheden kunnen doorgeven of wijzigen.
+                  </p>
+                </div>
+
+                {/* Batch action buttons */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleLockAllWeeks}
+                    className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1 active:scale-95"
+                    title="Vergrendel alle actieve weken tegelijk"
+                  >
+                    <Lock size={12} />
+                    <span>Alles Dicht</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUnlockAllWeeks}
+                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1 active:scale-95"
+                    title="Open alle actieve weken tegelijk voor personeel"
+                  >
+                    <span>🟢 Alles Open</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetDefaultWeeksLock}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1 active:scale-95"
+                    title="Standaard instelling: huidige week en volgende week vergrendeld, rest open"
+                  >
+                    <span>⚡ Standaard</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Grid of Active Weeks */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {activeWeeks.map((w) => {
+                  const wk = w.weekNumber;
+                  const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER, appSettings);
+                  const isCurrent = wk === CURRENT_WEEK_NUMBER;
+                  const isNext = wk === NEXT_WEEK_NUMBER;
+
+                  return (
+                    <div
+                      key={wk}
+                      className={`p-3.5 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 ${
+                        isLocked
+                          ? 'bg-rose-50/70 border-rose-200'
+                          : 'bg-emerald-50/70 border-emerald-200'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-black text-sm text-slate-900">
+                            Week {wk}
+                          </span>
+                          {isCurrent && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                              Huidig
+                            </span>
+                          )}
+                          {isNext && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-slate-200 text-slate-800 border border-slate-300">
+                              Volgende
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600 font-semibold truncate mt-0.5">
+                          {w.dateRange}
+                        </p>
+                        <div className="mt-1 flex items-center gap-1">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
+                            isLocked
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}>
+                            {isLocked ? <><Lock size={9} /> Vergrendeld</> : <>🟢 Open voor invoer</>}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleWeekLock(wk)}
+                        className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition active:scale-95 cursor-pointer shrink-0 shadow-xs flex items-center gap-1 ${
+                          isLocked
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200'
+                            : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200'
+                        }`}
+                      >
+                        {isLocked ? (
+                          <>
+                            <span>Openen</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock size={12} />
+                            <span>Vergrendelen</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Stats Dashboard */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-white border-2 border-orange-100 p-5 rounded-3xl flex items-center justify-between shadow-sm">
@@ -2557,11 +3053,39 @@ export default function ManagerDashboard({
               
               {/* Select Week selector */}
               <div className="space-y-1.5 w-full md:w-auto text-left">
-                <span className="block text-[10px] font-black text-slate-600 uppercase tracking-widest">Selecteer Week:</span>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="block text-[10px] font-black text-slate-600 uppercase tracking-widest">Selecteer Week:</span>
+                  
+                  {/* Quick toggle for currently selected manager week */}
+                  <div className="flex items-center gap-1.5">
+                    {isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings) ? (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleWeekLock(selectedManagerWeek)}
+                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-900 rounded-lg text-[10px] font-black uppercase tracking-tight flex items-center gap-1 transition active:scale-95 cursor-pointer shadow-2xs"
+                        title={`Week ${selectedManagerWeek} is vergrendeld. Klik om te openen voor personeel.`}
+                      >
+                        <Lock size={10} className="text-rose-600" />
+                        <span>Week {selectedManagerWeek} Vergrendeld (Klik om te openen)</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleWeekLock(selectedManagerWeek)}
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-lg text-[10px] font-black uppercase tracking-tight flex items-center gap-1 transition active:scale-95 cursor-pointer shadow-2xs"
+                        title={`Week ${selectedManagerWeek} staat open. Klik om te vergrendelen.`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        <span>Week {selectedManagerWeek} Open (Klik om te sluiten)</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-1.5">
                   {activeWeeks.map(w => {
                     const wk = w.weekNumber;
-                    const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER);
+                    const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER, appSettings);
                     const isSelected = selectedManagerWeek === wk;
                     return (
                       <button
@@ -2570,7 +3094,7 @@ export default function ManagerDashboard({
                         onClick={() => {
                           setSelectedManagerWeek(wk);
                         }}
-                        title={`${w.label}: ${w.dateRange}`}
+                        title={`${w.label}: ${w.dateRange} • ${isLocked ? 'Vergrendeld' : 'Open voor personeel'}`}
                         className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                           isSelected
                             ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
@@ -2578,23 +3102,15 @@ export default function ManagerDashboard({
                         }`}
                       >
                         <span>Week {wk}</span>
-                        {wk === CURRENT_WEEK_NUMBER && (
+                        {isLocked ? (
                           <span className={`text-[8px] px-1 py-0.2 rounded font-black flex items-center gap-0.5 ${
-                            isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                            isSelected ? 'bg-rose-200 text-rose-950' : 'bg-rose-100 text-rose-800 border border-rose-300'
                           }`}>
-                            <Lock size={7} /> Huidig
+                            <Lock size={7} /> Dicht
                           </span>
-                        )}
-                        {wk === NEXT_WEEK_NUMBER && (
+                        ) : (
                           <span className={`text-[8px] px-1 py-0.2 rounded font-black flex items-center gap-0.5 ${
-                            isSelected ? 'bg-slate-200 text-slate-900' : 'bg-slate-200 text-slate-700 border border-slate-300'
-                          }`}>
-                            <Lock size={7} /> Volgende
-                          </span>
-                        )}
-                        {!isLocked && (
-                          <span className={`text-[8px] px-1 py-0.2 rounded font-bold ${
-                            isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            isSelected ? 'bg-emerald-300 text-emerald-950' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                           }`}>
                             Open
                           </span>
@@ -3921,6 +4437,41 @@ export default function ManagerDashboard({
                                 </button>
                               )}
                               {renderExperienceBadge(emp.experience)}
+                              {(() => {
+                                const empHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+                                const compliance = checkWeeklyHoursCompliance(emp, empHours);
+                                if (compliance.isOvertime) {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-rose-100 text-rose-950 border border-rose-300 animate-pulse" title={`Week ${selectedManagerWeek}: ${empHours}u (>45u limiet om overwerk te voorkomen)`}>
+                                      <AlertTriangle size={10} className="text-rose-600" />
+                                      <span>Wk {selectedManagerWeek}: {empHours}u (&gt;45u Overwerk!)</span>
+                                    </span>
+                                  );
+                                }
+                                if (compliance.isVastUnderhours) {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-amber-100 text-amber-950 border border-amber-300" title={`Week ${selectedManagerWeek}: ${empHours}u / 42u (onder contractnorm)`}>
+                                      <CircleAlert size={10} className="text-amber-700" />
+                                      <span>Wk {selectedManagerWeek}: {empHours}u (&lt;42u norm)</span>
+                                    </span>
+                                  );
+                                }
+                                if (compliance.isVastOptimal) {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-tight bg-emerald-50 text-emerald-900 border border-emerald-300" title={`Week ${selectedManagerWeek}: ${empHours}u (op contractnorm 42-45u)`}>
+                                      <span>✓ Wk {selectedManagerWeek}: {empHours}u (op norm)</span>
+                                    </span>
+                                  );
+                                }
+                                if (empHours > 0) {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-tight bg-slate-50 text-slate-600 border border-slate-200">
+                                      <span>⏱️ Wk {selectedManagerWeek}: {empHours}u</span>
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                               {hasAcceptedWeekly ? (
                                 <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-tight bg-emerald-50 text-emerald-800 border border-emerald-200">
                                   ✓ Akkoord
@@ -4283,6 +4834,30 @@ export default function ManagerDashboard({
         const hasValidationError = !currentShiftValidation.valid || Boolean(shiftValidationError);
         const activeErrorMessage = currentShiftValidation.error || shiftValidationError;
 
+        // Urenberekening voor deze dienst & week om overwerk (>45u) en contractnorm (<42u) live te bewaken
+        const otherShiftsInWeek = shifts.filter(s =>
+          s.employeeId === currentAssignedEmp?.id &&
+          (s.weekNumber || CURRENT_WEEK_NUMBER) === modalWeekNumber &&
+          s.id !== selectedShift.id
+        );
+        const existingWeekHours = Math.round(
+          otherShiftsInWeek.reduce((sum, s) => sum + calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes), 0) * 10
+        ) / 10;
+        const currentShiftDuration = calculateShiftDurationHours(
+          selectedShift.startTime || '17:00',
+          selectedShift.endTime || '01:00',
+          selectedShift.day !== undefined ? selectedShift.day : 0,
+          selectedShift.notes
+        );
+        const shiftTiming = getShiftTimingDetails({
+          startTime: selectedShift.startTime || '17:00',
+          endTime: selectedShift.endTime || '01:00',
+          day: selectedShift.day !== undefined ? selectedShift.day : 0,
+          notes: selectedShift.notes
+        });
+        const projectedWeekHours = Math.round((existingWeekHours + currentShiftDuration) * 10) / 10;
+        const projectedCompliance = checkWeeklyHoursCompliance(currentAssignedEmp, projectedWeekHours);
+
         // Ensure all weeks including current week, upcoming weeks, archived weeks, and modalWeek are available
         const modalWeeks = (() => {
           const map = new Map<number, WeekMeta>();
@@ -4345,6 +4920,46 @@ export default function ManagerDashboard({
                     <p className="font-black text-red-700 uppercase tracking-tight">Wettelijke Arbeidsbeperking (-18 Jaar)</p>
                     <p className="text-[11px] font-bold text-red-800 mt-0.5">{activeErrorMessage}</p>
                   </div>
+                </div>
+              )}
+
+              {/* Visuele Waarschuwing Overwerk (> 45 uur) in Dienstvenster */}
+              {currentAssignedEmp && projectedCompliance.isOvertime && (
+                <div className="bg-rose-50 border-2 border-rose-400 rounded-2xl p-3 text-xs text-rose-950 flex items-start gap-2.5 shadow-xs animate-in fade-in">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black text-rose-700 uppercase tracking-tight flex items-center gap-1.5">
+                      <span>⚠️ Overwerk Waarschuwing: &gt; 45 uur in Week {modalWeekNumber}</span>
+                    </p>
+                    <p className="text-[11px] font-bold text-rose-900 mt-0.5">
+                      Met deze dienst ({currentShiftDuration}u) heeft <strong>{currentAssignedEmp.name}</strong> in totaal <strong>{projectedWeekHours} uur</strong> ingepland in Week {modalWeekNumber} (reeds {existingWeekHours}u ingepland). Dit overschrijdt de maximale norm van 45u om overwerk te voorkomen (+{projectedCompliance.excessHours}u te veel)!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Visuele Waarschuwing Vaste Kracht Onder Norm (< 42 uur) in Dienstvenster */}
+              {currentAssignedEmp && projectedCompliance.isVastUnderhours && (
+                <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3 text-xs text-amber-950 flex items-start gap-2.5 shadow-xs animate-in fade-in">
+                  <CircleAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-black text-amber-850 uppercase tracking-tight flex items-center gap-1.5">
+                      <span>⚠️ Vaste Medewerker: Onder 42 uur Contractnorm</span>
+                    </p>
+                    <p className="text-[11px] font-bold text-amber-900 mt-0.5">
+                      <strong>{currentAssignedEmp.name}</strong> is een vaste kracht. Na deze dienst ({currentShiftDuration}u) staat het weektotaal op <strong>{projectedWeekHours} uur</strong> in Week {modalWeekNumber}. Dit is nog onder de voltijdse contractnorm van 42 uur per week (tekort van {projectedCompliance.shortageHours}u).
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Vaste Kracht Optimaal Bereikt in Dienstvenster (42-45u) */}
+              {currentAssignedEmp && projectedCompliance.isVastOptimal && (
+                <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-2.5 text-xs text-emerald-900 flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-600 shrink-0 stroke-[3]" />
+                  <span className="font-bold text-[11px]">
+                    ✓ <strong>{currentAssignedEmp.name}</strong> zit met deze dienst op <strong>{projectedWeekHours} uur</strong> (op contractnorm van 42-45u/week).
+                  </span>
                 </div>
               )}
 
@@ -4658,6 +5273,38 @@ export default function ManagerDashboard({
                       ))}
                     </div>
                   </div>
+                </div>
+
+                {/* Urenberekening en Sluit/Hulpsluit toelichting */}
+                <div className={`p-3 rounded-2xl border flex items-center justify-between gap-3 text-xs ${
+                  shiftTiming.isSluit 
+                    ? 'bg-purple-50/90 border-purple-200 text-purple-950'
+                    : shiftTiming.isHulpsluit
+                    ? 'bg-amber-50/90 border-amber-200 text-amber-950'
+                    : 'bg-slate-50 border-slate-200 text-slate-800'
+                }`}>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      {shiftTiming.isSluit && <span className="text-purple-600">🌙</span>}
+                      {shiftTiming.isHulpsluit && <span className="text-amber-600">⚡</span>}
+                      <span>Berekende dienstduur:</span>
+                      <span className="font-black text-orange-600 font-mono text-sm">{currentShiftDuration} uur</span>
+                    </div>
+                    {shiftTiming.explanation ? (
+                      <p className="text-[11px] opacity-80 font-medium">
+                        {shiftTiming.explanation}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        Standaard dienstduur ({selectedShift.startTime || 'Open'} tot {selectedShift.endTime || 'Sluit'})
+                      </p>
+                    )}
+                  </div>
+                  {shiftTiming.badgeLabel && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-tight bg-white border border-current shadow-2xs shrink-0">
+                      {shiftTiming.badgeLabel}
+                    </span>
+                  )}
                 </div>
 
                 <div className="space-y-1">
@@ -5165,11 +5812,47 @@ export default function ManagerDashboard({
         employees={employees}
         shifts={shifts}
         weekNumber={selectedManagerWeek}
+        availableWeeks={activeWeeks.map(w => w.weekNumber)}
         onMarkNotified={(ids, type) => {
           if (onMarkNotified) {
             onMarkNotified(ids, type);
           }
         }}
+      />
+
+      {/* Modal: Kies van welke week je de shiften naar het personeel stuurt */}
+      <SendWeekScheduleModal
+        isOpen={showSendWeekScheduleModal}
+        onClose={() => setShowSendWeekScheduleModal(false)}
+        activeWeeks={activeWeeks.map(w => w.weekNumber)}
+        initialWeek={sendTargetWeek || selectedManagerWeek}
+        shifts={shifts}
+        employees={employees}
+        onShareWhatsAppSchedule={(week) => {
+          if (onShareWhatsAppSchedule) {
+            onShareWhatsAppSchedule(week);
+          }
+        }}
+        onOpenNotificationModal={(week) => {
+          setSelectedManagerWeek(week);
+          setShowNotificationModal(true);
+        }}
+        onPublishAllDrafts={(week) => {
+          if (onPublishAllDrafts) {
+            onPublishAllDrafts(week);
+          }
+        }}
+        onPostNotice={(title, content, category) => {
+          if (onAddNotice) {
+            onAddNotice({
+              title,
+              content,
+              category,
+              author: 'Hans Stevens (Beheerder)'
+            });
+          }
+        }}
+        onOpenPrintModal={() => setShowSchedulePrintModal(true)}
       />
 
       {/* Cloud Backup & Archief Modal */}

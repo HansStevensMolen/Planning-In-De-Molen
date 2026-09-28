@@ -51,12 +51,15 @@ import StaffProfileModal from './StaffProfileModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import StaffLogin from './StaffLogin';
 import StaffShiftAlarmModal from './StaffShiftAlarmModal';
+import OpenShiftPopUpModal from './OpenShiftPopUpModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { 
   isPushNotificationSupported, 
   getPushNotificationPermission, 
   requestPushNotificationPermission, 
   sendShiftReminderNotification, 
+  sendUpcomingShiftNotification,
+  send1HourShiftNotification,
   hasShiftNotificationBeenSent, 
   markShiftNotificationAsSent, 
   playAlertChime, 
@@ -73,12 +76,14 @@ import {
   formatPhoneForWhatsApp,
   generateGoogleCalendarUrl,
   generateOutlookWebUrl,
-  openGoogleCalendarForShift
+  openGoogleCalendarForShift,
+  getShiftStartAndEndDates,
+  parseTimeParts
 } from '../utils/notificationUtils';
 import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
-import { calculateShiftDurationHours } from '../utils/employeeAgeUtils';
+import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
 import { buildMessengerUrl } from '../utils/whatsappNotificationUtils';
 
 interface StaffPortalProps {
@@ -143,6 +148,7 @@ const CATEGORY_COLORS = {
 export interface Shift24HourAlert {
   shift: Shift;
   isWithin24Hours: boolean;
+  isWithin1Hour?: boolean;
   isOngoing: boolean;
   timeRemainingText: string;
   dayLabel: string;
@@ -151,48 +157,21 @@ export interface Shift24HourAlert {
 }
 
 /**
- * Calculates whether a shift starts within 24 hours or is currently ongoing,
+ * Calculates whether a shift starts within 24 hours, within 1 hour, or is currently ongoing,
  * providing rich Dutch countdown information for visual indicators.
  */
 export const getShift24HourDetails = (shift: Shift, now: Date = new Date()): Shift24HourAlert | null => {
   if (!shift.startTime) return null;
 
-  const [startH, startM] = shift.startTime.split(':').map(Number);
-  const [endH, endM] = (shift.endTime || '23:59').split(':').map(Number);
-
-  // App Day mapping: 0 = Maandag, ..., 6 = Zondag
-  const jsDay = now.getDay();
-  const currentAppDay = jsDay === 0 ? 6 : jsDay - 1;
-  const currentISOWeek = CURRENT_WEEK_NUMBER;
-
-  let shiftDate: Date;
-
-  if (shift.weekNumber) {
-    const monday = getDateOfISOWeek(shift.weekNumber, now.getFullYear());
-    shiftDate = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + shift.day, startH, startM || 0, 0, 0);
-  } else {
-    // Relative to current day
-    shiftDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), startH, startM || 0, 0, 0);
-    if (shift.day === (currentAppDay + 1) % 7) {
-      shiftDate.setDate(shiftDate.getDate() + 1);
-    } else if (shift.day !== currentAppDay) {
-      const dayDiff = (shift.day - currentAppDay + 7) % 7;
-      shiftDate.setDate(shiftDate.getDate() + dayDiff);
-    }
-  }
-
-  // Calculate shift end datetime (handling shifts past midnight, e.g. 17:00 - 01:00)
-  const endDate = new Date(shiftDate.getTime());
-  if (endH < startH || (endH === startH && (endM || 0) < (startM || 0))) {
-    endDate.setDate(endDate.getDate() + 1);
-  }
-  endDate.setHours(endH, endM || 0, 0, 0);
+  const currentISOWeek = shift.weekNumber || CURRENT_WEEK_NUMBER;
+  const { startDate: shiftDate, endDate } = getShiftStartAndEndDates(shift, currentISOWeek);
 
   const msToStart = shiftDate.getTime() - now.getTime();
   const msToEnd = endDate.getTime() - now.getTime();
 
   const isOngoing = msToStart <= 0 && msToEnd > 0;
   const isWithin24Hours = (msToStart > 0 && msToStart <= 24 * 60 * 60 * 1000) || isOngoing;
+  const isWithin1Hour = msToStart > 0 && msToStart <= 60 * 60 * 1000;
 
   if (!isWithin24Hours && !isOngoing) {
     return null;
@@ -237,6 +216,7 @@ export const getShift24HourDetails = (shift: Shift, now: Date = new Date()): Shi
   return {
     shift,
     isWithin24Hours,
+    isWithin1Hour,
     isOngoing,
     timeRemainingText,
     dayLabel,
@@ -414,8 +394,18 @@ export default function StaffPortal({
   const [calendarTargetShift, setCalendarTargetShift] = useState<Shift | null>(null);
   const [calendarTypeTab, setCalendarTypeTab] = useState<'google' | 'apple' | 'outlook' | 'universal'>('google');
 
+  // Open shifts pop-up modal state
+  const [showOpenShiftsModal, setShowOpenShiftsModal] = useState<boolean>(false);
+
   // Active Employee object
   const currentEmployee = employees.find(e => e.id === activeEmployeeId);
+
+  // Filter open shifts that are available to be claimed by staff
+  const availableOpenShifts = shifts.filter(s => 
+    (s.isOpenShift || s.employeeId === 'open_shift') && 
+    s.status === 'published' &&
+    (s.weekNumber || CURRENT_WEEK_NUMBER) >= CURRENT_WEEK_NUMBER
+  );
 
   // Flexi, Student, Extra (and Vast) can enter fixed/recurring availability
   const isFlexiStudentExtra = Boolean(
@@ -571,7 +561,7 @@ export default function StaffPortal({
   const rosterWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek);
   const personalShifts = rosterWeekShifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
   const personalWeekHours = React.useMemo(() => {
-    return Math.round(personalShifts.reduce((acc, sh) => acc + calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day), 0) * 10) / 10;
+    return Math.round(personalShifts.reduce((acc, sh) => acc + calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes), 0) * 10) / 10;
   }, [personalShifts]);
   const unconfirmedShifts = personalShifts.filter(s => !s.acknowledged);
   const otherEmployees = sortEmployeesByFirstName(employees.filter(e => e.id !== activeEmployeeId));
@@ -598,6 +588,7 @@ export default function StaffPortal({
     });
 
   const nextUrgentShift = upcomingShifts24h[0] || null;
+  const upcomingShifts1h = upcomingShifts24h.filter(d => d.isWithin1Hour && !d.isOngoing);
 
   // VISUEEL ALARM & PUSH NOTIFICATIE: Diensten binnen 24 uur die nog NIET zijn bevestigd ("Gezien")
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
@@ -608,30 +599,53 @@ export default function StaffPortal({
   const [showReminderModal, setShowReminderModal] = useState<boolean>(false);
   const [hasAutoTriggeredAlert, setHasAutoTriggeredAlert] = useState<boolean>(false);
 
-  // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij onbevestigde diensten < 24u
+  // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij diensten die binnen 24 uur of 1 uur beginnen
   React.useEffect(() => {
-    if (!currentEmployee || unconfirmedShifts24h.length === 0) return;
+    if (!currentEmployee) return;
 
-    // Verstuur push-notificatie als de permissie is toegekend en nog niet verzonden in deze sessie
-    unconfirmedShifts24h.forEach(alert => {
-      if (!hasShiftNotificationBeenSent(alert.shift.id)) {
-        const sent = sendShiftReminderNotification(currentEmployee, alert);
-        if (sent) {
-          markShiftNotificationAsSent(alert.shift.id);
+    // 1. Verstuur automatische push-notificatie naar toestel als permissie actief is en nog niet verzonden in deze sessie
+    if (upcomingShifts24h.length > 0) {
+      upcomingShifts24h.forEach(alert => {
+        // Urgent 1-uur herinnering
+        if (alert.isWithin1Hour && !alert.isOngoing) {
+          const sent1h = sessionStorage.getItem(`shift_1h_notif_sent_${alert.shift.id}`) === 'true';
+          if (!sent1h) {
+            send1HourShiftNotification(currentEmployee, alert);
+          }
         }
-      }
-    });
 
-    // Toon automatisch herinneringsbericht (pop-up) eenmalig per sessie als de gebruiker dit nog niet sloot
+        if (!hasShiftNotificationBeenSent(alert.shift.id)) {
+          let sent = false;
+          if (!alert.shift.acknowledged) {
+            sent = sendShiftReminderNotification(currentEmployee, alert);
+          } else {
+            sent = sendUpcomingShiftNotification(currentEmployee, alert);
+          }
+          if (sent) {
+            markShiftNotificationAsSent(alert.shift.id);
+          }
+        }
+      });
+
+      // 2. Toon automatisch in-app herinneringsbericht (pop-up) eenmalig per sessie
+      try {
+        const isDismissed = sessionStorage.getItem(`dismissed_reminder_modal_${currentEmployee.id}`);
+        if (!hasAutoTriggeredAlert && !isDismissed) {
+          setShowReminderModal(true);
+          setHasAutoTriggeredAlert(true);
+          playAlertChime();
+        }
+      } catch {}
+    }
+
+    // 3. Toon automatisch openstaande shiften pop-up venster (eenmalig per sessie) als er open diensten zijn en geen 24u dienstherinnering
     try {
-      const isDismissed = sessionStorage.getItem(`dismissed_reminder_modal_${currentEmployee.id}`);
-      if (!hasAutoTriggeredAlert && !isDismissed) {
-        setShowReminderModal(true);
-        setHasAutoTriggeredAlert(true);
-        playAlertChime();
+      const isDismissedOpenShifts = sessionStorage.getItem(`dismissed_open_shifts_modal_${currentEmployee.id}`);
+      if (!isDismissedOpenShifts && availableOpenShifts.length > 0 && !showReminderModal && upcomingShifts24h.length === 0) {
+        setShowOpenShiftsModal(true);
       }
     } catch {}
-  }, [unconfirmedShifts24h.length, currentEmployee?.id]);
+  }, [upcomingShifts24h.length, currentEmployee?.id, availableOpenShifts.length]);
 
   // All published shifts for the team view (filter by Zaal / Keuken / Alle for the selected week)
   const publishedTeamShifts = rosterWeekShifts.filter(s => {
@@ -666,8 +680,8 @@ export default function StaffPortal({
   };
 
   const handleSaveAvailability = () => {
-    if (isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER)) {
-      setSuccessMsg(`🔒 Week ${selectedWeek} is vergrendeld. Beschikbaarheden voor de huidige week en volgende week kunnen niet gewijzigd worden.`);
+    if (isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER, appSettings)) {
+      setSuccessMsg(`🔒 Week ${selectedWeek} is momenteel vergrendeld door de beheerder. Beschikbaarheden voor deze week kunnen niet meer gewijzigd worden.`);
       setTimeout(() => setSuccessMsg(null), 6000);
       return;
     }
@@ -868,6 +882,159 @@ export default function StaffPortal({
         <div className="bg-emerald-100 text-emerald-950 font-bold rounded-2xl p-3.5 border border-emerald-300 flex items-center space-x-2.5 text-xs shadow-xs">
           <Check size={16} className="shrink-0 text-emerald-600 stroke-[3]" />
           <span>{successMsg}</span>
+        </div>
+      )}
+
+      {/* Automatische In-App Dienstherinnering (< 24 uur) */}
+      {upcomingShifts24h.length > 0 && currentEmployee && (
+        <div 
+          onClick={() => setShowReminderModal(true)}
+          className={`p-4 sm:p-5 rounded-3xl shadow-xl border-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:scale-[1.008] transition-all duration-200 animate-in slide-in-from-top-3 ${
+            hasUnconfirmedShifts24h
+              ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 border-red-300 text-white'
+              : 'bg-gradient-to-r from-amber-500 via-orange-500 to-teal-600 border-amber-300 text-white'
+          }`}
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 shadow-inner border border-white/30">
+              <span className="relative flex h-7 w-7 items-center justify-center">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/40 opacity-75" />
+                <BellRing size={26} className="relative inline-flex text-white" />
+              </span>
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-widest bg-white/25 px-2.5 py-0.5 rounded-full">
+                  ⏰ Dienst Herinnering (&lt; 24 Uur)
+                </span>
+                <span className="bg-white text-slate-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-2xs">
+                  {nextUrgentShift?.timeRemainingText}
+                </span>
+                {hasUnconfirmedShifts24h ? (
+                  <span className="bg-red-950 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-red-400 animate-pulse">
+                    Nog niet bevestigd!
+                  </span>
+                ) : (
+                  <span className="bg-emerald-900 text-emerald-100 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-emerald-400">
+                    ✓ Al Akkoord
+                  </span>
+                )}
+              </div>
+              <h3 className="text-sm sm:text-base font-black uppercase tracking-tight text-white mt-1">
+                {nextUrgentShift?.isOngoing ? 'Je dienst is NU bezig!' : `Je dienst begint op ${nextUrgentShift?.dayLabel} (${nextUrgentShift?.shift.startTime} - ${nextUrgentShift?.shift.endTime})!`}
+              </h3>
+              <p className="text-xs text-white/90 font-medium">
+                {hasUnconfirmedShifts24h
+                  ? `Hallo ${currentEmployee.name}, je dienst staat nog niet op 'Gezien'. Klik hier om direct te bevestigen!`
+                  : `Hallo ${currentEmployee.name}, je dienst is al bevestigd. Zorg dat je tijdig aanwezig bent in Café In De Molen!`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
+            {hasUnconfirmedShifts24h && nextUrgentShift && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAcknowledgeClick(nextUrgentShift.shift.id);
+                  playAlertChime();
+                }}
+                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Check size={15} className="stroke-[3]" />
+                <span>Nu Bevestigen</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowReminderModal(true);
+              }}
+              className="w-full sm:w-auto px-4.5 py-2.5 bg-white hover:bg-slate-100 text-slate-900 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <span>Bekijk Herinnering</span>
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Push-Notificaties Inschakelen Prompt (indien nog niet geactiveerd) */}
+      {isPushNotificationSupported() && pushStatus === 'default' && currentEmployee && (
+        <div className="bg-indigo-50 border-2 border-indigo-200 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-indigo-950">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Bell size={16} />
+            </div>
+            <div>
+              <span className="font-black text-xs uppercase tracking-tight block text-indigo-950">
+                Automatische Push-Notificaties op je Smartphone / Browser
+              </span>
+              <p className="text-[11px] text-indigo-800 font-medium">
+                Ontvang automatisch een melding op je scherm zodra je ingeplande dienst binnen 24 uur begint!
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              const res = await requestPushNotificationPermission();
+              setPushStatus(res);
+              if (res === 'granted') {
+                playAlertChime();
+                setSuccessMsg('🔔 Push-notificaties succesvol geactiveerd! Je ontvangt meldingen voor diensten < 24u.');
+                setTimeout(() => setSuccessMsg(null), 5000);
+              }
+            }}
+            className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+          >
+            <BellRing size={13} />
+            <span>Notificaties Inschakelen</span>
+          </button>
+        </div>
+      )}
+
+      {/* Openstaande Diensten Clickable Alert & Pop-up Trigger */}
+      {availableOpenShifts.length > 0 && currentEmployee && (
+        <div 
+          onClick={() => setShowOpenShiftsModal(true)}
+          className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-4 sm:p-4.5 rounded-3xl shadow-lg border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 cursor-pointer hover:shadow-xl hover:scale-[1.008] transition-all duration-200 animate-in fade-in"
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 shadow-inner">
+              📢
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-amber-100 bg-white/20 px-2.5 py-0.5 rounded-full">
+                  Oproep Open Diensten
+                </span>
+                <span className="bg-white text-orange-700 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-2xs">
+                  {availableOpenShifts.length} {availableOpenShifts.length === 1 ? 'Open Dienst' : 'Open Diensten'}
+                </span>
+              </div>
+              <h3 className="text-sm sm:text-base font-black uppercase tracking-tight text-white mt-1">
+                Er zijn openstaande diensten beschikbaar! Klik hier om in te vullen ⚡
+              </h3>
+              <p className="text-xs text-amber-100 font-medium">
+                Hallo {currentEmployee.name}, klik op dit venster om direct een openstaande shift te kiezen en jezelf in te roosteren.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowOpenShiftsModal(true);
+            }}
+            className="w-full sm:w-auto px-4.5 py-2.5 bg-white hover:bg-orange-50 text-orange-700 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 shrink-0"
+          >
+            <Sparkles size={14} className="text-orange-500 animate-pulse" />
+            <span>Open Pop-up Venster</span>
+            <ChevronRight size={14} />
+          </button>
         </div>
       )}
 
@@ -1252,6 +1419,37 @@ export default function StaffPortal({
       {/* 1. MY ROSTER & WEEK ROSTER */}
       {activeSubTab === 'rooster' && (
         <div className="space-y-4">
+          {/* 1-Hour Urgent Shift Reminder Banner */}
+          {upcomingShifts1h.length > 0 && (
+            <div className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white p-4 rounded-3xl shadow-lg border-2 border-red-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 animate-pulse">
+                  <AlarmClock size={22} className="stroke-[2.5]" />
+                </div>
+                <div>
+                  <h4 className="font-black text-sm uppercase tracking-tight flex items-center gap-2">
+                    <span>⏰ Shift Begint Binnen 1 Uur!</span>
+                    <span className="text-[10px] bg-white text-red-700 px-2 py-0.5 rounded-full font-black uppercase">
+                      {upcomingShifts1h[0].timeRemainingText}
+                    </span>
+                  </h4>
+                  <p className="text-xs text-white/95 mt-0.5 font-medium">
+                    Je dienst ({upcomingShifts1h[0].shift.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️'}) start om <strong>{upcomingShifts1h[0].shift.startTime}</strong> ({upcomingShifts1h[0].dayLabel}). Sta paraat voor Eet-staminée In De Molen!
+                  </p>
+                </div>
+              </div>
+              {!upcomingShifts1h[0].shift.acknowledged && (
+                <button
+                  type="button"
+                  onClick={() => onAcknowledgeShift(upcomingShifts1h[0].shift.id)}
+                  className="px-3.5 py-2 bg-white text-red-700 hover:bg-red-50 rounded-xl font-black text-xs uppercase tracking-tight shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                >
+                  ✓ Bevestig Aanwezig
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Week Selector Bar for Schedule */}
           <div className="bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
@@ -1445,7 +1643,7 @@ export default function StaffPortal({
 
               return (
                 <div className="bg-gradient-to-br from-amber-500/10 via-amber-50 to-orange-50 p-4 rounded-2xl border-2 border-amber-300 shadow-sm space-y-3 text-left">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2">
                       <span className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black text-sm shadow-xs shrink-0">
                         📢
@@ -1462,6 +1660,15 @@ export default function StaffPortal({
                         </p>
                       </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowOpenShiftsModal(true)}
+                      className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-xs transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Sparkles size={13} />
+                      <span>Open in Pop-up Venster 📢</span>
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -1503,9 +1710,9 @@ export default function StaffPortal({
                               type="button"
                               disabled={isOwnShift}
                               onClick={() => {
-                                if (window.confirm(`Wil je jezelf inplannen voor de dienst op ${DAYS_OF_WEEK[sh.day]} (${sh.startTime} - ${sh.endTime})?`)) {
-                                  onSelfAssignOpenShift(sh.id, activeEmployeeId);
-                                }
+                                onSelfAssignOpenShift(sh.id, activeEmployeeId);
+                                setSuccessMsg(`🎉 Geweldig! Je hebt de openstaande dienst op ${DAYS_OF_WEEK[sh.day]} (${sh.startTime} - ${sh.endTime}) direct aangenomen en bent ingepland.`);
+                                setTimeout(() => setSuccessMsg(null), 5000);
                               }}
                               className="w-full py-2 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
                             >
@@ -1566,10 +1773,23 @@ export default function StaffPortal({
                               {getDayDateInfo(selectedRosterWeek, sh.day).shortDate}
                             </span>
                           </h4>
-                          <div className="flex items-center space-x-1.5 mt-1 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
-                            <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
-                            <span>{sh.startTime} - {sh.endTime}</span>
-                            <span className="text-orange-600 font-extrabold ml-1">({calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day)}u)</span>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            <div className="flex items-center space-x-1.5 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
+                              <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
+                              <span>{sh.startTime} - {sh.endTime}</span>
+                              <span className="text-orange-600 font-extrabold ml-1">({calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes)}u)</span>
+                            </div>
+                            {(() => {
+                              const timing = getShiftTimingDetails(sh);
+                              return timing.badgeLabel ? (
+                                <span 
+                                  className="text-[9.5px] font-black px-2 py-0.5 rounded-md bg-purple-100 text-purple-900 border border-purple-200"
+                                  title={timing.explanation}
+                                >
+                                  {timing.badgeLabel}
+                                </span>
+                              ) : null;
+                            })()}
                           </div>
                         </div>
 
@@ -1655,7 +1875,25 @@ export default function StaffPortal({
               <div className="grid grid-cols-7 gap-2 min-w-[700px]">
                 {DAYS_OF_WEEK.map((day, dayIdx) => {
                   const dayDateInfo = getDayDateInfo(selectedRosterWeek, dayIdx);
-                  const dayShifts = publishedTeamShifts.filter(s => s.day === dayIdx);
+                  const parseTimeToMinutes = (t: string): number => {
+                    if (!t) return 999;
+                    const match = t.trim().toLowerCase().match(/^(\d{1,2})[:uh](\d{2})?$/);
+                    if (match) {
+                      return parseInt(match[1], 10) * 60 + (match[2] ? parseInt(match[2], 10) : 0);
+                    }
+                    const single = parseInt(t, 10);
+                    if (!isNaN(single)) return single * 60;
+                    if (t.toLowerCase().includes('open')) return 11 * 60 + 30;
+                    return 999;
+                  };
+
+                  const dayShifts = publishedTeamShifts
+                    .filter(s => s.day === dayIdx)
+                    .sort((a, b) => {
+                      const diff = parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime);
+                      if (diff !== 0) return diff;
+                      return (a.startTime || '').localeCompare(b.startTime || '');
+                    });
 
                   return (
                     <div key={day} className="space-y-3">
@@ -2729,7 +2967,7 @@ export default function StaffPortal({
             <div className="flex flex-wrap items-center gap-2">
               {staffActiveWeeks.map((w) => {
                 const weekNum = w.weekNumber;
-                const isLockedWeek = isWeekAvailabilityLocked(weekNum, CURRENT_WEEK_NUMBER);
+                const isLockedWeek = isWeekAvailabilityLocked(weekNum, CURRENT_WEEK_NUMBER, appSettings);
                 const hasFilled = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === weekNum);
                 const isSelected = selectedWeek === weekNum;
                 return (
@@ -2739,7 +2977,7 @@ export default function StaffPortal({
                       setSelectedWeek(weekNum);
                       setSuccessMsg(null);
                     }}
-                    title={`${w.label}: ${w.dateRange}`}
+                    title={`${w.label}: ${w.dateRange} • ${isLockedWeek ? 'Vergrendeld' : 'Open voor invoer'}`}
                     className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                       isSelected
                         ? 'bg-orange-500 text-white shadow-xs'
@@ -2747,23 +2985,14 @@ export default function StaffPortal({
                     }`}
                   >
                     <span>Week {weekNum}</span>
-                    {w.isCurrent && (
+                    {isLockedWeek ? (
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-black uppercase flex items-center gap-0.5 ${
-                        isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-200'
+                        isSelected ? 'bg-amber-300 text-amber-950' : 'bg-rose-100 text-rose-900 border border-rose-200'
                       }`}>
                         <Lock size={8} />
-                        <span>Huidig (Vast)</span>
+                        <span>Vast</span>
                       </span>
-                    )}
-                    {w.isNext && (
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-0.5 ${
-                        isSelected ? 'bg-slate-300 text-slate-950' : 'bg-slate-200 text-slate-800 border border-slate-300'
-                      }`}>
-                        <Lock size={8} />
-                        <span>Volgende (Vast)</span>
-                      </span>
-                    )}
-                    {!isLockedWeek && (
+                    ) : (
                       hasFilled ? (
                         <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
                           isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-800'
@@ -2841,10 +3070,8 @@ export default function StaffPortal({
             {/* Status compact info */}
             {(() => {
               const isSubmissionDisabledByManager = appSettings?.availabilitySubmissionEnabled === false;
-              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER) || isSubmissionDisabledByManager;
-              const isCurrentWeek = selectedWeek === CURRENT_WEEK_NUMBER;
-              const isNextWeek = selectedWeek === NEXT_WEEK_NUMBER;
-              const deadlineInfo = getAvailabilityDeadlineInfo(selectedWeek, CURRENT_WEEK_NUMBER);
+              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER, appSettings);
+              const isPast = selectedWeek < CURRENT_WEEK_NUMBER;
 
               if (isSubmissionDisabledByManager) {
                 return (
@@ -2869,7 +3096,21 @@ export default function StaffPortal({
                 );
               }
 
-              if (isCurrentWeek) {
+              if (isPast) {
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2 text-xs text-slate-700">
+                    <span className="flex items-center gap-2">
+                      <Lock size={14} className="text-slate-500" />
+                      <span>Week {selectedWeek} ligt in het verleden en is gearchiveerd (niet wijzigbaar).</span>
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                      Gearchiveerd
+                    </span>
+                  </div>
+                );
+              }
+
+              if (isSelectedLocked) {
                 return (
                   <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-xs">
                     <div className="flex items-start gap-3">
@@ -2878,16 +3119,16 @@ export default function StaffPortal({
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-sm text-amber-950">Huidige week (Week {selectedWeek}) ligt vast</span>
+                          <span className="font-extrabold text-sm text-amber-950">Week {selectedWeek} is vergrendeld voor beschikbaarheden</span>
                           <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
-                            Niet wijzigbaar
+                            Vastgelegd door beheerder
                           </span>
                         </div>
                         <p className="text-xs text-amber-900 mt-1 leading-relaxed">
-                          Het werkrooster voor deze week is actief en loopt al. Je beschikbaarheid is hieronder ter inzage zichtbaar, maar kan niet meer gewijzigd worden via het portaal.
+                          De beheerder (Hans Stevens) heeft het doorgeven van beschikbaarheden voor Week {selectedWeek} afgesloten. Je ingediende beschikbaarheid is hieronder ter inzage zichtbaar (alleen-lezen).
                         </p>
                         <p className="text-[11px] text-amber-800 font-medium mt-1">
-                          💡 Dringend een shift ruilen? Gebruik het tabblad <strong>Diensten Ruilen</strong> of neem contact op met Hans.
+                          💡 Dringend een shift ruilen of aanpassen? Gebruik het tabblad <strong>Diensten Ruilen</strong> of neem contact op met Hans.
                         </p>
                       </div>
                     </div>
@@ -2903,62 +3144,14 @@ export default function StaffPortal({
                 );
               }
 
-              if (isNextWeek) {
-                return (
-                  <div className="bg-slate-100/90 border border-slate-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-900 shadow-xs">
-                    <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-xl bg-slate-200 border border-slate-300 flex items-center justify-center shrink-0 text-slate-800 mt-0.5">
-                        <Lock size={16} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-sm text-slate-900">Volgende week (Week {selectedWeek}) ligt vast</span>
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 border border-slate-300">
-                            Niet wijzigbaar
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-700 mt-1 leading-relaxed">
-                          Het werkrooster voor volgende week is reeds definitief opgesteld door de beheerder. Beschikbaarheden liggen vast en kunnen niet meer aangepast worden.
-                        </p>
-                        <p className="text-[11px] text-slate-600 font-medium mt-1">
-                          💡 Heb je toch een wissel nodig? Gebruik <strong>Diensten Ruilen</strong> of vraag het aan Hans.
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActiveSubTab('ruilen')}
-                      className="px-3.5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-900 font-bold rounded-xl text-xs flex items-center gap-1.5 transition active:scale-95 shrink-0 self-start sm:self-center cursor-pointer border border-slate-300"
-                    >
-                      <ArrowLeftRight size={13} />
-                      <span>Naar Diensten Ruilen</span>
-                    </button>
-                  </div>
-                );
-              }
-
-              if (isSelectedLocked) {
-                return (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2 text-xs text-slate-700">
-                    <span className="flex items-center gap-2">
-                      <Lock size={14} className="text-slate-500" />
-                      <span>Week {selectedWeek} ligt in het verleden en is gearchiveerd (niet wijzigbaar).</span>
-                    </span>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                      Gearchiveerd
-                    </span>
-                  </div>
-                );
-              }
-
               return (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center justify-between gap-2 text-xs text-emerald-900">
                   <span className="flex items-center gap-2">
                     <span className="text-emerald-600 font-black">✓</span>
-                    <span><strong>Week {selectedWeek} staat open:</strong> Duid per dag aan wanneer je kunt werken en klik onderaan op 'Opslaan & Versturen'.</span>
+                    <span><strong>Week {selectedWeek} staat open voor invoer:</strong> Duid per dag aan wanneer je kunt werken en klik onderaan op 'Opslaan & Versturen'.</span>
                   </span>
                   <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 shrink-0 border border-emerald-200">
-                    {deadlineInfo.badgeText}
+                    🟢 Open voor personeel
                   </span>
                 </div>
               );
@@ -2969,7 +3162,7 @@ export default function StaffPortal({
           <div className="bg-white p-6 rounded-3xl border-2 border-orange-100 shadow-sm space-y-6">
             {(() => {
               const isSubmissionDisabledByManager = appSettings?.availabilitySubmissionEnabled === false;
-              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER) || isSubmissionDisabledByManager;
+              const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER, appSettings);
               return (
                 <>
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b pb-3 border-orange-50">
@@ -3966,15 +4159,38 @@ export default function StaffPortal({
         />
       )}
 
-      {/* Automatisch Herinneringsbericht & Visueel Alarm Modal (shifts < 24u niet op "Gezien") */}
+      {/* Automatisch Herinneringsbericht & Visueel Alarm Modal (shifts < 24u) */}
       {currentEmployee && (
         <StaffShiftAlarmModal
           isOpen={showReminderModal}
           onClose={handleCloseReminderModal}
           employee={currentEmployee}
+          alerts={upcomingShifts24h}
           unconfirmedAlerts={unconfirmedShifts24h}
           onAcknowledgeShift={handleAcknowledgeClick}
           onAcknowledgeAllShifts={handleAcknowledgeAllUnconfirmed}
+        />
+      )}
+
+      {/* Pop-up venster: Openstaande diensten invullen door personeel */}
+      {currentEmployee && (
+        <OpenShiftPopUpModal
+          isOpen={showOpenShiftsModal}
+          onClose={() => {
+            setShowOpenShiftsModal(false);
+            try {
+              sessionStorage.setItem(`dismissed_open_shifts_modal_${currentEmployee.id}`, 'true');
+            } catch {}
+          }}
+          shifts={shifts}
+          currentEmployee={currentEmployee}
+          onSelfAssignOpenShift={(shiftId, empId) => {
+            if (onSelfAssignOpenShift) {
+              onSelfAssignOpenShift(shiftId, empId);
+              setSuccessMsg(`🎉 Geweldig! Je hebt de openstaande dienst succesvol aangenomen en bent direct ingepland.`);
+              setTimeout(() => setSuccessMsg(null), 5000);
+            }
+          }}
         />
       )}
 

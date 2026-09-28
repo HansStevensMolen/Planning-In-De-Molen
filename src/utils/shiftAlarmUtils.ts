@@ -128,6 +128,82 @@ export function sendShiftReminderNotification(
 }
 
 /**
+ * Dispatches an automated native browser Push Notification for ANY scheduled shift starting within 24 hours.
+ */
+export function sendUpcomingShiftNotification(
+  employee: Employee,
+  shiftAlert: Shift24HourAlert
+): boolean {
+  if (!isPushNotificationSupported() || Notification.permission !== 'granted') {
+    return false;
+  }
+
+  const shift = shiftAlert.shift;
+  const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+  const ackText = shift.acknowledged ? 'Dienst staat op akkoord.' : 'Bevestig even als gezien in het portaal!';
+
+  try {
+    const title = shiftAlert.isOngoing 
+      ? `☕ In De Molen: Je dienst is NU actief!`
+      : `⏰ Dienst Herinnering: Begint binnen 24 uur!`;
+
+    const notification = new Notification(title, {
+      body: `Beste ${employee.name}, herinnering voor je shift op ${shiftAlert.dayLabel} (${shift.startTime} - ${shift.endTime}, ${dept}). ${shiftAlert.timeRemainingText}. ${ackText}`,
+      icon: '/favicon.ico',
+      tag: `upcoming-shift-24h-${shift.id}`,
+      requireInteraction: false
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+
+    markShiftNotificationAsSent(shift.id);
+    return true;
+  } catch (err) {
+    console.error('Failed to trigger browser notification:', err);
+    return false;
+  }
+}
+
+/**
+ * Dispatches an urgent native browser Push Notification for a shift starting within 1 hour.
+ */
+export function send1HourShiftNotification(
+  employee: Employee,
+  shiftAlert: Shift24HourAlert
+): boolean {
+  if (!isPushNotificationSupported() || Notification.permission !== 'granted') {
+    return false;
+  }
+
+  const shift = shiftAlert.shift;
+  const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+
+  try {
+    const title = `⏰ In De Molen: Je dienst begint over 1 uur!`;
+    const notification = new Notification(title, {
+      body: `Beste ${employee.name}, je shift (${dept}) start om ${shift.startTime}. ${shiftAlert.timeRemainingText}. Zorg dat je tijdig aanwezig bent!`,
+      icon: '/favicon.ico',
+      tag: `shift-1hour-alarm-${shift.id}`,
+      requireInteraction: true
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+
+    sessionStorage.setItem(`shift_1h_notif_sent_${shift.id}`, 'true');
+    return true;
+  } catch (err) {
+    console.error('Failed to trigger 1-hour shift notification:', err);
+    return false;
+  }
+}
+
+/**
  * Generates the text for an automated reminder message to show in the portal or share.
  */
 export function generateAutomatedReminderText(

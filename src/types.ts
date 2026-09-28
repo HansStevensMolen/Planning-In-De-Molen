@@ -66,7 +66,9 @@ export interface Shift {
   startTime: string;
   endTime: string;
   notes?: string;
-  acknowledged: boolean; // Has employee confirmed?
+  acknowledged: boolean; // Has employee or manager confirmed?
+  acknowledgedBy?: string; // Who confirmed (e.g. employee or manager)
+  acknowledgedAt?: number; // Timestamp of confirmation
   status: 'published' | 'draft';
   updatedAt: number;
   notifiedViaEmail?: boolean;

@@ -19,7 +19,6 @@ import {
   HelpCircle, 
   Eye, 
   RotateCcw,
-  BookOpen,
   ArrowRight,
   TrendingUp,
   X,
@@ -175,7 +174,6 @@ export default function App() {
 
   // Current main tab active: 'beheerder' (Manager) or 'personeel' (Staff) - defaults to 'personeel'
   const [activeTab, setActiveTab] = useState<'beheerder' | 'personeel'>('personeel');
-  const [showHowToDialog, setShowHowToDialog] = useState(true);
   const [showLogsPanel, setShowLogsPanel] = useState(false);
 
   // Custom confirmation modals states
@@ -792,9 +790,18 @@ export default function App() {
     saveNoticesToCloud(nextNotices);
   };
 
-  // Action: Employee marks shift as acknowledged
-  const handleAcknowledgeShift = (shiftId: string) => {
-    const nextShifts = shifts.map(s => s.id === shiftId ? { ...s, acknowledged: true } : s);
+  // Action: Employee or Manager marks shift as acknowledged/unacknowledged
+  const handleAcknowledgeShift = (shiftId: string, confirmed: boolean = true, by?: string) => {
+    const nextShifts = shifts.map(s => {
+      if (s.id !== shiftId) return s;
+      return {
+        ...s,
+        acknowledged: confirmed,
+        acknowledgedBy: confirmed ? (by || 'Hans Stevens (Beheerder)') : undefined,
+        acknowledgedAt: confirmed ? Date.now() : undefined,
+        updatedAt: Date.now()
+      };
+    });
     setShifts(nextShifts);
     saveShiftsToCloud(nextShifts);
 
@@ -802,10 +809,32 @@ export default function App() {
     if (targetShift) {
       const emp = employees.find(e => e.id === targetShift.employeeId);
       addLog(
-        'Dienst Gecheckt',
-        `${emp ? emp.name : 'Medewerker'} heeft zijn dienst op ${DAYS_OF_WEEK[targetShift.day]} bevestigd`
+        confirmed ? 'Dienst Bevestigd' : 'Bevestiging Herroepen',
+        `${emp ? emp.name : 'Medewerker'} dienst op ${DAYS_OF_WEEK[targetShift.day]} is ${confirmed ? 'bevestigd (akkoord)' : 'teruggezet naar onbevestigd'}${by ? ` door ${by}` : ''}`
       );
     }
+  };
+
+  // Action: Manager bulk-acknowledges all published shifts of a week
+  const handleBulkAcknowledgeWeek = (targetWeek: number, confirmed: boolean = true) => {
+    const nextShifts = shifts.map(s => {
+      if ((s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek && s.status === 'published') {
+        return {
+          ...s,
+          acknowledged: confirmed,
+          acknowledgedBy: confirmed ? 'Hans Stevens (Beheerder)' : undefined,
+          acknowledgedAt: confirmed ? Date.now() : undefined,
+          updatedAt: Date.now()
+        };
+      }
+      return s;
+    });
+    setShifts(nextShifts);
+    saveShiftsToCloud(nextShifts);
+    addLog(
+      'Weekrooster Bevestigd',
+      `Alle gepubliceerde diensten van Week ${targetWeek} zijn ${confirmed ? 'in 1x bevestigd door beheerder' : 'teruggezet naar onbevestigd'}`
+    );
   };
 
   const handleUpdateAvailability = (employeeId: string, weekNumber: number, days: DayAvailability[]) => {
@@ -1303,14 +1332,6 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setShowHowToDialog(true)}
-              className="p-2.5 bg-white hover:bg-orange-50 border border-orange-200 rounded-xl text-slate-600 hover:text-orange-600 transition shadow-sm"
-              title="Uitleg & Workflowgids"
-            >
-              <BookOpen size={16} />
-            </button>
-
-            <button
               onClick={() => setShowLogsPanel(!showLogsPanel)}
               className="p-2.5 bg-white hover:bg-orange-50 border border-orange-200 rounded-xl text-slate-600 hover:text-orange-600 transition relative shadow-sm"
               title="Activiteiten Log"
@@ -1333,80 +1354,6 @@ export default function App() {
       {/* Main Workspace Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-6 font-sans">
         
-        {/* Dynamic tutorial banner if visible */}
-        {showHowToDialog && (
-          <div className="bg-white text-slate-800 rounded-3xl p-6 shadow-xl border-2 border-orange-100 border-b-4 border-b-orange-250 mb-6 relative overflow-hidden">
-            <div className="absolute right-0 bottom-0 opacity-5 translate-y-1/4 translate-x-1/4 shrink-0 text-orange-500">
-              <Sparkles size={300} />
-            </div>
-
-            <button 
-              onClick={() => setShowHowToDialog(false)}
-              className="absolute top-4 right-4 text-orange-400 hover:text-orange-600 bg-orange-50 hover:bg-orange-100 p-2 rounded-full transition border border-orange-200"
-            >
-              <X size={16} />
-            </button>
-
-            <div className="max-w-3xl space-y-4">
-              <div className="flex items-center space-x-2 text-orange-600">
-                <Sparkles size={20} className="shrink-0 text-orange-500" />
-                <span className="text-xs font-black uppercase tracking-wider">Hoe communiceer je je planning het beste?</span>
-              </div>
-              
-              <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight leading-none">
-                De beste & gemakkelijkste methode om wijzigingen te communiceren
-              </h3>
-              
-              <p className="text-sm text-slate-600 leading-relaxed font-medium">
-                Het communiceren van roosters is vaak een uitdaging. De meest effectieve manier is een <strong className="text-orange-600">gesloten feedbackloop op één centraal platform</strong>. Met deze applicatie pak je dat zo aan:
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                <div className="bg-orange-50/50 p-4 rounded-2xl border-2 border-orange-100 space-y-2">
-                  <div className="text-xs font-black text-orange-600 flex items-center space-x-1.5">
-                    <span className="w-5 h-5 rounded-full bg-orange-500 text-white text-[11px] font-black inline-flex items-center justify-center">1</span>
-                    <span>Werk met Ontwerpen</span>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-normal">
-                    Plan diensten in als <strong className="text-orange-700">Ontwerp (Draft)</strong>. Je personeel ziet ze niet, zodat je rustig kunt sleutelen zonder chaos te creëren. Pas als het rooster af is, publiceer je alles in één klik.
-                  </p>
-                </div>
-
-                <div className="bg-emerald-50/50 p-4 rounded-2xl border-2 border-emerald-100 space-y-2">
-                  <div className="text-xs font-black text-emerald-700 flex items-center space-x-1.5">
-                    <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[11px] font-black inline-flex items-center justify-center">2</span>
-                    <span>Gezien-bevestiging</span>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-normal">
-                    Je medewerkers kunnen hun shift via hun portaal direct <strong className="text-emerald-700">bevestigen ("Gezien")</strong>. Jij ziet als manager direct een groen vinkje verschijnen. Nooit meer discussies!
-                  </p>
-                </div>
-
-                <div className="bg-blue-50/50 p-4 rounded-2xl border-2 border-blue-100 space-y-2">
-                  <div className="text-xs font-black text-blue-700 flex items-center space-x-1.5">
-                    <span className="w-5 h-5 rounded-full bg-blue-505 bg-blue-500 text-white text-[11px] font-black inline-flex items-center justify-center">3</span>
-                    <span>Self-service Ruilen</span>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-normal">
-                    Medewerkers zetten een shift <strong className="text-blue-700">openbaar te ruil</strong> en selecteren optioneel een vervanger. Jij keurt het goed in je beheerderstaken en de app werkt het rooster direct live bij.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center justify-between pt-2 gap-3">
-                <span className="text-[11px] text-slate-500 font-bold uppercase tracking-tight">💡 Klik hierboven op <strong className="text-orange-600">Personeel Portal</strong> om te ervaren hoe medewerkers hun rooster bekijken en bevestigen!</span>
-                <button
-                  onClick={() => setShowHowToDialog(false)}
-                  className="px-5 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl shadow-lg transition-transform active:scale-95 flex items-center space-x-1.5 shrink-0"
-                >
-                  <span>Aan de Slag</span>
-                  <ArrowRight size={14} className="stroke-[3]" />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Live System Logging Panel Drawer if toggled */}
         {showLogsPanel && (
           <div className="bg-white p-5 rounded-3xl shadow-md border-2 border-orange-100 border-b-4 border-b-orange-200 mb-6 space-y-4">
@@ -1598,6 +1545,8 @@ export default function App() {
                 onShareWhatsAppNotice={handleShareWhatsAppNotice}
                 appSettings={appSettings}
                 onUpdateAppSettings={handleUpdateAppSettings}
+                onAcknowledgeShift={handleAcknowledgeShift}
+                onBulkAcknowledgeWeek={handleBulkAcknowledgeWeek}
               />
             </div>
           )

@@ -28,7 +28,7 @@ import {
   CURRENT_WEEK_NUMBER,
   AVAILABLE_WEEKS
 } from '../utils/weekUtils';
-import { calculateShiftDurationHours } from '../utils/employeeAgeUtils';
+import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
 
 interface StaffHoursTrackerProps {
   currentEmployee: Employee;
@@ -77,7 +77,7 @@ export default function StaffHoursTracker({
     let acknowledgedCount = 0;
 
     weekShifts.forEach(s => {
-      const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day);
+      const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes);
       totalHours += dur;
       if (s.department === 'keuken') {
         keukenHours += dur;
@@ -109,7 +109,7 @@ export default function StaffHoursTracker({
 
     employeePublishedShifts.forEach(s => {
       const w = s.weekNumber || CURRENT_WEEK_NUMBER;
-      const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day);
+      const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes);
       totalYearHours += dur;
       weekTotals[w] = (weekTotals[w] || 0) + dur;
     });
@@ -142,10 +142,12 @@ export default function StaffHoursTracker({
       const sortedShifts = [...weekShifts].sort((a, b) => a.day - b.day);
       sortedShifts.forEach(s => {
         const dayInfo = getDayDateInfo(selectedWeek, s.day);
-        const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day);
+        const dur = calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes);
+        const timing = getShiftTimingDetails(s);
         const dept = s.department === 'keuken' ? 'Keuken' : 'Zaal';
         const ack = s.acknowledged ? '✓ Bevestigd' : 'Nog niet bevestigd';
-        lines.push(`• ${dayInfo.dayNameFull} ${dayInfo.shortDate}: ${s.startTime} - ${s.endTime} (${dur}u, ${dept}) [${ack}]`);
+        const timingNote = timing.badgeLabel ? ` [${timing.badgeLabel}]` : '';
+        lines.push(`• ${dayInfo.dayNameFull} ${dayInfo.shortDate}: ${s.startTime} - ${s.endTime}${timingNote} (${dur}u, ${dept}) [${ack}]`);
       });
     }
 
@@ -461,6 +463,23 @@ export default function StaffHoursTracker({
         </div>
       )}
 
+      {/* 4b. Toelichting Urenregeling Sluitingstijden & Nawerk */}
+      <div className="bg-orange-50/70 border border-orange-200 rounded-2xl p-3.5 flex items-start gap-2.5 text-xs text-orange-950">
+        <Clock size={16} className="text-orange-600 shrink-0 mt-0.5" />
+        <div className="space-y-0.5">
+          <div className="font-bold text-slate-900">
+            Officiële Urenregeling Sluitingstijden & Hulpsluit In De Molen:
+          </div>
+          <p className="text-[11px] text-slate-700 leading-relaxed">
+            • <strong>Sluiting café:</strong> Maandag t/m Donderdag om <strong>01u00</strong>, Vrijdag & Zaterdag om <strong>02u00</strong>, Zondag om <strong>00u00</strong>.
+            <br />
+            • <strong>Degene die sluit:</strong> Werkt standaard nog een half uur door na sluitingstijd voor kassa & opruim (Ma-Do berekend tot <strong>01u30</strong>, Vr-Za tot <strong>02u30</strong>, Zo tot <strong>00u30</strong>).
+            <br />
+            • <strong>Hulpsluit:</strong> Stopt standaard om <strong>00u00</strong> (middernacht).
+          </p>
+        </div>
+      </div>
+
       {/* 5. Dag-voor-dag Specificatie van de Geselecteerde Week */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
@@ -485,7 +504,7 @@ export default function StaffHoursTracker({
             const dayInfo = getDayDateInfo(selectedWeek, dayIdx);
             const dayShifts = weekShifts.filter(s => s.day === dayIdx);
             const hasShift = dayShifts.length > 0;
-            const dayTotalHours = dayShifts.reduce((acc, s) => acc + calculateShiftDurationHours(s.startTime, s.endTime, s.day), 0);
+            const dayTotalHours = dayShifts.reduce((acc, s) => acc + calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes), 0);
 
             return (
               <div 
@@ -511,7 +530,8 @@ export default function StaffHoursTracker({
                   <div className="mt-2 space-y-2">
                     {hasShift ? (
                       dayShifts.map(shift => {
-                        const shiftDur = calculateShiftDurationHours(shift.startTime, shift.endTime, shift.day);
+                        const shiftDur = calculateShiftDurationHours(shift.startTime, shift.endTime, shift.day, shift.notes);
+                        const timing = getShiftTimingDetails(shift);
                         const isKitchen = shift.department === 'keuken';
 
                         return (
@@ -526,6 +546,12 @@ export default function StaffHoursTracker({
                                   {shiftDur}u
                                 </span>
                               </div>
+
+                              {timing.badgeLabel && (
+                                <div className="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-white text-slate-800 border border-orange-200 truncate" title={timing.explanation}>
+                                  {timing.badgeLabel}
+                                </div>
+                              )}
 
                               <div className="flex items-center justify-between text-[9px]">
                                 <span className={`px-1.5 py-0.2 rounded font-black uppercase ${
@@ -619,7 +645,7 @@ export default function StaffHoursTracker({
                 const isSelected = selectedWeek === wNum;
                 const isCurrent = wNum === CURRENT_WEEK_NUMBER;
                 const shiftsForW = employeePublishedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wNum);
-                const hoursForW = Math.round(shiftsForW.reduce((acc, s) => acc + calculateShiftDurationHours(s.startTime, s.endTime, s.day), 0) * 10) / 10;
+                const hoursForW = Math.round(shiftsForW.reduce((acc, s) => acc + calculateShiftDurationHours(s.startTime, s.endTime, s.day, s.notes), 0) * 10) / 10;
 
                 return (
                   <tr 

@@ -1,5 +1,6 @@
 import { Employee, Shift, Department } from '../types';
 import { getDateOfISOWeek, CURRENT_WEEK_INFO, getDayDateInfo } from './weekUtils';
+import { getShiftTimingDetails } from './employeeAgeUtils';
 
 const DAYS_OF_WEEK = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
 
@@ -10,24 +11,87 @@ export function getDateForDayAndWeek(dayIndex: number, weekNumber: number, year:
   return targetDate;
 }
 
-export function formatIcsDate(date: Date, timeStr: string): string {
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  const d = new Date(date);
-  d.setHours(hours, minutes, 0, 0);
-  
+/**
+ * Robustly parses a time string into hours and minutes.
+ * Handles formats like '16u00', '16:00', '15u30', '18h00', '16', etc.
+ */
+export function parseTimeParts(timeStr: string, fallbackH: number = 16, fallbackM: number = 0): { hours: number; minutes: number } {
+  if (!timeStr) return { hours: fallbackH, minutes: fallbackM };
+  const clean = timeStr.trim().toLowerCase();
+
+  const match = clean.match(/^(\d{1,2})[:uh](\d{2})?$/);
+  if (match) {
+    const h = parseInt(match[1], 10);
+    const m = match[2] ? parseInt(match[2], 10) : 0;
+    return { hours: isNaN(h) ? fallbackH : h, minutes: isNaN(m) ? fallbackM : m };
+  }
+
+  const single = parseInt(clean, 10);
+  if (!isNaN(single)) {
+    return { hours: single, minutes: 0 };
+  }
+
+  return { hours: fallbackH, minutes: fallbackM };
+}
+
+/**
+ * Accurately determines start and end Date objects for a shift,
+ * taking into account custom sluitingstijden (Sluit = official closing + 30 min, Hulpsluit = 00:00)
+ * and safely handling midnight rollover (+1 day).
+ */
+export function getShiftStartAndEndDates(
+  shift: Shift,
+  weekNumber: number
+): { startDate: Date; endDate: Date } {
+  const shiftBaseDate = getDateForDayAndWeek(shift.day, weekNumber);
+
+  const startParts = parseTimeParts(shift.startTime || '16:00', 16, 0);
+  const startDate = new Date(shiftBaseDate);
+  startDate.setHours(startParts.hours, startParts.minutes, 0, 0);
+
+  // Resolve end time string (handling 'Sluit', 'Hulpsluit', etc.)
+  const timing = getShiftTimingDetails(shift);
+  const endParts = parseTimeParts(timing.calculatedEndTimeStr || shift.endTime || '23:00', 23, 0);
+
+  const endDate = new Date(shiftBaseDate);
+  endDate.setHours(endParts.hours, endParts.minutes, 0, 0);
+
+  // If end time is earlier or equal to start time in milliseconds, it crossed midnight (e.g. 16:00 -> 01:30)
+  if (endDate.getTime() <= startDate.getTime()) {
+    endDate.setDate(endDate.getDate() + 1);
+  }
+
+  return { startDate, endDate };
+}
+
+/**
+ * Format a Date to UTC ISO string suitable for iCalendar (YYYYMMDDTHHmmssZ)
+ */
+export function formatIcsDateTimeUtc(date: Date): string {
   const pad = (n: number) => (n < 10 ? '0' + n : '' + n);
-  const year = d.getUTCFullYear();
-  const month = pad(d.getUTCMonth() + 1);
-  const day = pad(d.getUTCDate());
-  const hh = pad(d.getUTCHours());
-  const mm = pad(d.getUTCMinutes());
-  const ss = pad(d.getUTCSeconds());
+  const year = date.getUTCFullYear();
+  const month = pad(date.getUTCMonth() + 1);
+  const day = pad(date.getUTCDate());
+  const hh = pad(date.getUTCHours());
+  const mm = pad(date.getUTCMinutes());
+  const ss = pad(date.getUTCSeconds());
   return `${year}${month}${day}T${hh}${mm}${ss}Z`;
+}
+
+/**
+ * Legacy backwards-compatible formatIcsDate helper with robust fallback
+ */
+export function formatIcsDate(date: Date, timeStr: string): string {
+  const parts = parseTimeParts(timeStr, 12, 0);
+  const d = new Date(date);
+  d.setHours(parts.hours, parts.minutes, 0, 0);
+  return formatIcsDateTimeUtc(d);
 }
 
 /**
  * Generate an .ics calendar file content for a given employee and their shifts in a week.
  * Compatible with Microsoft Outlook, Apple Calendar, and Google Calendar.
+ * Includes native 1-hour alarm notification (-PT60M).
  */
 export function generateIcsCalendarContent(
   employee: Employee,
@@ -36,7 +100,7 @@ export function generateIcsCalendarContent(
 ): string {
   const empShifts = shifts.filter(s => s.employeeId === employee.id && s.status === 'published');
   
-  let ics = [
+  const ics = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//In De Molen//Personeelsplanning//NL',
@@ -45,28 +109,33 @@ export function generateIcsCalendarContent(
     `X-WR-CALNAME:Werkrooster In De Molen - ${employee.name}`
   ];
 
+  const nowStamp = formatIcsDateTimeUtc(new Date());
+
   empShifts.forEach(shift => {
-    const shiftDate = getDateForDayAndWeek(shift.day, weekNumber);
-    const startIso = formatIcsDate(shiftDate, shift.startTime);
-    const endIso = formatIcsDate(shiftDate, shift.endTime);
+    const { startDate, endDate } = getShiftStartAndEndDates(shift, weekNumber);
+    const startIso = formatIcsDateTimeUtc(startDate);
+    const endIso = formatIcsDateTimeUtc(endDate);
+
+    const timing = getShiftTimingDetails(shift);
     const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken' : 'Zaal';
     const summary = `Shift In De Molen (${dept}) - ${shift.startTime} tot ${shift.endTime}`;
-    const description = `Werkdienst bij Eet-staminée In De Molen\\nAfdeling: ${dept}\\nUren: ${shift.startTime} - ${shift.endTime}\\nOpmerkingen: ${shift.notes || 'Geen'}\\nGelieve tijdig aanwezig te zijn.`;
+    const timingNote = timing.badgeLabel ? ` [${timing.badgeLabel}]` : '';
+    const description = `Werkdienst bij Eet-staminée In De Molen\\nAfdeling: ${dept}\\nUren: ${shift.startTime} - ${shift.endTime}${timingNote}\\nOpmerkingen: ${shift.notes || 'Geen'}\\nGelieve 10 minuten vooraf aanwezig te zijn.`;
 
     ics.push(
       'BEGIN:VEVENT',
       `UID:shift-${shift.id}-w${weekNumber}@indemolen.be`,
-      `DTSTAMP:${formatIcsDate(new Date(), '12:00')}`,
+      `DTSTAMP:${nowStamp}`,
       `DTSTART:${startIso}`,
       `DTEND:${endIso}`,
       `SUMMARY:${summary}`,
       `DESCRIPTION:${description}`,
-      'LOCATION:Eet-staminée In De Molen',
+      'LOCATION:Eet-staminée In De Molen\\, Bierbeek',
       'STATUS:CONFIRMED',
       'BEGIN:VALARM',
       'TRIGGER:-PT60M',
       'ACTION:DISPLAY',
-      'DESCRIPTION:Herinnering werkdienst In De Molen over 1 uur',
+      'DESCRIPTION:Herinnering: Je werkdienst bij In De Molen begint over 1 uur!',
       'END:VALARM',
       'END:VEVENT'
     );
@@ -77,32 +146,121 @@ export function generateIcsCalendarContent(
 }
 
 /**
- * Trigger client-side download of .ics calendar file
+ * Trigger robust client-side download of .ics calendar file across all platforms:
+ * 1. Native Mobile Web Share API (opens directly in Apple Calendar / Google Calendar on iOS/Android)
+ * 2. Standard Blob link download
+ * 3. Server-side proxy endpoint fallback (bypasses iframe sandbox download restrictions)
+ * 4. Data URI fallback
  */
-export function downloadIcsFile(filename: string, content: string) {
-  const blob = new Blob([content], { type: 'text/calendar;charset=utf-8' });
-  const link = document.createElement('a');
-  link.href = window.URL.createObjectURL(blob);
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+export async function downloadIcsFile(filename: string, content: string): Promise<boolean> {
+  const normalizedContent = content.replace(/\r?\n/g, '\r\n');
+  const safeFilename = filename.endsWith('.ics') ? filename : `${filename}.ics`;
+
+  // 1. Mobile Web Share API (native share on iPhone / Android - opens Agenda app directly!)
+  if (typeof navigator !== 'undefined' && typeof File !== 'undefined' && navigator.share && navigator.canShare) {
+    try {
+      const file = new File([normalizedContent], safeFilename, { type: 'text/calendar;charset=utf-8' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Werkrooster In De Molen',
+          text: 'Werkrooster voor Eet-staminée In De Molen'
+        });
+        return true;
+      }
+    } catch (e: any) {
+      // User cancelled share or aborted; proceed to standard download
+      if (e?.name === 'AbortError') return true;
+    }
+  }
+
+  // 2. Standard Blob download link
+  try {
+    const blob = new Blob([normalizedContent], { type: 'text/calendar;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', safeFilename);
+    link.setAttribute('target', '_blank');
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      if (link.parentNode) document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    }, 1500);
+    return true;
+  } catch (blobErr) {
+    console.warn('Blob download link failed, falling back to server download:', blobErr);
+  }
+
+  // 3. Fallback: Server-side download endpoint (works in all iframes and mobile webviews)
+  try {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/calendar/download-ics';
+    form.target = '_blank';
+    form.style.display = 'none';
+
+    const fnInput = document.createElement('input');
+    fnInput.type = 'hidden';
+    fnInput.name = 'filename';
+    fnInput.value = safeFilename;
+    form.appendChild(fnInput);
+
+    const contentInput = document.createElement('input');
+    contentInput.type = 'hidden';
+    contentInput.name = 'content';
+    contentInput.value = normalizedContent;
+    form.appendChild(contentInput);
+
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(() => {
+      if (form.parentNode) document.body.removeChild(form);
+    }, 1500);
+    return true;
+  } catch (formErr) {
+    console.warn('Form POST download failed, trying data URI:', formErr);
+  }
+
+  // 4. Data URI fallback
+  try {
+    const dataUri = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(normalizedContent);
+    const link = document.createElement('a');
+    link.href = dataUri;
+    link.setAttribute('download', safeFilename);
+    link.setAttribute('target', '_blank');
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      if (link.parentNode) document.body.removeChild(link);
+    }, 1000);
+    return true;
+  } catch (err) {
+    console.error('All ICS download methods failed:', err);
+    return false;
+  }
 }
 
 /**
  * Generate direct Google Calendar link for adding a single shift (opens in browser)
  */
 export function generateGoogleCalendarUrl(employee: Employee, shift: Shift, weekNumber: number): string {
-  const shiftDate = getDateForDayAndWeek(shift.day, weekNumber);
-  const startIso = formatIcsDate(shiftDate, shift.startTime);
-  const endIso = formatIcsDate(shiftDate, shift.endTime);
+  const { startDate, endDate } = getShiftStartAndEndDates(shift, weekNumber);
+  const startIso = formatIcsDateTimeUtc(startDate);
+  const endIso = formatIcsDateTimeUtc(endDate);
+
+  const timing = getShiftTimingDetails(shift);
   const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken' : 'Zaal';
   const text = encodeURIComponent(`Werkdienst In De Molen (${dept}) ${shift.startTime}-${shift.endTime}`);
+  const timingNote = timing.badgeLabel ? `\n• Details: ${timing.badgeLabel}` : '';
   const details = encodeURIComponent(
     `Beste ${employee.name},\n\n` +
     `Je bent ingepland voor een shift bij Eet-staminée In De Molen:\n` +
     `• Afdeling: ${dept}\n` +
-    `• Uren: ${shift.startTime} tot ${shift.endTime}\n` +
+    `• Uren: ${shift.startTime} tot ${shift.endTime}` +
+    timingNote + '\n' +
     (shift.notes ? `• Opmerking: ${shift.notes}\n` : '') +
     `\nGelieve 10 minuten vooraf aanwezig te zijn.`
   );
@@ -120,11 +278,14 @@ export function openGoogleCalendarForShift(employee: Employee, shift: Shift, wee
  * Generate direct Outlook Web Calendar link for adding a shift
  */
 export function generateOutlookWebUrl(employee: Employee, shift: Shift, weekNumber: number): string {
-  const shiftDate = getDateForDayAndWeek(shift.day, weekNumber);
+  const { startDate, endDate } = getShiftStartAndEndDates(shift, weekNumber);
   const pad = (n: number) => (n < 10 ? '0' + n : '' + n);
-  const dateStr = `${shiftDate.getFullYear()}-${pad(shiftDate.getMonth() + 1)}-${pad(shiftDate.getDate())}`;
-  const startDt = `${dateStr}T${shift.startTime}:00`;
-  const endDt = `${dateStr}T${shift.endTime}:00`;
+  const formatIsoNoZ = (d: Date) => 
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+
+  const startDt = formatIsoNoZ(startDate);
+  const endDt = formatIsoNoZ(endDate);
+
   const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken' : 'Zaal';
   const subject = encodeURIComponent(`Werkdienst In De Molen (${dept})`);
   const body = encodeURIComponent(`Beste ${employee.name},\nJe bent ingepland voor de dienst ${shift.startTime} - ${shift.endTime} (${dept}) bij Eet-staminée In De Molen.\n${shift.notes ? 'Opmerking: ' + shift.notes : ''}`);

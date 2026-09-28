@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Employee, Shift, Department } from '../types';
 import { 
   generateWhatsAppUrl, 
@@ -36,6 +36,7 @@ import {
   CheckSquare
 } from 'lucide-react';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { CURRENT_WEEK_NUMBER, getWeekMeta, getAutoActiveWeeks } from '../utils/weekUtils';
 
 interface NotificationModalProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ interface NotificationModalProps {
   employees: Employee[];
   shifts: Shift[];
   weekNumber: number;
+  availableWeeks?: number[];
   onMarkNotified: (employeeIds: string[], type: 'email' | 'whatsapp' | 'both') => void;
 }
 
@@ -52,17 +54,27 @@ export default function NotificationModal({
   employees,
   shifts,
   weekNumber,
+  availableWeeks,
   onMarkNotified
 }: NotificationModalProps) {
+  const [selectedWeek, setSelectedWeek] = useState<number>(weekNumber);
   const [activeTab, setActiveTab] = useState<'individual' | 'team_whatsapp' | 'outlook_calendar'>('individual');
   const [deptFilter, setDeptFilter] = useState<'all' | Department>('all');
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [batchSuccessMessage, setBatchSuccessMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    setSelectedWeek(weekNumber);
+  }, [weekNumber]);
+
   if (!isOpen) return null;
 
-  // Filter published shifts for week
-  const publishedShifts = shifts.filter(s => s.status === 'published');
+  // Active weeks to pick from
+  const activeWeeksMeta = getAutoActiveWeeks(CURRENT_WEEK_NUMBER, availableWeeks || [], shifts);
+  const currentWeekMeta = getWeekMeta(selectedWeek);
+
+  // Filter published shifts for selected week
+  const publishedShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedWeek && s.status === 'published');
   
   // Get all employees that actually have at least 1 shift scheduled
   const scheduledEmployeeIds = Array.from(new Set(publishedShifts.map(s => s.employeeId)));
@@ -90,11 +102,11 @@ export default function NotificationModal({
       'PRODID:-//In De Molen//Personeelsplanning//NL',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
-      `X-WR-CALNAME:Volledig Werkrooster In De Molen - Week ${weekNumber}`
+      `X-WR-CALNAME:Volledig Werkrooster In De Molen - Week ${selectedWeek}`
     ];
 
     displayEmployees.forEach(emp => {
-      const singleIcs = generateIcsCalendarContent(emp, publishedShifts, weekNumber);
+      const singleIcs = generateIcsCalendarContent(emp, publishedShifts, selectedWeek);
       const eventsOnly = singleIcs.split('\r\n').filter(line => 
         !line.startsWith('BEGIN:VCALENDAR') && 
         !line.startsWith('VERSION:') && 
@@ -109,12 +121,12 @@ export default function NotificationModal({
 
     combinedContent.push('END:VCALENDAR');
     const filename = calendarType === 'google'
-      ? `InDeMolen_Google_Agenda_Week${weekNumber}.ics`
+      ? `InDeMolen_Google_Agenda_Week${selectedWeek}.ics`
       : calendarType === 'apple'
-      ? `InDeMolen_Apple_Agenda_Week${weekNumber}.ics`
+      ? `InDeMolen_Apple_Agenda_Week${selectedWeek}.ics`
       : calendarType === 'outlook'
-      ? `InDeMolen_Outlook_Week${weekNumber}.ics`
-      : `InDeMolen_Rooster_Week${weekNumber}_AlleMedewerkers.ics`;
+      ? `InDeMolen_Outlook_Week${selectedWeek}.ics`
+      : `InDeMolen_Rooster_Week${selectedWeek}_AlleMedewerkers.ics`;
     downloadIcsFile(filename, combinedContent.join('\r\n'));
   };
 
@@ -144,7 +156,7 @@ export default function NotificationModal({
             </div>
             <div>
               <span className="text-[10px] font-black uppercase tracking-widest text-orange-100">
-                Communicatie & Notificatie Hub • Week {weekNumber}
+                Communicatie & Notificatie Hub • Week {selectedWeek} ({currentWeekMeta.dateRange})
               </span>
               <h2 className="text-xl md:text-2xl font-black uppercase tracking-tight">
                 Personeel Informeren (WhatsApp, Google, Apple, Outlook & E-mail)
@@ -152,8 +164,52 @@ export default function NotificationModal({
             </div>
           </div>
           <p className="text-xs text-orange-100 mt-2 max-w-2xl font-medium">
-            Laat medewerkers met één klik weten wanneer ze ingepland staan. Stuur directe WhatsApp berichten, exporteer naar Google Agenda, Apple Agenda of Outlook, of verstuur een kant-en-klaar e-mailoverzicht.
+            Kies hieronder van welke week je de planning wilt verzenden. Laat medewerkers met één klik weten wanneer ze ingepland staan via WhatsApp, Google/Apple/Outlook Agenda of e-mail.
           </p>
+        </div>
+
+        {/* Week Selector Bar - Kies van welke week je de shiften stuurt */}
+        <div className="bg-amber-50/90 border-b-2 border-amber-200 px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+              <CalendarIcon size={14} />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-black text-amber-950 uppercase tracking-tight">Kies de Week om te verzenden:</span>
+                <span className="text-[11px] font-black text-amber-800 bg-amber-200/80 px-2 py-0.2 rounded-md border border-amber-300">
+                  Week {selectedWeek}
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-900 font-medium">
+                {currentWeekMeta.label} • {currentWeekMeta.dateRange} ({publishedShifts.length} gepubliceerde {publishedShifts.length === 1 ? 'shift' : 'shiften'})
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {activeWeeksMeta.map(w => {
+              const isSel = selectedWeek === w.weekNumber;
+              const count = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber && s.status === 'published').length;
+              return (
+                <button
+                  key={w.weekNumber}
+                  type="button"
+                  onClick={() => setSelectedWeek(w.weekNumber)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 active:scale-95 ${
+                    isSel
+                      ? 'bg-amber-600 text-white shadow-md ring-2 ring-amber-300 scale-[1.02]'
+                      : 'bg-white text-slate-700 hover:bg-amber-100/70 border border-amber-200'
+                  }`}
+                >
+                  <span>Week {w.weekNumber}</span>
+                  <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold ${isSel ? 'bg-amber-800 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Sub Navigation */}
@@ -243,7 +299,7 @@ export default function NotificationModal({
             <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div>
                 <h4 className="text-xs font-black uppercase tracking-tight text-amber-950">
-                  ⚡ Snelle Batch Notificatie (Week {weekNumber})
+                  ⚡ Snelle Batch Notificatie (Week {selectedWeek})
                 </h4>
                 <p className="text-[11px] text-amber-800 font-medium">
                   Markeer alle {displayEmployees.length} getoonde medewerkers als genotificeerd in het systeemlogboek:
@@ -265,14 +321,14 @@ export default function NotificationModal({
             <div className="space-y-2.5">
               {displayEmployees.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 font-bold text-xs">
-                  Geen medewerkers ingepland voor dit filter.
+                  Geen medewerkers ingepland voor Week {selectedWeek} ({deptFilter === 'all' ? 'alle afdelingen' : deptFilter}).
                 </div>
               ) : (
                 displayEmployees.map(emp => {
                   const empShifts = publishedShifts.filter(s => s.employeeId === emp.id);
                   const isAcknowledged = empShifts.length > 0 && empShifts.every(s => s.acknowledged);
-                  const waUrl = generateWhatsAppUrl(emp, publishedShifts, weekNumber, getShareableAppUrl());
-                  const mailtoUrl = generateMailtoUrl(emp, publishedShifts, weekNumber, getShareableAppUrl());
+                  const waUrl = generateWhatsAppUrl(emp, publishedShifts, selectedWeek, getShareableAppUrl());
+                  const mailtoUrl = generateMailtoUrl(emp, publishedShifts, selectedWeek, getShareableAppUrl());
                   const isKitchen = emp.department === 'keuken';
 
                   return (
@@ -345,7 +401,7 @@ export default function NotificationModal({
                         <button
                           type="button"
                           onClick={() => {
-                            const text = generateWhatsAppMessageText(emp, publishedShifts, weekNumber, getShareableAppUrl());
+                            const text = generateWhatsAppMessageText(emp, publishedShifts, selectedWeek, getShareableAppUrl());
                             handleCopy(text, emp.id);
                           }}
                           className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
@@ -369,8 +425,8 @@ export default function NotificationModal({
                         <button
                           type="button"
                           onClick={() => {
-                            const ics = generateIcsCalendarContent(emp, publishedShifts, weekNumber);
-                            downloadIcsFile(`InDeMolen_${emp.name.replace(/\s+/g, '_')}_Week${weekNumber}.ics`, ics);
+                            const ics = generateIcsCalendarContent(emp, publishedShifts, selectedWeek);
+                            downloadIcsFile(`InDeMolen_${emp.name.replace(/\s+/g, '_')}_Week${selectedWeek}.ics`, ics);
                           }}
                           className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
                           title="Download kalenderbestand (.ics) - compatibel met Google Agenda, Apple Agenda en Outlook"
@@ -432,7 +488,7 @@ export default function NotificationModal({
                 {generateTeamWhatsAppSummary(
                   employees,
                   publishedShifts,
-                  weekNumber,
+                  selectedWeek,
                   deptFilter === 'all' ? 'alles' : deptFilter,
                   getShareableAppUrl()
                 )}
@@ -450,7 +506,7 @@ export default function NotificationModal({
                       const msg = generateTeamWhatsAppSummary(
                         employees,
                         publishedShifts,
-                        weekNumber,
+                        selectedWeek,
                         deptFilter === 'all' ? 'alles' : deptFilter,
                         getShareableAppUrl()
                       );
@@ -467,7 +523,7 @@ export default function NotificationModal({
                       generateTeamWhatsAppSummary(
                         employees,
                         publishedShifts,
-                        weekNumber,
+                        selectedWeek,
                         deptFilter === 'all' ? 'alles' : deptFilter,
                         getShareableAppUrl()
                       )

@@ -1,6 +1,107 @@
 <!doctype html>
 <html lang="nl">
   <head>
+    <script>
+      // Gracefully silence Vite HMR WebSocket connection errors and logs in iFrame sandbox environment
+      (function() {
+        var methods = ['log', 'info', 'warn', 'error', 'debug', 'trace'];
+        methods.forEach(function(method) {
+          var orig = console[method];
+          if (!orig) return;
+          console[method] = function() {
+            for (var i = 0; i < arguments.length; i++) {
+              var arg = arguments[i];
+              var str = '';
+              try {
+                str = typeof arg === 'string' ? arg : (arg && arg.message ? arg.message : String(arg));
+              } catch (e) {
+                str = '';
+              }
+              if (str && (str.indexOf('[vite]') !== -1 || str.indexOf('vite-hmr') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('24678') !== -1)) {
+                return;
+              }
+            }
+            return orig.apply(console, arguments);
+          };
+        });
+
+        if (typeof window !== 'undefined') {
+          window.addEventListener('error', function(event) {
+            var msg = event && (event.message || (event.error && event.error.message)) || '';
+            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+              return true;
+            }
+          }, true);
+
+          window.addEventListener('unhandledrejection', function(event) {
+            var reason = event && event.reason;
+            var msg = reason && (reason.message || String(reason)) || '';
+            if (typeof msg === 'string' && (msg.indexOf('[vite]') !== -1 || msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite-hmr') !== -1)) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+              return true;
+            }
+          }, true);
+
+          if (window.WebSocket) {
+            var OrigWS = window.WebSocket;
+            window.WebSocket = function(url, protocols) {
+              if (protocols === 'vite-hmr' || (typeof url === 'string' && (url.indexOf('24678') !== -1 || url.indexOf('token=') !== -1))) {
+                var listeners = {};
+                var dummyWs = {
+                  binaryType: 'blob',
+                  bufferedAmount: 0,
+                  extensions: '',
+                  protocol: 'vite-hmr',
+                  readyState: 1, // OPEN
+                  CONNECTING: 0,
+                  OPEN: 1,
+                  CLOSING: 2,
+                  CLOSED: 3,
+                  url: String(url),
+                  send: function() {},
+                  close: function() {},
+                  addEventListener: function(evt, fn) {
+                    listeners[evt] = listeners[evt] || [];
+                    listeners[evt].push(fn);
+                  },
+                  removeEventListener: function(evt, fn) {
+                    if (listeners[evt]) {
+                      listeners[evt] = listeners[evt].filter(function(f) { return f !== fn; });
+                    }
+                  },
+                  dispatchEvent: function() { return false; },
+                  onopen: null,
+                  onclose: null,
+                  onerror: null,
+                  onmessage: null
+                };
+                setTimeout(function() {
+                  if (typeof dummyWs.onopen === 'function') dummyWs.onopen(new Event('open'));
+                  if (listeners['open']) {
+                    listeners['open'].forEach(function(fn) { fn(new Event('open')); });
+                  }
+                  var connectedMsg = { data: JSON.stringify({ type: 'connected' }) };
+                  if (typeof dummyWs.onmessage === 'function') dummyWs.onmessage(connectedMsg);
+                  if (listeners['message']) {
+                    listeners['message'].forEach(function(fn) { fn(connectedMsg); });
+                  }
+                }, 5);
+                return dummyWs;
+              }
+              return new OrigWS(url, protocols);
+            };
+            window.WebSocket.prototype = OrigWS.prototype;
+            window.WebSocket.CONNECTING = 0;
+            window.WebSocket.OPEN = 1;
+            window.WebSocket.CLOSING = 2;
+            window.WebSocket.CLOSED = 3;
+          }
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <title>Café Planning & Communicatie</title>
@@ -14,7 +115,7 @@
     <meta name="apple-mobile-web-app-title" content="In De Molen" />
     
     <!-- OpenGraph -->
-    <meta property="og:title" content="Café Planning & Communicatie - In De Molen" />
+    <meta property="og:title" content="Café Planning & Communicatie" />
     <meta property="og:description" content="Een overzichtelijke planner en communicatieportaal voor het personeel van Eet-staminée In De Molen te Bierbeek." />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="/pwa-512x512.png" />

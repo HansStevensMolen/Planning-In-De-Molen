@@ -27,6 +27,7 @@ async function startServer() {
   const app = express();
 
   app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
   app.use(express.static(path.join(process.cwd(), "public")));
 
   // API Health Check
@@ -36,6 +37,28 @@ async function startServer() {
       hasGeminiApiKey: Boolean(process.env.GEMINI_API_KEY),
       timestamp: Date.now()
     });
+  });
+
+  // Calendar .ics download endpoint (supports POST and GET for native downloads & mobile browsers)
+  app.all("/api/calendar/download-ics", (req: Request, res: Response) => {
+    try {
+      const filename = (req.body?.filename || req.query?.filename || "werkrooster.ics").toString();
+      const content = (req.body?.content || req.query?.content || "").toString();
+
+      if (!content) {
+        return res.status(400).send("Geen agendagegevens ontvangen.");
+      }
+
+      const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+
+      res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      return res.send(content);
+    } catch (err: any) {
+      console.error("Fout bij downloaden van .ics bestand:", err);
+      return res.status(500).send("Fout bij genereren van kalenderbestand.");
+    }
   });
 
   // Server-side Gemini Rooster Proposal Endpoint
@@ -98,10 +121,13 @@ BEZETTINGSNORMEN VAN IN DE MOLEN (STRIKT TE VOLGEN):
    - Woensdag (dag 2) & Donderdag (dag 3): exact 5 personen (waarvan exact 1 Sluit in zaal, 1 Hulpsluit in zaal, 2 Keuken avond, 1 Zaal avond).
    - Vrijdag (dag 4), Zaterdag (dag 5) & Zondag (dag 6): exact 7 personen (waarvan exact 1 Sluit in zaal, 1 Hulpsluit in zaal, 3 Keuken avond, 2 Zaal avond).
 
-3. SLUIT & HULPSLUIT REGELS:
+3. SLUIT & HULPSLUIT REGELS & SLUITINGSUREN:
    - Elke avonddienst MOET exact 1 'Sluit' en exact 1 'Hulpsluit' hebben in de zaal.
    - De Sluit-rol vereist bij voorkeur een 'Verantwoordelijke' of 'Ervaren' medewerker (bijv. Pat, Matthias, of een ervaren student/flexi).
    - Sluit-tijd: 16u00 - Sluit (Zondag vanaf 15u30). Hulpsluit-tijd: 16u00 - Hulpsluit (Zondag vanaf 15u30).
+   - Officiële sluitingstijden café: Maandag, Dinsdag, Woensdag en Donderdag om 01u00; Vrijdag en Zaterdag om 02u00; Zondag om 00u00.
+   - Hulpsluit stopt meestal om 00u00.
+   - Degene die sluit werkt altijd een half uur na sluitingstijd door voor opruim/kassa (Ma-Do tot 01u30, Vr-Za tot 02u30, Zo tot 00u30).
 
 4. BESCHIKBAARHEID & CONTRACTREGELS (CRUCIAAL):
    - 'unavailable': plan deze medewerker NOOIT in op die dag!

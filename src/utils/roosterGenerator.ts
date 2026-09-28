@@ -353,10 +353,10 @@ export function generateSmartAutoPlan(
 
         // Wetgeving controle voor minderjarigen (<18): mag niet na 23u00 & max 8u/dag
         if (isEmpMinor) {
-          if (isShiftEndingAfter23(candidateEnd, day)) {
+          if (isShiftEndingAfter23(candidateEnd, day, slot.notes)) {
             candidateEnd = '23u00';
           }
-          const duration = calculateShiftDurationHours(candidateStart, candidateEnd, day);
+          const duration = calculateShiftDurationHours(candidateStart, candidateEnd, day, slot.notes);
           if (duration > 8) {
             continue; // Overschrijdt 8 uur per dag limiet
           }

@@ -25,7 +25,8 @@ export interface StaffShiftAlarmModalProps {
   isOpen: boolean;
   onClose: () => void;
   employee: Employee;
-  unconfirmedAlerts: Shift24HourAlert[];
+  alerts?: Shift24HourAlert[];
+  unconfirmedAlerts?: Shift24HourAlert[];
   onAcknowledgeShift: (shiftId: string) => void;
   onAcknowledgeAllShifts?: (shiftIds: string[]) => void;
 }
@@ -34,6 +35,7 @@ export default function StaffShiftAlarmModal({
   isOpen,
   onClose,
   employee,
+  alerts,
   unconfirmedAlerts,
   onAcknowledgeShift,
   onAcknowledgeAllShifts
@@ -41,7 +43,10 @@ export default function StaffShiftAlarmModal({
   const [copied, setCopied] = useState(false);
   const [notifStatus, setNotifStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
 
-  if (!isOpen || unconfirmedAlerts.length === 0) return null;
+  const displayAlerts = (alerts && alerts.length > 0) ? alerts : (unconfirmedAlerts || []);
+  const pendingAlerts = displayAlerts.filter(a => !a.shift.acknowledged);
+
+  if (!isOpen || displayAlerts.length === 0) return null;
 
   const handleRequestPush = async () => {
     const res = await requestPushNotificationPermission();
@@ -50,7 +55,7 @@ export default function StaffShiftAlarmModal({
   };
 
   const handleCopyReminder = () => {
-    const text = generateAutomatedReminderText(employee, unconfirmedAlerts);
+    const text = generateAutomatedReminderText(employee, displayAlerts);
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 3000);
@@ -58,9 +63,9 @@ export default function StaffShiftAlarmModal({
 
   const handleAcknowledgeAll = () => {
     if (onAcknowledgeAllShifts) {
-      onAcknowledgeAllShifts(unconfirmedAlerts.map(a => a.shift.id));
+      onAcknowledgeAllShifts(pendingAlerts.map(a => a.shift.id));
     } else {
-      unconfirmedAlerts.forEach(a => onAcknowledgeShift(a.shift.id));
+      pendingAlerts.forEach(a => onAcknowledgeShift(a.shift.id));
     }
   };
 
@@ -74,8 +79,12 @@ export default function StaffShiftAlarmModal({
       <div 
         className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border-2 border-red-300 overflow-hidden animate-in zoom-in-95 duration-200 relative flex flex-col max-h-[90vh]"
       >
-        {/* Pulsing Emergency Header Bar */}
-        <div className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white p-5 sm:p-6 relative overflow-hidden shrink-0">
+        {/* Header Bar */}
+        <div className={`text-white p-5 sm:p-6 relative overflow-hidden shrink-0 ${
+          pendingAlerts.length > 0 
+            ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-600'
+            : 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600'
+        }`}>
           {/* Decorative glowing background blobs */}
           <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/15 rounded-full blur-xl pointer-events-none" />
           <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-black/15 rounded-full blur-xl pointer-events-none" />
@@ -84,24 +93,24 @@ export default function StaffShiftAlarmModal({
             <div className="flex items-start gap-3.5">
               <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white shrink-0 border border-white/30 shadow-inner">
                 <span className="relative flex h-6 w-6">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-200 opacity-75" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/60 opacity-75" />
                   <BellRing size={24} className="relative inline-flex stroke-[2.5]" />
                 </span>
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="bg-white text-red-700 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs">
-                    🚨 Visueel Alarm • Dienst &lt; 24 Uur
+                  <span className="bg-white text-slate-900 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs">
+                    {pendingAlerts.length > 0 ? '🚨 Dienst < 24 Uur • Bevestiging Vereist' : '⏰ Dienst Herinnering • < 24 Uur'}
                   </span>
                 </div>
                 <h2 
                   id="reminder-modal-title"
                   className="text-lg sm:text-xl font-black text-white tracking-tight mt-1"
                 >
-                  Automatische Dienstherinnering
+                  {pendingAlerts.length > 0 ? 'Dienstherinnering: Nog te Bevestigen' : 'Je Dienst Begint Binnen 24 Uur!'}
                 </h2>
                 <p className="text-white/90 text-xs mt-0.5 font-medium">
-                  Beste <strong>{employee.name}</strong>, bevestig je shift a.u.b. tijdig op "Gezien".
+                  Beste <strong>{employee.name}</strong>, {pendingAlerts.length > 0 ? 'bevestig je shift a.u.b. op "Gezien".' : 'hier is je dienstoverzicht ter voorbereiding.'}
                 </p>
               </div>
             </div>
@@ -123,21 +132,23 @@ export default function StaffShiftAlarmModal({
           <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-4 text-xs text-amber-950 space-y-2">
             <div className="flex items-center gap-2 font-black text-amber-900 uppercase tracking-tight text-[11px]">
               <AlertTriangle size={15} className="text-amber-600 shrink-0" />
-              <span>Automatisch Bericht van het Beheersysteem</span>
+              <span>Automatische Dienstherinnering Café In De Molen</span>
             </div>
             <p className="leading-relaxed text-slate-700">
-              Je staat ingepland voor <strong className="text-slate-900">{unconfirmedAlerts.length} {unconfirmedAlerts.length === 1 ? 'dienst' : 'diensten'}</strong> die binnen de komende 24 uur van start gaat. Deze dienst(en) staat momenteel nog <strong>niet op 'Gezien'</strong>.
-            </p>
-            <p className="text-slate-600 text-[11px]">
-              Door op <strong>"Bevestigen ("Gezien")"</strong> te klikken weet het beheer direct dat je op de hoogte bent en dat de café-bezetting gewaarborgd is.
+              Je staat ingepland voor <strong className="text-slate-900">{displayAlerts.length} {displayAlerts.length === 1 ? 'dienst' : 'diensten'}</strong> binnen de komende 24 uur.
+              {pendingAlerts.length > 0 ? (
+                <span> Er staat nog <strong>{pendingAlerts.length} dienst niet op 'Gezien'</strong>. Bevestig hieronder zodat het beheer weet dat je paraat staat!</span>
+              ) : (
+                <span> Al je diensten zijn reeds bevestigd. Zorg dat je op tijd aanwezig bent in gepaste kledij!</span>
+              )}
             </p>
           </div>
 
-          {/* List of shifts requiring confirmation */}
+          {/* List of shifts */}
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
-              <span>Nog te bevestigen ({unconfirmedAlerts.length})</span>
-              {unconfirmedAlerts.length > 1 && (
+              <span>Ingeplande Diensten Binnen 24u ({displayAlerts.length})</span>
+              {pendingAlerts.length > 1 && (
                 <button
                   type="button"
                   onClick={handleAcknowledgeAll}
@@ -148,18 +159,26 @@ export default function StaffShiftAlarmModal({
               )}
             </div>
 
-            {unconfirmedAlerts.map(({ shift, dayLabel, formattedDate, timeRemainingText, isOngoing, totalHours }) => (
+            {displayAlerts.map(({ shift, dayLabel, formattedDate, timeRemainingText, isOngoing, totalHours }) => (
               <div 
                 key={shift.id}
-                className="bg-white rounded-2xl border-2 border-red-300 p-4 shadow-sm hover:shadow-md transition space-y-3 ring-2 ring-red-100/60"
+                className={`bg-white rounded-2xl border-2 p-4 shadow-sm hover:shadow-md transition space-y-3 ${
+                  shift.acknowledged 
+                    ? 'border-emerald-300 ring-2 ring-emerald-100/60'
+                    : 'border-red-300 ring-2 ring-red-100/60'
+                }`}
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-black text-slate-900 text-sm">
                         {dayLabel}
                       </span>
-                      <span className="bg-red-100 text-red-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-red-200">
+                      <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                        isOngoing
+                          ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
+                          : 'bg-red-100 text-red-800 border-red-200'
+                      }`}>
                         {isOngoing ? '🚨 Nu bezig' : `⏰ ${timeRemainingText}`}
                       </span>
                       <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
@@ -182,18 +201,25 @@ export default function StaffShiftAlarmModal({
                     )}
                   </div>
 
-                  {/* Immediate Confirmation Button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onAcknowledgeShift(shift.id);
-                      playAlertChime();
-                    }}
-                    className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-2 shrink-0 duration-100"
-                  >
-                    <Check size={16} className="stroke-[3]" />
-                    <span>Dienst Bevestigen ("Gezien")</span>
-                  </button>
+                  {/* Immediate Confirmation Button or Confirmed Badge */}
+                  {shift.acknowledged ? (
+                    <div className="px-4 py-2.5 bg-emerald-50 text-emerald-900 border border-emerald-300 font-black text-xs uppercase tracking-tight rounded-xl flex items-center justify-center gap-1.5 shrink-0">
+                      <CheckCircle2 size={16} className="text-emerald-600" />
+                      <span>✓ Reeds Bevestigd ("Gezien")</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAcknowledgeShift(shift.id);
+                        playAlertChime();
+                      }}
+                      className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-2 shrink-0 duration-100"
+                    >
+                      <Check size={16} className="stroke-[3]" />
+                      <span>Dienst Bevestigen ("Gezien")</span>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
