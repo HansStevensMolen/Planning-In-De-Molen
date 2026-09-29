@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { 
   Calendar as CalendarIcon, 
   Check, 
@@ -60,11 +60,8 @@ import {
   sendShiftReminderNotification, 
   sendUpcomingShiftNotification,
   send1HourShiftNotification,
-  sendShiftChangeNotification,
   hasShiftNotificationBeenSent, 
   markShiftNotificationAsSent, 
-  hasShiftChangeNotificationBeenSent,
-  markShiftChangeNotificationAsSent,
   playAlertChime, 
   PushNotificationStatus 
 } from '../utils/shiftAlarmUtils';
@@ -84,7 +81,7 @@ import {
   parseTimeParts
 } from '../utils/notificationUtils';
 import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
-import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
 import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
 import { buildMessengerUrl } from '../utils/whatsappNotificationUtils';
@@ -562,7 +559,14 @@ export default function StaffPortal({
 
   // Filters for the selected roster week
   const rosterWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek);
-  const personalShifts = rosterWeekShifts.filter(s => s.employeeId === activeEmployeeId && s.status === 'published');
+  const personalShifts = rosterWeekShifts
+    .filter(s => s.employeeId === activeEmployeeId && s.status === 'published')
+    .sort((a, b) => {
+      if (a.day !== b.day) return a.day - b.day;
+      const diff = parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime);
+      if (diff !== 0) return diff;
+      return (a.startTime || '').localeCompare(b.startTime || '');
+    });
   const personalWeekHours = React.useMemo(() => {
     return Math.round(personalShifts.reduce((acc, sh) => acc + calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes), 0) * 10) / 10;
   }, [personalShifts]);
@@ -596,14 +600,6 @@ export default function StaffPortal({
   // VISUEEL ALARM & PUSH NOTIFICATIE: Diensten binnen 24 uur die nog NIET zijn bevestigd ("Gezien")
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
   const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
-
-  // Persoonlijke dienst-wijzigingen en annuleringen voor deze medewerker
-  const personalChangeNotices = useMemo(() => {
-    if (!currentEmployee) return [];
-    return notices.filter(
-      n => n.targetEmployeeId === currentEmployee.id && n.category === 'wijziging'
-    );
-  }, [notices, currentEmployee?.id]);
 
   // Push notification permission state & automated reminder dialog state
   const [pushStatus, setPushStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
@@ -656,18 +652,7 @@ export default function StaffPortal({
         setShowOpenShiftsModal(true);
       }
     } catch {}
-
-    // 4. Automatische push-notificatie & geluidsmelding bij gewijzigde of geannuleerde diensten
-    if (personalChangeNotices.length > 0) {
-      personalChangeNotices.forEach(notice => {
-        if (!hasShiftChangeNotificationBeenSent(notice.id)) {
-          sendShiftChangeNotification(currentEmployee, notice.title, notice.content, notice.id);
-          markShiftChangeNotificationAsSent(notice.id);
-          playAlertChime();
-        }
-      });
-    }
-  }, [upcomingShifts24h.length, currentEmployee?.id, availableOpenShifts.length, personalChangeNotices]);
+  }, [upcomingShifts24h.length, currentEmployee?.id, availableOpenShifts.length]);
 
   // All published shifts for the team view (filter by Zaal / Keuken / Alle for the selected week)
   const publishedTeamShifts = rosterWeekShifts.filter(s => {
@@ -1441,35 +1426,6 @@ export default function StaffPortal({
       {/* 1. MY ROSTER & WEEK ROSTER */}
       {activeSubTab === 'rooster' && (
         <div className="space-y-4">
-          {/* Persoonlijke Dienst Wijziging / Annulering Notificatie Banner */}
-          {personalChangeNotices.length > 0 && (
-            <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-white p-4 rounded-3xl shadow-lg border-2 border-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
-              <div className="flex items-start sm:items-center space-x-3">
-                <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0">
-                  <Megaphone size={22} className="stroke-[2.5]" />
-                </div>
-                <div>
-                  <h4 className="font-black text-sm uppercase tracking-tight flex items-center gap-2">
-                    <span>{personalChangeNotices[0].title}</span>
-                    <span className="text-[10px] bg-white text-orange-950 px-2 py-0.5 rounded-full font-black uppercase">
-                      Wijziging door Beheerder
-                    </span>
-                  </h4>
-                  <p className="text-xs text-white/95 mt-0.5 font-medium whitespace-pre-line line-clamp-2 sm:line-clamp-none">
-                    {personalChangeNotices[0].content}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveSubTab('berichten')}
-                className="px-3.5 py-2 bg-white text-orange-950 hover:bg-orange-50 rounded-xl font-black text-xs uppercase tracking-tight shadow-md transition active:scale-95 cursor-pointer shrink-0"
-              >
-                Bekijk Bericht & Reacties
-              </button>
-            </div>
-          )}
-
           {/* 1-Hour Urgent Shift Reminder Banner */}
           {upcomingShifts1h.length > 0 && (
             <div className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white p-4 rounded-3xl shadow-lg border-2 border-red-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">

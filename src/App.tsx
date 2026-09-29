@@ -531,6 +531,7 @@ export default function App() {
 
   // Action: Update Shift details
   const handleUpdateShift = (updatedShift: Shift) => {
+    const prevShift = shifts.find(s => s.id === updatedShift.id);
     const nextShifts = shifts.map(s => s.id === updatedShift.id ? updatedShift : s);
     setShifts(nextShifts);
     saveShiftsToCloud(nextShifts);
@@ -539,6 +540,29 @@ export default function App() {
       'Dienst bijgewerkt',
       `Planning aangepast voor ${empName} op ${DAYS_OF_WEEK[updatedShift.day]} (${updatedShift.startTime} - ${updatedShift.endTime}) [Week ${updatedShift.weekNumber || CURRENT_WEEK_NUMBER}]`
     );
+
+    // Stuur personeel een direct bericht/notificatie als hun shift gewijzigd werd
+    const dayChanged = prevShift && prevShift.day !== updatedShift.day;
+    const timeChanged = prevShift && (prevShift.startTime !== updatedShift.startTime || prevShift.endTime !== updatedShift.endTime);
+    const deptChanged = prevShift && prevShift.department !== updatedShift.department;
+
+    if (dayChanged || timeChanged || deptChanged) {
+      const weekNum = updatedShift.weekNumber || CURRENT_WEEK_NUMBER;
+      const deptLabel = updatedShift.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+      const changeNotice: Notice = {
+        id: `notice_shift_change_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        title: `⚠️ Shift Gewijzigd: ${DAYS_OF_WEEK[updatedShift.day]} (Week ${weekNum})`,
+        content: `Beste ${empName}, je dienst in Week ${weekNum} is gewijzigd naar ${DAYS_OF_WEEK[updatedShift.day]} van ${updatedShift.startTime} tot ${updatedShift.endTime} (${deptLabel}). Gelieve dit te controleren in je rooster en te bevestigen als 'Gezien'.`,
+        date: new Date().toISOString().split('T')[0],
+        category: 'wijziging',
+        author: 'Hans Stevens (Beheerder)',
+        targetEmployeeId: updatedShift.employeeId,
+        shiftId: updatedShift.id
+      };
+      const nextNotices = [changeNotice, ...notices];
+      setNotices(nextNotices);
+      saveNoticesToCloud(nextNotices);
+    }
   };
 
   // Action: Delete Shift
@@ -556,6 +580,24 @@ export default function App() {
 
     const empName = employees.find(e => e.id === target.employeeId)?.name || 'Onbekend';
     addLog('Dienst verwijderd', `Dienst van ${empName} op ${DAYS_OF_WEEK[target.day]} gecancelled [Week ${target.weekNumber || CURRENT_WEEK_NUMBER}]`);
+
+    // Stuur personeel een direct bericht/notificatie als hun shift geannuleerd werd
+    if (target.employeeId && target.employeeId !== 'open_shift') {
+      const weekNum = target.weekNumber || CURRENT_WEEK_NUMBER;
+      const deptLabel = target.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+      const cancelNotice: Notice = {
+        id: `notice_shift_cancel_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        title: `❌ Shift Geannuleerd: ${DAYS_OF_WEEK[target.day]} (Week ${weekNum})`,
+        content: `Beste ${empName}, je ingeplande dienst op ${DAYS_OF_WEEK[target.day]} (${target.startTime} - ${target.endTime}, ${deptLabel}) voor Week ${weekNum} is geannuleerd/verwijderd uit het rooster door de beheerder.`,
+        date: new Date().toISOString().split('T')[0],
+        category: 'wijziging',
+        author: 'Hans Stevens (Beheerder)',
+        targetEmployeeId: target.employeeId
+      };
+      const nextNotices = [cancelNotice, ...notices];
+      setNotices(nextNotices);
+      saveNoticesToCloud(nextNotices);
+    }
   };
 
   // Action: Publish draft shifts (for a specific week or all) & alert team

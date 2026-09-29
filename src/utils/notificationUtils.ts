@@ -147,41 +147,21 @@ export function generateIcsCalendarContent(
 
 /**
  * Trigger robust client-side download of .ics calendar file across all platforms:
- * 1. Native Mobile Web Share API (opens directly in Apple Calendar / Google Calendar on iOS/Android)
- * 2. Standard Blob link download
- * 3. Server-side proxy endpoint fallback (bypasses iframe sandbox download restrictions)
- * 4. Data URI fallback
+ * 1. Standard direct Blob link download (without target="_blank" which breaks file saving in Chrome/Safari)
+ * 2. Fallback: Server-side proxy endpoint (/api/calendar/download-ics)
+ * 3. Data URI fallback
  */
 export async function downloadIcsFile(filename: string, content: string): Promise<boolean> {
   const normalizedContent = content.replace(/\r?\n/g, '\r\n');
   const safeFilename = filename.endsWith('.ics') ? filename : `${filename}.ics`;
 
-  // 1. Mobile Web Share API (native share on iPhone / Android - opens Agenda app directly!)
-  if (typeof navigator !== 'undefined' && typeof File !== 'undefined' && navigator.share && navigator.canShare) {
-    try {
-      const file = new File([normalizedContent], safeFilename, { type: 'text/calendar;charset=utf-8' });
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: 'Werkrooster In De Molen',
-          text: 'Werkrooster voor Eet-staminée In De Molen'
-        });
-        return true;
-      }
-    } catch (e: any) {
-      // User cancelled share or aborted; proceed to standard download
-      if (e?.name === 'AbortError') return true;
-    }
-  }
-
-  // 2. Standard Blob download link
+  // 1. Direct Blob download link (Primary & fastest method, standard for desktop & mobile browsers)
   try {
     const blob = new Blob([normalizedContent], { type: 'text/calendar;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', safeFilename);
-    link.setAttribute('target', '_blank');
+    link.download = safeFilename;
     link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
@@ -194,12 +174,11 @@ export async function downloadIcsFile(filename: string, content: string): Promis
     console.warn('Blob download link failed, falling back to server download:', blobErr);
   }
 
-  // 3. Fallback: Server-side download endpoint (works in all iframes and mobile webviews)
+  // 2. Fallback: Server-side download endpoint (works in all iframes and mobile webviews)
   try {
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = '/api/calendar/download-ics';
-    form.target = '_blank';
     form.style.display = 'none';
 
     const fnInput = document.createElement('input');
@@ -224,13 +203,13 @@ export async function downloadIcsFile(filename: string, content: string): Promis
     console.warn('Form POST download failed, trying data URI:', formErr);
   }
 
-  // 4. Data URI fallback
+  // 3. Data URI fallback
   try {
     const dataUri = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(normalizedContent);
     const link = document.createElement('a');
     link.href = dataUri;
-    link.setAttribute('download', safeFilename);
-    link.setAttribute('target', '_blank');
+    link.download = safeFilename;
+    link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
     setTimeout(() => {

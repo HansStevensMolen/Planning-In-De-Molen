@@ -38,67 +38,76 @@ export function sortEmployeesByFirstName(employees: Employee[]): Employee[] {
 }
 
 /**
- * Sorteert medewerkers per dag op basis van beschikbaarheid:
- * 1. Wie beschikbaar is (Voorkeur ⭐ of Beschikbaar ✓) komt bovenaan.
- * 2. Binnen de beschikbaren komen de vaste werknemers (Vast) als eerste, gevolgd door Flexi, Student, Extra.
- * 3. Daarna medewerkers zonder opgave.
- * 4. Onderaan medewerkers die niet-beschikbaar zijn (✕).
- * 5. Gelijke scores worden alfabetisch gesorteerd op voornaam.
+ * Sorteert medewerkers per dag:
+ * 1. Wie beschikbaar is ('available' of 'preferred') komt bovenaan.
+ * 2. Binnen de beschikbaren: vaste werknemers ('Vast') eerst.
+ * 3. Vervolgens andere statuten (Flexi, Student, Extra).
+ * 4. Alfabetisch op naam.
+ * 5. Medewerkers die niet-beschikbaar zijn of niets hebben ingevuld komen onderaan (ook vaste eerst).
  */
 export function sortEmployeesByDayAvailability(
   employees: Employee[],
-  dayIdx: number,
+  dayIndex: number,
   weekNumber: number,
   availabilities: EmployeeAvailability[]
 ): Employee[] {
-  const getScore = (emp: Employee): number => {
-    const effective = getEffectiveEmployeeAvailability(emp, weekNumber, availabilities);
-    const dayAvail = effective.availability?.days.find(d => d.day === dayIdx);
-    const status = dayAvail?.status;
-
-    const isVast = emp.statuut === 'Vast';
-    const isFlexi = emp.statuut === 'Flexi';
-    const isStudent = emp.statuut === 'Student';
-
-    // 1. Beschikbaar (bovenaan)
-    if (status === 'preferred' || status === 'available') {
-      if (isVast) {
-        return status === 'preferred' ? 10 : 11; // Vaste medewerkers bovenaan!
-      } else if (isFlexi) {
-        return status === 'preferred' ? 20 : 21;
-      } else if (isStudent) {
-        return status === 'preferred' ? 30 : 31;
-      } else {
-        return status === 'preferred' ? 40 : 41; // Extra
-      }
-    }
-
-    // 2. Geen opgave / onbekend
-    if (!status) {
-      if (isVast) return 60;
-      if (isFlexi) return 61;
-      if (isStudent) return 62;
-      return 63;
-    }
-
-    // 3. Niet-beschikbaar ('unavailable')
-    if (isVast) return 80;
-    if (isFlexi) return 81;
-    if (isStudent) return 82;
-    return 83;
-  };
-
   return [...employees].sort((a, b) => {
-    const scoreA = getScore(a);
-    const scoreB = getScore(b);
-    if (scoreA !== scoreB) {
-      return scoreA - scoreB;
-    }
-    const aFirst = (a.name || '').trim().split(/\s+/)[0] || '';
-    const bFirst = (b.name || '').trim().split(/\s+/)[0] || '';
+    const aEff = getEffectiveEmployeeAvailability(a, weekNumber, availabilities);
+    const bEff = getEffectiveEmployeeAvailability(b, weekNumber, availabilities);
+
+    const aDay = aEff.availability?.days.find(d => d.day === dayIndex);
+    const bDay = bEff.availability?.days.find(d => d.day === dayIndex);
+
+    const aIsAvail = aDay && (aDay.status === 'available' || aDay.status === 'preferred');
+    const bIsAvail = bDay && (bDay.status === 'available' || bDay.status === 'preferred');
+
+    // 1. Wie beschikbaar is bovenaan
+    if (aIsAvail && !bIsAvail) return -1;
+    if (!aIsAvail && bIsAvail) return 1;
+
+    // 2. Beginnen met de vaste werknemers
+    const aIsVast = a.statuut === 'Vast';
+    const bIsVast = b.statuut === 'Vast';
+    if (aIsVast && !bIsVast) return -1;
+    if (!aIsVast && bIsVast) return 1;
+
+    // 3. Statuut rangorde: Vast (0), Flexi (1), Student (2), Extra (3)
+    const statuutRank = (s?: string) => {
+      if (s === 'Vast') return 0;
+      if (s === 'Flexi') return 1;
+      if (s === 'Student') return 2;
+      return 3;
+    };
+    const rankDiff = statuutRank(a.statuut) - statuutRank(b.statuut);
+    if (rankDiff !== 0) return rankDiff;
+
+    // 4. Alfabetisch op naam
+    const aName = (a.name || '').trim();
+    const bName = (b.name || '').trim();
+    const aFirst = aName.split(/\s+/)[0] || '';
+    const bFirst = bName.split(/\s+/)[0] || '';
     const firstComp = aFirst.localeCompare(bFirst, 'nl', { sensitivity: 'base' });
     if (firstComp !== 0) return firstComp;
-    return (a.name || '').localeCompare(b.name || '', 'nl', { sensitivity: 'base' });
+    return aName.localeCompare(bName, 'nl', { sensitivity: 'base' });
   });
 }
 
+/**
+ * Zet een starttijd (bijv. "11:30", "17:00", "09:00", "17u30", "Open") om naar minuten vanaf middernacht
+ * voor 100% betrouwbare chronologische sortering.
+ */
+export function parseStartTimeToMinutes(timeStr?: string): number {
+  if (!timeStr) return 999999;
+  const cleaned = timeStr.trim().toLowerCase();
+  if (cleaned.includes('open')) return 11 * 60 + 30; // Typische openingsuur café In De Molen
+  if (cleaned.includes('sluit')) return 23 * 60;
+  const match = cleaned.match(/(\d{1,2})[:uh.]?(\d{2})?/);
+  if (match) {
+    const hours = parseInt(match[1], 10);
+    const minutes = match[2] ? parseInt(match[2], 10) : 0;
+    return hours * 60 + minutes;
+  }
+  const single = parseInt(cleaned, 10);
+  if (!isNaN(single)) return single * 60;
+  return 999999;
+}

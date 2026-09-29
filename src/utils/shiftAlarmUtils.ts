@@ -169,6 +169,7 @@ export function sendUpcomingShiftNotification(
 
 /**
  * Dispatches an urgent native browser Push Notification for a shift starting within 1 hour.
+ * Supports both standard desktop Notification API and mobile Service Worker notifications on smartphones.
  */
 export function send1HourShiftNotification(
   employee: Employee,
@@ -180,22 +181,45 @@ export function send1HourShiftNotification(
 
   const shift = shiftAlert.shift;
   const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+  const title = `⏰ In De Molen: Je dienst begint over 1 uur!`;
+  const bodyText = `Beste ${employee.name}, je shift (${dept}) start om ${shift.startTime}. ${shiftAlert.timeRemainingText}. Zorg dat je tijdig aanwezig bent!`;
 
   try {
-    const title = `⏰ In De Molen: Je dienst begint over 1 uur!`;
-    const notification = new Notification(title, {
-      body: `Beste ${employee.name}, je shift (${dept}) start om ${shift.startTime}. ${shiftAlert.timeRemainingText}. Zorg dat je tijdig aanwezig bent!`,
-      icon: '/favicon.ico',
-      tag: `shift-1hour-alarm-${shift.id}`,
-      requireInteraction: true
-    });
+    // 1. Mobile ServiceWorker Notification (Reliable for Android smartphones & iOS PWA on smartphone)
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(reg => {
+        if (reg && reg.showNotification) {
+          reg.showNotification(title, {
+            body: bodyText,
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            tag: `shift-1hour-alarm-${shift.id}`,
+            renotify: true,
+            vibrate: [200, 100, 200]
+          } as any);
+        }
+      }).catch(() => {});
+    }
 
-    notification.onclick = () => {
-      window.focus();
-      notification.close();
-    };
+    // 2. Standard Web Notification API for desktop/browsers
+    try {
+      const notification = new Notification(title, {
+        body: bodyText,
+        icon: '/favicon.ico',
+        tag: `shift-1hour-alarm-${shift.id}`,
+        requireInteraction: true
+      });
+
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      // In mobile Chrome new Notification() may throw Illegal constructor, handled by serviceWorker above
+    }
 
     sessionStorage.setItem(`shift_1h_notif_sent_${shift.id}`, 'true');
+    playAlertChime();
     return true;
   } catch (err) {
     console.error('Failed to trigger 1-hour shift notification:', err);
@@ -217,58 +241,4 @@ export function generateAutomatedReminderText(
   }).join('\n');
 
   return `Beste ${employee.name},\n\nDit is een automatische herinnering van Café In De Molen:\nJe hebt ${count === 1 ? 'een dienst' : `${count} diensten`} binnen 24 uur die nog niet gemarkeerd zijn als 'Gezien'.\n\n${shiftLines}\n\nGelieve je aanwezigheid zo snel mogelijk te bevestigen in het personeelsportaal zodat het team weet dat je paraat staat!\n\nMet vriendelijke groeten,\nCafé In De Molen`;
-}
-
-/**
- * Dispatches an urgent native browser Push Notification when a shift was modified or cancelled.
- */
-export function sendShiftChangeNotification(
-  employee: Employee,
-  noticeTitle: string,
-  noticeContent: string,
-  noticeId: string
-): boolean {
-  if (!isPushNotificationSupported() || Notification.permission !== 'granted') {
-    return false;
-  }
-
-  try {
-    const notification = new Notification(`⚠️ In De Molen: ${noticeTitle}`, {
-      body: noticeContent,
-      icon: '/favicon.ico',
-      tag: `shift-change-${noticeId}`,
-      requireInteraction: true
-    });
-
-    notification.onclick = () => {
-      window.focus();
-      notification.close();
-    };
-
-    sessionStorage.setItem(`shift_change_notif_sent_${noticeId}`, 'true');
-    return true;
-  } catch (err) {
-    console.error('Failed to trigger shift change notification:', err);
-    return false;
-  }
-}
-
-/**
- * Checks if a shift change notification was already dispatched in this browser session.
- */
-export function hasShiftChangeNotificationBeenSent(noticeId: string): boolean {
-  try {
-    return sessionStorage.getItem(`shift_change_notif_sent_${noticeId}`) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Marks a shift change notification as sent in sessionStorage.
- */
-export function markShiftChangeNotificationAsSent(noticeId: string): void {
-  try {
-    sessionStorage.setItem(`shift_change_notif_sent_${noticeId}`, 'true');
-  } catch {}
 }
