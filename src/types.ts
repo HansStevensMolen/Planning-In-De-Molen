@@ -11,6 +11,10 @@ export interface EmployeeAvailability {
   employeeId: string;
   weekNumber: number;
   days: DayAvailability[];
+  employeeName?: string;
+  department?: Department | string;
+  lastUpdated?: number;
+  formattedDate?: string;
 }
 
 export type Department = 'zaal' | 'keuken';
@@ -41,13 +45,13 @@ export interface Employee {
   department: Department;
   statuut: EmployeeStatuut;
   experience: ExperienceLevel;
-  role?: 'beheerder' | 'medewerker';
+  role?: 'beheerder' | 'medewerker' | 'personeel';
   contractDaysPerWeek?: number; // e.g. 4 for Pat & Matthias (fulltime 4 dagen regime), 5 for standard Vast
   color: string; // Used for UI backgrounds/borders
   textBgColor: string; // Tailwind background color
   textColor: string; // Tailwind text color
-  email: string;
-  phone: string;
+  email?: string;
+  phone?: string;
   avatarUrl?: string; // Base64 data-URL or image URL
   facebookUrl?: string; // Link naar Facebook profiel
   active: boolean;

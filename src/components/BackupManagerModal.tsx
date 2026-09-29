@@ -47,6 +47,7 @@ interface BackupManagerModalProps {
   employees: Employee[];
   managerName?: string;
   onRestoreSchedule: (restoredShifts: Shift[], weekNumber: number) => void;
+  onRestoreFullCloudArchive?: () => Promise<void> | void;
 }
 
 const DAYS_NAMES = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
@@ -58,7 +59,8 @@ export default function BackupManagerModal({
   shifts,
   employees,
   managerName = 'Hans Stevens',
-  onRestoreSchedule
+  onRestoreSchedule,
+  onRestoreFullCloudArchive
 }: BackupManagerModalProps) {
   const [activeTab, setActiveTab] = useState<'availabilities' | 'schedules' | 'auth'>('availabilities');
   
@@ -334,7 +336,23 @@ export default function BackupManagerModal({
                   </p>
                 </div>
 
-                <div className="shrink-0">
+                <div className="shrink-0 flex items-center gap-2 flex-wrap">
+                  {onRestoreFullCloudArchive && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (confirm('Weet je zeker dat je alle personeelsleden en alle beschikbaarheden uit het cloud archief wilt herstellen naar het actieve werkrooster?')) {
+                          await onRestoreFullCloudArchive();
+                          await loadAllBackups();
+                        }
+                      }}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+                      title="Herstel alle 46 medewerkers en alle ingediende beschikbaarheden direct in de app"
+                    >
+                      <RotateCcw size={14} />
+                      <span>Herstel Alles naar Actief Portaal 🔄</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleDownloadAvailabilitiesJSON}
@@ -357,8 +375,11 @@ export default function BackupManagerModal({
                     className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none"
                   >
                     <option value="all">Alle Weken ({availBackups.length})</option>
-                    {[26, 27, 28, 29, 30].map(wk => (
-                      <option key={wk} value={wk}>Week {wk}</option>
+                    {Array.from(new Set(availBackups.map(b => b.weekNumber)))
+                      .filter(Boolean)
+                      .sort((a, b) => Number(a) - Number(b))
+                      .map(wk => (
+                        <option key={wk} value={wk}>Week {wk}</option>
                     ))}
                   </select>
                 </div>

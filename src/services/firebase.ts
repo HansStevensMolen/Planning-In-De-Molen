@@ -15,7 +15,8 @@ import {
   orderBy, 
   limit,
   Timestamp,
-  serverTimestamp 
+  serverTimestamp,
+  writeBatch
 } from 'firebase/firestore';
 import { 
   getAuth, 
@@ -627,19 +628,193 @@ export async function saveAllAvailabilitiesToCloud(availabilities: EmployeeAvail
 }
 
 export async function fetchAllAvailabilitiesFromCloud(): Promise<EmployeeAvailability[] | null> {
+  const map = new Map<string, EmployeeAvailability>();
+
+  // 1. Fetch individual docs from collection `availabilities` (primary resilient storage)
+  try {
+    const colRef = collection(db, 'availabilities');
+    const snapshot = await getDocs(colRef);
+    snapshot.forEach(docSnap => {
+      const data = docSnap.data();
+      if (data.employeeId && data.weekNumber) {
+        const key = `${data.employeeId}_${data.weekNumber}`;
+        map.set(key, {
+          id: data.id || docSnap.id,
+          employeeId: data.employeeId,
+          weekNumber: data.weekNumber,
+          days: data.days || [],
+          employeeName: data.employeeName,
+          department: data.department
+        });
+      }
+    });
+  } catch (error) {
+    console.warn('[Firebase] Could not fetch from availabilities collection:', error);
+  }
+
+  // 2. Also check planning_data/all_availabilities document
   try {
     const docRef = doc(db, 'planning_data', 'all_availabilities');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
       if (Array.isArray(data?.availabilities)) {
-        return data.availabilities as EmployeeAvailability[];
+        for (const item of data.availabilities) {
+          if (item.employeeId && item.weekNumber) {
+            const key = `${item.employeeId}_${item.weekNumber}`;
+            if (!map.has(key)) {
+              map.set(key, item);
+            }
+          }
+        }
       }
     }
   } catch (error) {
-    console.warn('[Firebase] Could not fetch all availabilities from Firestore:', error);
+    console.warn('[Firebase] Could not fetch all availabilities doc from Firestore:', error);
+  }
+
+  if (map.size > 0) {
+    return Array.from(map.values());
   }
   return null;
+}
+
+/**
+ * Reconstructs all staff and availabilities from the immutable availability_backups
+ * and active availabilities collections, restoring the entire team to active state.
+ */
+export async function restoreFullTeamAndAvailabilitiesFromCloudArchive(): Promise<{
+  employeeCount: number;
+  availabilityCount: number;
+  employees: Employee[];
+  availabilities: EmployeeAvailability[];
+}> {
+  console.log('[Firebase] Starting full cloud archive restore...');
+  const availSnap = await getDocs(collection(db, 'availabilities'));
+  const backupSnap = await getDocs(collection(db, 'availability_backups'));
+
+  const empMap = new Map<string, { id: string; name: string; department: Department }>();
+  const availMap = new Map<string, EmployeeAvailability>();
+
+  // Helper to register employee
+  const registerEmp = (id: string, name: string, dept?: string) => {
+    if (!id || !name) return;
+    const cleanDept: Department = dept === 'keuken' ? 'keuken' : 'zaal';
+    if (!empMap.has(id)) {
+      empMap.set(id, { id, name: name.trim(), department: cleanDept });
+    }
+  };
+
+  availSnap.forEach(d => {
+    const data = d.data();
+    if (data.employeeId) {
+      registerEmp(data.employeeId, data.employeeName || data.employeeId, data.department);
+      const key = `${data.employeeId}_${data.weekNumber}`;
+      availMap.set(key, {
+        id: data.id || d.id,
+        employeeId: data.employeeId,
+        weekNumber: data.weekNumber,
+        days: data.days || [],
+        employeeName: data.employeeName,
+        department: data.department
+      });
+    }
+  });
+
+  backupSnap.forEach(d => {
+    const data = d.data();
+    if (data.employeeId) {
+      registerEmp(data.employeeId, data.employeeName || data.employeeId, data.department);
+      const key = `${data.employeeId}_${data.weekNumber}`;
+      if (!availMap.has(key)) {
+        availMap.set(key, {
+          id: `w${data.weekNumber}_${data.employeeId}`,
+          employeeId: data.employeeId,
+          weekNumber: data.weekNumber,
+          days: data.days || [],
+          employeeName: data.employeeName,
+          department: data.department
+        });
+      }
+    }
+  });
+
+  // Always ensure Hans Stevens is present as manager
+  if (!empMap.has('emp1')) {
+    empMap.set('emp1', { id: 'emp1', name: 'Hans Stevens', department: 'zaal' });
+  }
+
+  // Construct full Employee objects
+  const restoredEmployees: Employee[] = [];
+  const PALETTE_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
+  const PALETTE_BGS = [
+    'bg-indigo-50 border-indigo-200 text-indigo-700',
+    'bg-pink-50 border-pink-200 text-pink-700',
+    'bg-amber-50 border-amber-200 text-amber-700',
+    'bg-emerald-50 border-emerald-200 text-emerald-700',
+    'bg-cyan-50 border-cyan-200 text-cyan-700',
+    'bg-violet-50 border-violet-200 text-violet-700',
+    'bg-rose-50 border-rose-200 text-rose-700',
+    'bg-teal-50 border-teal-200 text-teal-700'
+  ];
+
+  let colorIdx = 0;
+  empMap.forEach((info, id) => {
+    const isManager = id === 'emp1' || info.name.toLowerCase().includes('hans stevens');
+    const color = isManager ? '#0d9488' : PALETTE_COLORS[colorIdx % PALETTE_COLORS.length];
+    const bg = isManager ? 'bg-teal-50 border-teal-200 text-teal-700' : PALETTE_BGS[colorIdx % PALETTE_BGS.length];
+    const bgParts = bg.split(' ');
+    colorIdx++;
+
+    restoredEmployees.push({
+      id,
+      name: info.name,
+      department: info.department,
+      statuut: isManager ? 'Vast' : (info.department === 'keuken' ? 'Flexi' : 'Student'),
+      experience: isManager ? 'Verantwoordelijke' : 'Ervaren',
+      contractDaysPerWeek: isManager ? 5 : 2,
+      role: isManager ? 'beheerder' : 'personeel',
+      color,
+      textBgColor: `${bgParts[0]} ${bgParts[1]}`,
+      textColor: bgParts[2],
+      email: isManager ? 'hans.stevens@gemeenteschoolbierbeek.be' : undefined,
+      phone: isManager ? '0475 12 34 56' : undefined,
+      active: true,
+      firstLoginComplete: true,
+      pin: '1234'
+    });
+  });
+
+  const restoredAvailabilities = Array.from(availMap.values());
+
+  // Save to Firestore collections
+  await saveEmployeesToCloud(restoredEmployees);
+  await saveAllAvailabilitiesToCloud(restoredAvailabilities);
+
+  // Sync to individual docs in batch
+  const batch = writeBatch(db);
+  for (const a of restoredAvailabilities) {
+    const docRef = doc(db, 'availabilities', `w${a.weekNumber}_${a.employeeId}`);
+    batch.set(docRef, sanitizeForFirestore({
+      id: `w${a.weekNumber}_${a.employeeId}`,
+      employeeId: a.employeeId,
+      weekNumber: a.weekNumber,
+      employeeName: a.employeeName,
+      department: a.department || 'zaal',
+      days: a.days || [],
+      lastUpdated: Date.now(),
+      formattedDate: formatDutchDateTime()
+    }), { merge: true });
+  }
+  await batch.commit();
+
+  console.log(`[Firebase] Successfully restored ${restoredEmployees.length} employees and ${restoredAvailabilities.length} availabilities.`);
+  return {
+    employeeCount: restoredEmployees.length,
+    availabilityCount: restoredAvailabilities.length,
+    employees: restoredEmployees,
+    availabilities: restoredAvailabilities
+  };
 }
 
 export function subscribeToCloudAllAvailabilities(callback: (availabilities: EmployeeAvailability[]) => void): () => void {

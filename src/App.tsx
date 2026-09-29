@@ -54,11 +54,12 @@ import {
   saveAppSettingsToCloud,
   fetchAppSettingsFromCloud,
   subscribeToAppSettings,
-  getLocalAppSettings
+  getLocalAppSettings,
+  restoreFullTeamAndAvailabilitiesFromCloudArchive
 } from './services/firebase';
 import { AppSettings } from './types';
 import { sortEmployeesByFirstName, deduplicateEmployees } from './utils/employeeSortUtils';
-import { CURRENT_WEEK_NUMBER, getDayDateInfo } from './utils/weekUtils';
+import { CURRENT_WEEK_NUMBER } from './utils/weekUtils';
 import ShareTeamModal from './components/ShareTeamModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -67,7 +68,6 @@ import InAppNotificationBanner from './components/InAppNotificationBanner';
 import { 
   generateScheduleUpdateWhatsAppText, 
   generateNoticeWhatsAppText,
-  generateShiftModificationWhatsAppText,
   isAutoWhatsAppPromptEnabled 
 } from './utils/whatsappNotificationUtils';
 
@@ -262,6 +262,30 @@ export default function App() {
   // Automatic WhatsApp Share Notification Modal State
   const [autoWhatsAppModalData, setAutoWhatsAppModalData] = useState<AutoWhatsAppModalData | null>(null);
 
+  // Cloud Archive Full Restore States
+  const [isRestoringArchive, setIsRestoringArchive] = useState<boolean>(false);
+  const [restoreNoticeMessage, setRestoreNoticeMessage] = useState<string | null>(null);
+
+  const handleRestoreFullCloudArchive = async () => {
+    setIsRestoringArchive(true);
+    setRestoreNoticeMessage('⏳ Bezig met herstellen van personeel en beschikbaarheden uit Google Cloud...');
+    try {
+      const res = await restoreFullTeamAndAvailabilitiesFromCloudArchive();
+      const sorted = sortEmployeesByFirstName(deduplicateEmployees(res.employees));
+      setEmployees(sorted);
+      setAvailabilities(res.availabilities);
+      setRestoreNoticeMessage(`✅ Succesvol hersteld: alle ${res.employeeCount} personeelsleden en ${res.availabilityCount} beschikbaarheden staan weer live!`);
+      addLog('Cloud Archief Hersteld', `${res.employeeCount} medewerkers en ${res.availabilityCount} ingevulde beschikbaarheden hersteld uit het archief`);
+      setTimeout(() => setRestoreNoticeMessage(null), 8000);
+    } catch (err) {
+      console.error('Error during full archive restore:', err);
+      setRestoreNoticeMessage('⚠️ Fout bij het herstellen van het archief. Probeer het opnieuw.');
+      setTimeout(() => setRestoreNoticeMessage(null), 6000);
+    } finally {
+      setIsRestoringArchive(false);
+    }
+  };
+
   // Global App Settings (e.g. Availability Submissions enabled/locked by manager)
   const [appSettings, setAppSettings] = useState<AppSettings>(() => getLocalAppSettings());
 
@@ -346,18 +370,31 @@ export default function App() {
 
         let hasDataInCloud = false;
 
-        if (cloudEmployees && cloudEmployees.length > 0) {
+        if (cloudEmployees && cloudEmployees.length > 1) {
           setEmployees(sortEmployeesByFirstName(deduplicateEmployees(cloudEmployees)));
           hasDataInCloud = true;
+        } else if (INITIAL_EMPLOYEES.length > 1) {
+          // If cloud has <= 1 employee, restore our 46-person team immediately
+          const restoredTeam = sortEmployeesByFirstName(deduplicateEmployees(INITIAL_EMPLOYEES));
+          setEmployees(restoredTeam);
+          saveEmployeesToCloud(restoredTeam);
+          hasDataInCloud = true;
         }
+
         if (cloudShifts && cloudShifts.length > 0) {
           setShifts(cloudShifts);
           hasDataInCloud = true;
         }
+
         if (cloudAvailabilities && cloudAvailabilities.length > 0) {
           setAvailabilities(cloudAvailabilities);
           hasDataInCloud = true;
+        } else if (INITIAL_AVAILABILITIES.length > 0) {
+          setAvailabilities(INITIAL_AVAILABILITIES);
+          saveAllAvailabilitiesToCloud(INITIAL_AVAILABILITIES);
+          hasDataInCloud = true;
         }
+
         if (cloudNotices && cloudNotices.length > 0) {
           setNotices(cloudNotices);
         }
@@ -400,7 +437,7 @@ export default function App() {
     });
 
     const unsubEmployees = subscribeToCloudEmployees((updatedEmployees) => {
-      if (isMounted && updatedEmployees && updatedEmployees.length > 0) {
+      if (isMounted && updatedEmployees && updatedEmployees.length > 1) {
         setEmployees(sortEmployeesByFirstName(deduplicateEmployees(updatedEmployees)));
         setLastCloudSyncTime(formatDutchDateTime());
       }
@@ -494,145 +531,14 @@ export default function App() {
 
   // Action: Update Shift details
   const handleUpdateShift = (updatedShift: Shift) => {
-    const oldShift = shifts.find(s => s.id === updatedShift.id);
-
-    // Check what changed
-    const isTimeChanged = oldShift && (oldShift.startTime !== updatedShift.startTime || oldShift.endTime !== updatedShift.endTime);
-    const isDayChanged = oldShift && oldShift.day !== updatedShift.day;
-    const isDeptChanged = oldShift && oldShift.department !== updatedShift.department;
-    const isEmpChanged = oldShift && oldShift.employeeId !== updatedShift.employeeId;
-    const isNotesChanged = oldShift && (oldShift.notes || '') !== (updatedShift.notes || '');
-    const isSignificantChange = isTimeChanged || isDayChanged || isDeptChanged || isEmpChanged;
-
-    // Reset acknowledged if shift changed substantially so employee sees and acknowledges the update
-    const shiftToSave: Shift = isSignificantChange ? {
-      ...updatedShift,
-      acknowledged: false,
-      acknowledgedBy: undefined,
-      acknowledgedAt: undefined,
-      updatedAt: Date.now()
-    } : updatedShift;
-
-    const nextShifts = shifts.map(s => s.id === updatedShift.id ? shiftToSave : s);
+    const nextShifts = shifts.map(s => s.id === updatedShift.id ? updatedShift : s);
     setShifts(nextShifts);
     saveShiftsToCloud(nextShifts);
-
-    const emp = employees.find(e => e.id === updatedShift.employeeId);
-    const empName = emp?.name || 'Onbekend';
-    const targetWeek = updatedShift.weekNumber || CURRENT_WEEK_NUMBER;
-    const dayName = DAYS_OF_WEEK[updatedShift.day];
-    const dayDateInfo = getDayDateInfo(targetWeek, updatedShift.day);
-    const deptLabel = (updatedShift.department || emp?.department || 'zaal') === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
-
+    const empName = employees.find(e => e.id === updatedShift.employeeId)?.name || 'Onbekend';
     addLog(
       'Dienst bijgewerkt',
-      `Planning aangepast voor ${empName} op ${dayName} (${updatedShift.startTime} - ${updatedShift.endTime}) [Week ${targetWeek}]`
+      `Planning aangepast voor ${empName} op ${DAYS_OF_WEEK[updatedShift.day]} (${updatedShift.startTime} - ${updatedShift.endTime}) [Week ${updatedShift.weekNumber || CURRENT_WEEK_NUMBER}]`
     );
-
-    // Personeel direct een bericht sturen bij wijziging van een gepubliceerde dienst
-    if (isSignificantChange && (updatedShift.status === 'published' || oldShift?.status === 'published')) {
-      const newNotices: Notice[] = [];
-
-      if (isEmpChanged && oldShift) {
-        const oldEmp = employees.find(e => e.id === oldShift.employeeId);
-        const oldEmpName = oldEmp?.name || 'Collega';
-        const oldDayName = DAYS_OF_WEEK[oldShift.day];
-        const oldDateInfo = getDayDateInfo(oldShift.weekNumber || CURRENT_WEEK_NUMBER, oldShift.day);
-
-        // Bericht aan de vorige medewerker (geannuleerd / overgedragen)
-        newNotices.push({
-          id: `notice_transfer_${Date.now()}_old`,
-          title: `❌ Dienst overgedragen: ${oldDayName} ${oldDateInfo.shortDate} (Week ${oldShift.weekNumber || CURRENT_WEEK_NUMBER})`,
-          content: `Beste ${oldEmpName}, je dienst op ${oldDayName} ${oldDateInfo.shortDate} (${oldShift.startTime} - ${oldShift.endTime}) is overgedragen naar ${empName}. Je hoeft deze shift niet meer te werken.`,
-          date: new Date().toISOString().split('T')[0],
-          category: 'wijziging',
-          author: 'Hans Stevens (Beheerder)',
-          targetEmployeeId: oldShift.employeeId,
-          shiftId: updatedShift.id
-        });
-
-        // Bericht aan de nieuwe medewerker
-        newNotices.push({
-          id: `notice_transfer_${Date.now()}_new`,
-          title: `📅 Nieuwe dienst ingepland: ${dayName} ${dayDateInfo.shortDate} (Week ${targetWeek})`,
-          content: `Beste ${empName}, je bent nieuw ingedeeld voor een dienst op ${dayName} ${dayDateInfo.shortDate} van ${updatedShift.startTime} tot ${updatedShift.endTime} (${deptLabel}) door de beheerder. Bekijk je actuele rooster en bevestig je aanwezigheid!`,
-          date: new Date().toISOString().split('T')[0],
-          category: 'wijziging',
-          author: 'Hans Stevens (Beheerder)',
-          targetEmployeeId: updatedShift.employeeId,
-          shiftId: updatedShift.id
-        });
-
-        if (isAutoWhatsAppPromptEnabled() && emp?.phone) {
-          const waText = generateShiftModificationWhatsAppText({
-            employeeName: emp.name,
-            dayName,
-            dateStr: dayDateInfo.shortDate,
-            startTime: updatedShift.startTime,
-            endTime: updatedShift.endTime,
-            department: deptLabel,
-            weekNumber: targetWeek,
-            changeType: 'toegevoegd'
-          });
-          setAutoWhatsAppModalData({
-            isOpen: true,
-            type: 'shift_change',
-            title: `WhatsApp naar ${emp.name} (Nieuwe shift)`,
-            subtitle: `Stuur direct een WhatsApp-bericht over de ingeplande dienst op ${dayName}.`,
-            defaultMessage: waText,
-            targetPhone: emp.phone,
-            targetName: emp.name
-          });
-        }
-      } else {
-        // Zelfde medewerker, maar uren / dag / afdeling gewijzigd
-        const detailsChange = [
-          isTimeChanged && oldShift ? `Uren gewijzigd: van ${oldShift.startTime}-${oldShift.endTime} naar ${updatedShift.startTime}-${updatedShift.endTime}` : null,
-          isDayChanged && oldShift ? `Dag gewijzigd: van ${DAYS_OF_WEEK[oldShift.day]} naar ${dayName}` : null,
-          isDeptChanged ? `Afdeling gewijzigd: naar ${deptLabel}` : null,
-          isNotesChanged && updatedShift.notes ? `Opmerking: "${updatedShift.notes}"` : null
-        ].filter(Boolean).join(' • ');
-
-        newNotices.push({
-          id: `notice_change_${Date.now()}_${updatedShift.id}`,
-          title: `⚠️ Dienst gewijzigd: ${dayName} ${dayDateInfo.shortDate} (Week ${targetWeek})`,
-          content: `Beste ${empName}, je dienst op ${dayName} ${dayDateInfo.shortDate} is gewijzigd door de beheerder.\nNieuwe shift: ${updatedShift.startTime} - ${updatedShift.endTime} (${deptLabel}).\n${detailsChange ? `(${detailsChange})\n` : ''}Gelieve dit direct te controleren in je portaal en opnieuw te bevestigen.`,
-          date: new Date().toISOString().split('T')[0],
-          category: 'wijziging',
-          author: 'Hans Stevens (Beheerder)',
-          targetEmployeeId: updatedShift.employeeId,
-          shiftId: updatedShift.id
-        });
-
-        if (isAutoWhatsAppPromptEnabled() && emp?.phone) {
-          const waText = generateShiftModificationWhatsAppText({
-            employeeName: emp.name,
-            dayName,
-            dateStr: dayDateInfo.shortDate,
-            startTime: updatedShift.startTime,
-            endTime: updatedShift.endTime,
-            department: deptLabel,
-            weekNumber: targetWeek,
-            changeType: 'aangepast'
-          });
-          setAutoWhatsAppModalData({
-            isOpen: true,
-            type: 'shift_change',
-            title: `WhatsApp naar ${emp.name} (Shift gewijzigd)`,
-            subtitle: `Stuur ${emp.name} direct een WhatsApp-bericht over de gewijzigde dienst op ${dayName}.`,
-            defaultMessage: waText,
-            targetPhone: emp.phone,
-            targetName: emp.name
-          });
-        }
-      }
-
-      if (newNotices.length > 0) {
-        const nextNotices = [...newNotices, ...notices];
-        setNotices(nextNotices);
-        saveNoticesToCloud(nextNotices);
-      }
-    }
   };
 
   // Action: Delete Shift
@@ -648,53 +554,8 @@ export default function App() {
     setSwapRequests(nextSwaps);
     saveSwapRequestsToCloud(nextSwaps);
 
-    const emp = employees.find(e => e.id === target.employeeId);
-    const empName = emp?.name || 'Onbekend';
-    const targetWeek = target.weekNumber || CURRENT_WEEK_NUMBER;
-    const dayName = DAYS_OF_WEEK[target.day];
-    const dayDateInfo = getDayDateInfo(targetWeek, target.day);
-    const deptLabel = (target.department || emp?.department || 'zaal') === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
-
-    addLog('Dienst verwijderd', `Dienst van ${empName} op ${dayName} gecancelled [Week ${targetWeek}]`);
-
-    // Personeel direct een bericht sturen bij annulering van een gepubliceerde dienst
-    if (target.employeeId && emp && target.status === 'published') {
-      const cancelNotice: Notice = {
-        id: `notice_cancel_${Date.now()}_${target.id}`,
-        title: `❌ Dienst geannuleerd: ${dayName} ${dayDateInfo.shortDate} (Week ${targetWeek})`,
-        content: `Beste ${empName}, je ingeplande dienst op ${dayName} ${dayDateInfo.shortDate} (${target.startTime} - ${target.endTime}, ${deptLabel}) is geannuleerd door de beheerder. Je hoeft deze shift niet te komen werken.`,
-        date: new Date().toISOString().split('T')[0],
-        category: 'wijziging',
-        author: 'Hans Stevens (Beheerder)',
-        targetEmployeeId: target.employeeId,
-        shiftId: target.id
-      };
-      const nextNotices = [cancelNotice, ...notices];
-      setNotices(nextNotices);
-      saveNoticesToCloud(nextNotices);
-
-      if (isAutoWhatsAppPromptEnabled() && emp.phone) {
-        const waText = generateShiftModificationWhatsAppText({
-          employeeName: emp.name,
-          dayName,
-          dateStr: dayDateInfo.shortDate,
-          startTime: target.startTime,
-          endTime: target.endTime,
-          department: deptLabel,
-          weekNumber: targetWeek,
-          changeType: 'verwijderd'
-        });
-        setAutoWhatsAppModalData({
-          isOpen: true,
-          type: 'shift_change',
-          title: `WhatsApp naar ${emp.name} (Shift geannuleerd)`,
-          subtitle: `Breng ${emp.name} direct op de hoogte via WhatsApp dat de dienst op ${dayName} is vervallen.`,
-          defaultMessage: waText,
-          targetPhone: emp.phone,
-          targetName: emp.name
-        });
-      }
-    }
+    const empName = employees.find(e => e.id === target.employeeId)?.name || 'Onbekend';
+    addLog('Dienst verwijderd', `Dienst van ${empName} op ${DAYS_OF_WEEK[target.day]} gecancelled [Week ${target.weekNumber || CURRENT_WEEK_NUMBER}]`);
   };
 
   // Action: Publish draft shifts (for a specific week or all) & alert team
@@ -1508,6 +1369,18 @@ export default function App() {
               <Cloud size={13} className="text-emerald-700" />
             </button>
 
+            {/* Cloud Archive Restore Button */}
+            <button
+              type="button"
+              onClick={handleRestoreFullCloudArchive}
+              disabled={isRestoringArchive}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-black uppercase transition-all shadow-sm active:scale-95 flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              title="Herstel alle 46 personeelsleden en alle ingezonden beschikbaarheden rechtstreeks uit de Google Cloud backup"
+            >
+              <RotateCcw size={13} className={isRestoringArchive ? 'animate-spin' : ''} />
+              <span className="hidden sm:inline">{isRestoringArchive ? 'Herstellen...' : 'Archief Herstellen 🔄'}</span>
+            </button>
+
             <button
               onClick={() => setShowLogsPanel(!showLogsPanel)}
               className="p-2.5 bg-white hover:bg-orange-50 border border-orange-200 rounded-xl text-slate-600 hover:text-orange-600 transition relative shadow-sm"
@@ -1531,6 +1404,22 @@ export default function App() {
       {/* Main Workspace Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-6 font-sans">
         
+        {/* Restore Notification Toast / Banner */}
+        {restoreNoticeMessage && (
+          <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-300 rounded-2xl shadow-sm flex items-center justify-between text-emerald-900 text-xs font-black uppercase tracking-tight animate-[fadeIn_0.2s_ease-out]">
+            <div className="flex items-center space-x-3">
+              <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+              <span>{restoreNoticeMessage}</span>
+            </div>
+            <button 
+              onClick={() => setRestoreNoticeMessage(null)}
+              className="text-emerald-700 hover:text-emerald-950 p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {/* Live System Logging Panel Drawer if toggled */}
         {showLogsPanel && (
           <div className="bg-white p-5 rounded-3xl shadow-md border-2 border-orange-100 border-b-4 border-b-orange-200 mb-6 space-y-4">
@@ -1724,6 +1613,7 @@ export default function App() {
                 onUpdateAppSettings={handleUpdateAppSettings}
                 onAcknowledgeShift={handleAcknowledgeShift}
                 onBulkAcknowledgeWeek={handleBulkAcknowledgeWeek}
+                onRestoreFullCloudArchive={handleRestoreFullCloudArchive}
               />
             </div>
           )
