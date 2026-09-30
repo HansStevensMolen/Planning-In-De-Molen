@@ -57,7 +57,6 @@ import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, Exper
 import NotificationModal from './NotificationModal';
 import SendWeekScheduleModal from './SendWeekScheduleModal';
 import BackupManagerModal from './BackupManagerModal';
-import { GitHubSyncModal } from './GitHubSyncModal';
 import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
 import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
@@ -67,7 +66,7 @@ import ShiftReminderModal from './ShiftReminderModal';
 import StaffAvailabilityChart from './StaffAvailabilityChart';
 import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks, getEffectiveEmployeeAvailability, isRecurringApplicableToWeek, DAYS_FULL_NL } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
-import { sortEmployeesByFirstName, sortEmployeesByDayAvailability, sortEmployeesByStatuut } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, sortEmployeesByDayAvailability } from '../utils/employeeSortUtils';
 import {
   calculateAge,
   formatBirthDate,
@@ -203,9 +202,7 @@ export default function ManagerDashboard({
   const [managerAvailDeptFilter, setManagerAvailDeptFilter] = useState<'all' | Department>('all');
   const [managerAvailStatuutFilter, setManagerAvailStatuutFilter] = useState<'all' | EmployeeStatuut>('all');
   const [managerAvailExperienceFilter, setManagerAvailExperienceFilter] = useState<'all' | ExperienceLevel>('all');
-  const [managerAvailSortDay, setManagerAvailSortDay] = useState<number | 'name' | 'statuut'>('name');
-  const [planningSortMode, setPlanningSortMode] = useState<number | 'name' | 'statuut'>('name');
-  const [showGitHubModal, setShowGitHubModal] = useState<boolean>(false);
+  const [managerAvailSortDay, setManagerAvailSortDay] = useState<number | 'name'>('name');
   const [showAvailabilityChart, setShowAvailabilityChart] = useState<boolean>(true);
 
   // Six-weeks horizon states
@@ -1444,14 +1441,6 @@ export default function ManagerDashboard({
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
         </button>
         <button
-          onClick={() => setShowGitHubModal(true)}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer text-slate-700 hover:bg-slate-900 hover:text-white`}
-          title="GitHub Synchronisatie & Volledige Codebase Export (ZIP downloaden of synchroniseren)"
-        >
-          <span className="text-base leading-none">🐙</span>
-          <span>GitHub Sync</span>
-        </button>
-        <button
           onClick={() => setActiveSubTab('verzoeken')}
           className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition relative active:scale-95 cursor-pointer ${
             activeSubTab === 'verzoeken' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
@@ -1491,18 +1480,13 @@ export default function ManagerDashboard({
       {(activeSubTab === 'zaal' || activeSubTab === 'keuken') && (() => {
         const activeDept: Department = 'zaal';
         const isZaal = true;
-        const rawFiltered = employees.filter(emp => {
-          const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
-          const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
-          return matchStatuut && matchExperience;
-        });
-
-        // Sorteren van de rijen: Naam (A-Z), Statuut (Vast -> Flexi -> Student -> Extra) of op dag-beschikbaarheid & beginuur
-        const deptEmployees = planningSortMode === 'name'
-          ? sortEmployeesByFirstName(rawFiltered)
-          : planningSortMode === 'statuut'
-            ? sortEmployeesByStatuut(rawFiltered)
-            : sortEmployeesByDayAvailability(rawFiltered, planningSortMode, selectedManagerWeek, availabilities, shifts);
+        const deptEmployees = sortEmployeesByFirstName(
+          employees.filter(emp => {
+            const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
+            const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
+            return matchStatuut && matchExperience;
+          })
+        );
 
         return (
         <div className="space-y-4">
@@ -1522,34 +1506,6 @@ export default function ManagerDashboard({
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-              {/* Sorteren op beschikbaarheid / statuut / beginuur */}
-              <div className="flex items-center gap-1.5 bg-orange-50 border-2 border-orange-300 rounded-xl px-2.5 py-1.5 shadow-xs">
-                <label className="text-[10px] font-black uppercase text-orange-950 whitespace-nowrap">
-                  Sorteer:
-                </label>
-                <select
-                  value={planningSortMode === 'name' ? 'name' : planningSortMode === 'statuut' ? 'statuut' : planningSortMode.toString()}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === 'name' || val === 'statuut') {
-                      setPlanningSortMode(val);
-                    } else {
-                      setPlanningSortMode(parseInt(val, 10));
-                    }
-                  }}
-                  className="bg-transparent text-slate-900 font-black text-xs uppercase tracking-tight focus:outline-none cursor-pointer"
-                  title="Sorteer de rijen op beschikbaarheid (vaste bovenaan, dan flexi, dan studenten en extra's, gesorteerd op beginuur)"
-                >
-                  <option value="name">Standaard (A-Z op naam)</option>
-                  <option value="statuut">⭐ Statuut (Vaste ➔ Flexi ➔ Studenten ➔ Extra's)</option>
-                  {DAYS_OF_WEEK.map((d, dIdx) => (
-                    <option key={dIdx} value={dIdx.toString()}>
-                      📅 {d} (Vaste ➔ Flexi ➔ Stud ➔ Extra • Beginuur)
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <select
                 value={selectedStatuutFilter}
                 onChange={(e) => setSelectedStatuutFilter(e.target.value as any)}
@@ -2307,21 +2263,9 @@ export default function ManagerDashboard({
               <table className="min-w-full table-fixed border-separate border-spacing-0">
                 <thead className="sticky top-0 z-20 bg-orange-50 shadow-xs">
                   <tr>
-                    <th 
-                      scope="col"
-                      onClick={() => setPlanningSortMode('name')}
-                      className={`sticky left-0 top-0 z-30 w-52 min-w-[210px] max-w-[210px] px-4 py-3.5 text-left text-xs font-black uppercase tracking-wider border-b-2 border-r-2 border-orange-200 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.08)] cursor-pointer select-none transition-colors ${
-                        planningSortMode === 'name' ? 'bg-orange-100 text-orange-950 ring-1 ring-orange-300' : 'bg-orange-50 text-slate-700 hover:bg-orange-100/60'
-                      }`}
-                      title="Klik om te sorteren op naam (A-Z)"
-                    >
+                    <th className="sticky left-0 top-0 z-30 w-52 min-w-[210px] max-w-[210px] px-4 py-3.5 text-left text-xs font-black text-slate-700 uppercase tracking-wider bg-orange-50 border-b-2 border-r-2 border-orange-200 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.08)]">
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <span>Medewerker ({isZaal ? 'Zaal' : 'Keuken'})</span>
-                          {planningSortMode === 'name' && (
-                            <span className="text-[10px] text-orange-600 font-black">A-Z</span>
-                          )}
-                        </div>
+                        <span>Medewerker ({isZaal ? 'Zaal' : 'Keuken'})</span>
                         <span className="text-[9px] font-black text-orange-700 bg-orange-200/80 px-1.5 py-0.5 rounded-md normal-case">
                           📌
                         </span>
@@ -2330,35 +2274,16 @@ export default function ManagerDashboard({
                     {DAYS_OF_WEEK.map((day, dIdx) => {
                       const dayDateInfo = getDayDateInfo(selectedManagerWeek, dIdx);
                       const eveningTarget = dIdx <= 1 ? 4 : dIdx <= 3 ? 5 : 7;
-                      const isSortedThisDay = planningSortMode === dIdx;
                       return (
-                        <th 
-                          key={day} 
-                          scope="col"
-                          onClick={() => setPlanningSortMode(prev => prev === dIdx ? 'name' : dIdx)}
-                          className={`px-3 py-3 text-left text-xs font-black uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[145px] cursor-pointer select-none transition-all ${
-                            isSortedThisDay 
-                              ? 'bg-orange-100 text-orange-950 ring-2 ring-orange-400 shadow-inner' 
-                              : 'bg-orange-50/90 text-slate-700 hover:bg-orange-100/70'
-                          }`}
-                          title={`Klik om te sorteren op ${day}: wie beschikbaar is komt bovenaan (vaste ➔ flexi ➔ studenten ➔ extra's), gesorteerd op beginuur!`}
-                        >
+                        <th key={day} className="px-3 py-3 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[145px] bg-orange-50/90">
                           <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-black text-xs text-slate-800 tracking-tight flex items-center gap-1">
-                              <span>{day}</span>
-                              {isSortedThisDay && <span className="text-orange-600 font-black text-xs">🔽</span>}
-                            </span>
+                            <span className="font-black text-xs text-slate-800 tracking-tight">{day}</span>
                             <span className="text-[11px] font-black text-orange-950 bg-orange-200/90 border border-orange-300 px-2 py-0.5 rounded-lg shadow-2xs">
                               {dayDateInfo.shortDate}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
-                            <span>2 overdag • {eveningTarget} avond</span>
-                            {isSortedThisDay && (
-                              <span className="text-[8.5px] font-black uppercase text-orange-700 bg-orange-200 px-1 py-0.2 rounded">
-                                Sorteer actief
-                              </span>
-                            )}
+                          <div className="text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
+                            2 overdag • {eveningTarget} avond
                           </div>
                         </th>
                       );
@@ -2919,12 +2844,10 @@ export default function ManagerDashboard({
           return matchSearch && matchStatuut && matchExperience && emp.id !== 'emp1'; // Don't show lead manager (Hans Stevens)
         });
 
-        // Sorteren van de rijen: Naam (A-Z), Statuut (Vaste -> Flexi -> Student -> Extra) of per dag op beschikbaarheid (Vaste -> Flexi -> Student -> Extra, op beginuur)
+        // Sorteren: standaard A-Z op naam of per dag (wie beschikbaar is bovenaan, beginnende met vaste werknemers)
         const filteredEmployees = managerAvailSortDay === 'name'
           ? sortEmployeesByFirstName(baseFiltered)
-          : managerAvailSortDay === 'statuut'
-            ? sortEmployeesByStatuut(baseFiltered)
-            : sortEmployeesByDayAvailability(baseFiltered, managerAvailSortDay, selectedManagerWeek, availabilities, shifts);
+          : sortEmployeesByDayAvailability(baseFiltered, managerAvailSortDay, selectedManagerWeek, availabilities);
 
         const totalSubmittedThisWeek = employees.filter(emp => 
           emp.id !== 'emp1' && availabilities.some(a => a.employeeId === emp.id && a.weekNumber === selectedManagerWeek)
@@ -3424,29 +3347,24 @@ export default function ManagerDashboard({
                   <option value="Verantwoordelijke">Verantwoordelijke</option>
                 </select>
 
-                {/* Sorteren per dag (Wie beschikbaar is bovenaan, beginnende met vaste werknemers, dan flexi, studenten, extra's op beginuur) */}
+                {/* Sorteren per dag (Wie beschikbaar is bovenaan, beginnende met vaste werknemers) */}
                 <div className="flex items-center gap-1.5 w-full sm:w-auto">
                   <label className="text-[10px] font-black uppercase text-slate-500 whitespace-nowrap">
                     Sorteer:
                   </label>
                   <select
-                    value={managerAvailSortDay === 'name' ? 'name' : managerAvailSortDay === 'statuut' ? 'statuut' : managerAvailSortDay.toString()}
+                    value={managerAvailSortDay === 'name' ? 'name' : managerAvailSortDay.toString()}
                     onChange={(e) => {
                       const val = e.target.value;
-                      if (val === 'name' || val === 'statuut') {
-                        setManagerAvailSortDay(val);
-                      } else {
-                        setManagerAvailSortDay(parseInt(val, 10));
-                      }
+                      setManagerAvailSortDay(val === 'name' ? 'name' : parseInt(val, 10));
                     }}
                     className="w-full sm:w-auto bg-orange-50 border-2 border-orange-300 text-orange-950 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none cursor-pointer shadow-xs"
-                    title="Sorteer de beschikbaarheden per dag: wie beschikbaar is komt bovenaan (vaste ➔ flexi ➔ studenten ➔ extra's), gesorteerd op beginuur"
+                    title="Sorteer de beschikbaarheden per dag: wie beschikbaar is komt bovenaan, beginnende met de vaste werknemers"
                   >
                     <option value="name">Standaard (A-Z op naam)</option>
-                    <option value="statuut">⭐ Statuut (Vaste ➔ Flexi ➔ Studenten ➔ Extra's)</option>
                     {DAYS_OF_WEEK.map((d, dIdx) => (
                       <option key={dIdx} value={dIdx.toString()}>
-                        📅 {d} (Vaste ➔ Flexi ➔ Stud ➔ Extra • Beginuur)
+                        📅 {d} (Beschikbaar bovenaan, vaste eerst)
                       </option>
                     ))}
                   </select>
@@ -6524,12 +6442,6 @@ export default function ManagerDashboard({
           }
         }}
         onRestoreFullCloudArchive={onRestoreFullCloudArchive}
-      />
-
-      {/* GitHub Synchronisatie & Codebase Export Modal */}
-      <GitHubSyncModal
-        isOpen={showGitHubModal}
-        onClose={() => setShowGitHubModal(false)}
       />
 
       {/* 6-Weken Planning Horizon Modal */}
