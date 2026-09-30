@@ -532,36 +532,65 @@ export default function App() {
   // Action: Update Shift details
   const handleUpdateShift = (updatedShift: Shift) => {
     const prevShift = shifts.find(s => s.id === updatedShift.id);
-    const nextShifts = shifts.map(s => s.id === updatedShift.id ? updatedShift : s);
-    setShifts(nextShifts);
-    saveShiftsToCloud(nextShifts);
-    const empName = employees.find(e => e.id === updatedShift.employeeId)?.name || 'Onbekend';
-    addLog(
-      'Dienst bijgewerkt',
-      `Planning aangepast voor ${empName} op ${DAYS_OF_WEEK[updatedShift.day]} (${updatedShift.startTime} - ${updatedShift.endTime}) [Week ${updatedShift.weekNumber || CURRENT_WEEK_NUMBER}]`
-    );
-
-    // Stuur personeel een direct bericht/notificatie als hun shift gewijzigd werd
     const dayChanged = prevShift && prevShift.day !== updatedShift.day;
     const timeChanged = prevShift && (prevShift.startTime !== updatedShift.startTime || prevShift.endTime !== updatedShift.endTime);
     const deptChanged = prevShift && prevShift.department !== updatedShift.department;
+    const notesChanged = prevShift && prevShift.notes !== updatedShift.notes;
+    const empChanged = prevShift && prevShift.employeeId !== updatedShift.employeeId;
 
-    if (dayChanged || timeChanged || deptChanged) {
-      const weekNum = updatedShift.weekNumber || CURRENT_WEEK_NUMBER;
-      const deptLabel = updatedShift.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+    // Als de beheerder een shift wijzigt (tijd, dag, afdeling of toewijzing), resetten we de bevestiging
+    // zodat de medewerker direct een gele indicatie ("niet bevestigd") ziet en de nieuwe uren opnieuw moet bevestigen!
+    let finalShift: Shift = { ...updatedShift };
+    if (dayChanged || timeChanged || deptChanged || notesChanged || empChanged) {
+      finalShift.acknowledged = false;
+      finalShift.acknowledgedAt = undefined;
+      finalShift.acknowledgedBy = undefined;
+    }
+
+    const nextShifts = shifts.map(s => s.id === finalShift.id ? finalShift : s);
+    setShifts(nextShifts);
+    saveShiftsToCloud(nextShifts);
+    const empName = employees.find(e => e.id === finalShift.employeeId)?.name || 'Onbekend';
+    addLog(
+      'Dienst bijgewerkt',
+      `Planning aangepast voor ${empName} op ${DAYS_OF_WEEK[finalShift.day]} (${finalShift.startTime} - ${finalShift.endTime}) [Week ${finalShift.weekNumber || CURRENT_WEEK_NUMBER}]`
+    );
+
+    // Stuur personeel een direct bericht/notificatie als hun shift gewijzigd werd
+    if (dayChanged || timeChanged || deptChanged || notesChanged || empChanged) {
+      const weekNum = finalShift.weekNumber || CURRENT_WEEK_NUMBER;
+      const deptLabel = finalShift.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
+      
       const changeNotice: Notice = {
         id: `notice_shift_change_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        title: `⚠️ Shift Gewijzigd: ${DAYS_OF_WEEK[updatedShift.day]} (Week ${weekNum})`,
-        content: `Beste ${empName}, je dienst in Week ${weekNum} is gewijzigd naar ${DAYS_OF_WEEK[updatedShift.day]} van ${updatedShift.startTime} tot ${updatedShift.endTime} (${deptLabel}). Gelieve dit te controleren in je rooster en te bevestigen als 'Gezien'.`,
+        title: `🔄 Shift Gewijzigd door Beheerder: ${DAYS_OF_WEEK[finalShift.day]} (Week ${weekNum})`,
+        content: `Beste ${empName}, je dienst in Week ${weekNum} is gewijzigd door beheerder Hans Stevens naar ${DAYS_OF_WEEK[finalShift.day]} van ${finalShift.startTime} tot ${finalShift.endTime} (${deptLabel}). Gelieve dit te controleren in je personeelsrooster en opnieuw te bevestigen als 'Gezien'.`,
         date: new Date().toISOString().split('T')[0],
         category: 'wijziging',
         author: 'Hans Stevens (Beheerder)',
-        targetEmployeeId: updatedShift.employeeId,
-        shiftId: updatedShift.id
+        targetEmployeeId: finalShift.employeeId,
+        shiftId: finalShift.id
       };
-      const nextNotices = [changeNotice, ...notices];
-      setNotices(nextNotices);
-      saveNoticesToCloud(nextNotices);
+
+      let newNoticesList = [changeNotice, ...notices];
+
+      // Indien shift herverdeeld werd naar iemand anders: breng ook de vorige medewerker op de hoogte
+      if (empChanged && prevShift?.employeeId && prevShift.employeeId !== 'open_shift') {
+        const prevEmpName = employees.find(e => e.id === prevShift.employeeId)?.name || 'Collega';
+        const reassignedNotice: Notice = {
+          id: `notice_shift_reassigned_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          title: `ℹ️ Shift Overgedragen: ${DAYS_OF_WEEK[prevShift.day]} (Week ${weekNum})`,
+          content: `Beste ${prevEmpName}, je eerdere dienst op ${DAYS_OF_WEEK[prevShift.day]} (${prevShift.startTime} - ${prevShift.endTime}) in Week ${weekNum} is door de beheerder overgedragen aan ${empName}. Je bent hiervoor niet meer ingeroosterd.`,
+          date: new Date().toISOString().split('T')[0],
+          category: 'wijziging',
+          author: 'Hans Stevens (Beheerder)',
+          targetEmployeeId: prevShift.employeeId
+        };
+        newNoticesList = [reassignedNotice, ...newNoticesList];
+      }
+
+      setNotices(newNoticesList);
+      saveNoticesToCloud(newNoticesList);
     }
   };
 

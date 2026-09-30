@@ -788,7 +788,7 @@ export default function BackupManagerModal({
                   <button
                     type="button"
                     onClick={handleDownloadAvailabilitiesJSON}
-                    className="px-4 py-2.5 bg-slate-100 hover:bg-orange-50 text-slate-800 hover:text-orange-950 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-2"
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-orange-50 text-slate-800 hover:text-orange-950 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer"
                   >
                     <Download size={14} className="text-orange-600" />
                     <span>Exporteer Alle Beschikbaarheden (.json)</span>
@@ -796,11 +796,38 @@ export default function BackupManagerModal({
                   <button
                     type="button"
                     onClick={handleDownloadSchedulesJSON}
-                    className="px-4 py-2.5 bg-slate-100 hover:bg-orange-50 text-slate-800 hover:text-orange-950 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-2"
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-orange-50 text-slate-800 hover:text-orange-950 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer"
                   >
                     <Download size={14} className="text-orange-600" />
                     <span>Exporteer Alle Definitieve Planningen (.json)</span>
                   </button>
+                </div>
+              </div>
+
+              {/* GitHub & Volledige Broncode Export */}
+              <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white border-2 border-slate-700 rounded-3xl p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-black uppercase tracking-tight text-white flex items-center gap-2">
+                    <span>🐙</span>
+                    <span>GitHub & Broncode Export</span>
+                  </h4>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Git Geïnitialiseerd
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Lukt het synchroniseren naar GitHub niet direct via de AI Studio interface (bijv. door geblokkeerde pop-ups)? Download hier met 1 klik de volledige, actuele projectcodebase als schone ZIP (zonder node_modules) om direct op GitHub te zetten:
+                </p>
+
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <a
+                    href="/api/export-zip"
+                    download="cafe-in-de-molen-codebase.zip"
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 shadow-md active:scale-95 cursor-pointer text-decoration-none"
+                  >
+                    <Download size={14} />
+                    <span>Download Volledige Codebase (ZIP voor GitHub) 📦</span>
+                  </a>
                 </div>
               </div>
 

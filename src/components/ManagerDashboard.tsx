@@ -49,7 +49,9 @@ import {
   BellRing,
   Eye,
   Info,
-  BarChart3
+  BarChart3,
+  Edit,
+  PenLine
 } from 'lucide-react';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta, AppSettings } from '../types';
 import NotificationModal from './NotificationModal';
@@ -237,6 +239,16 @@ export default function ManagerDashboard({
   const [showExcelAvailabilityModal, setShowExcelAvailabilityModal] = useState(false);
   const [showShiftModal, setShowShiftModal] = useState(false);
   const [selectedAvailabilityDetail, setSelectedAvailabilityDetail] = useState<{ employee: Employee; weekNumber: number } | null>(null);
+  
+  // State voor beheerder om beschikbaarheden van personeel in te geven / aan te passen
+  const [showEnterAvailabilityModal, setShowEnterAvailabilityModal] = useState(false);
+  const [managerAvailTargetEmpId, setManagerAvailTargetEmpId] = useState<string>('');
+  const [managerAvailTargetWeek, setManagerAvailTargetWeek] = useState<number>(CURRENT_WEEK_NUMBER);
+  const [managerAvailIsRecurring, setManagerAvailIsRecurring] = useState<boolean>(false);
+  const [managerAvailFrequency, setManagerAvailFrequency] = useState<'every_week' | 'even_weeks' | 'odd_weeks'>('every_week');
+  const [managerAvailDays, setManagerAvailDays] = useState<DayAvailability[]>([]);
+  const [managerAvailNotes, setManagerAvailNotes] = useState<string>('');
+
   const [showQuickNoticeModal, setShowQuickNoticeModal] = useState(false);
   const [isConfirmingDeleteShift, setIsConfirmingDeleteShift] = useState(false);
   const [selectedShift, setSelectedShift] = useState<Partial<Shift> & { isNew: boolean }>({ isNew: true });
@@ -615,6 +627,92 @@ export default function ManagerDashboard({
     });
     setSixWeeksSuccessMsg(`🔔 Shift-herinneringen verstuurd naar ${shiftsToRemind.length} medewerker(s)! Notificaties zijn direct klaargezet in het medewerkersportaal.`);
     setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Helper om beschikbaarheidsdata in te laden voor het bewerkingsvenster van de beheerder
+  const loadAvailForEmployee = (emp: Employee, weekNum: number, isRecurring: boolean) => {
+    if (isRecurring) {
+      if (emp.recurringAvailability?.days && emp.recurringAvailability.days.length === 7) {
+        setManagerAvailDays(emp.recurringAvailability.days);
+      } else {
+        setManagerAvailDays(Array.from({ length: 7 }, (_, i) => ({
+          day: i,
+          status: 'available' as const,
+          startTime: 'Open',
+          endTime: 'Sluit',
+          notes: ''
+        })));
+      }
+      setManagerAvailNotes(emp.recurringAvailability?.notes || '');
+      setManagerAvailFrequency(emp.recurringAvailability?.frequency || 'every_week');
+    } else {
+      const existing = availabilities.find(a => a.employeeId === emp.id && a.weekNumber === weekNum);
+      if (existing && existing.days.length === 7) {
+        setManagerAvailDays(existing.days);
+      } else if (emp.recurringAvailability?.days && emp.recurringAvailability.days.length === 7) {
+        setManagerAvailDays(emp.recurringAvailability.days);
+      } else {
+        setManagerAvailDays(Array.from({ length: 7 }, (_, i) => ({
+          day: i,
+          status: 'available' as const,
+          startTime: 'Open',
+          endTime: 'Sluit',
+          notes: ''
+        })));
+      }
+      setManagerAvailNotes('');
+    }
+  };
+
+  // Actie: Open modal om beschikbaarheid van een medewerker in te geven door beheerder
+  const handleOpenEnterAvailabilityModal = (emp?: Employee, weekNum?: number, defaultRecurring = false) => {
+    const target = emp || sortEmployeesByFirstName(employees.filter(e => e.id !== 'emp1'))[0];
+    const targetWk = weekNum !== undefined ? weekNum : selectedManagerWeek;
+    if (!target) return;
+
+    setManagerAvailTargetEmpId(target.id);
+    setManagerAvailTargetWeek(targetWk);
+    setManagerAvailIsRecurring(defaultRecurring);
+    loadAvailForEmployee(target, targetWk, defaultRecurring);
+    setShowEnterAvailabilityModal(true);
+  };
+
+  // Actie: Opslaan van ingegeven beschikbaarheid door beheerder
+  const handleSaveManagerAvailability = () => {
+    const target = employees.find(e => e.id === managerAvailTargetEmpId);
+    if (!target) return;
+
+    if (managerAvailIsRecurring) {
+      // Vaste wekelijkse beschikbaarheid opslaan (keert elke week terug)
+      const updatedEmp: Employee = {
+        ...target,
+        recurringAvailability: {
+          active: true,
+          frequency: managerAvailFrequency,
+          days: managerAvailDays,
+          notes: managerAvailNotes.trim() || undefined,
+          updatedAt: Date.now()
+        }
+      };
+      onUpdateEmployee(updatedEmp);
+      setSixWeeksSuccessMsg(`✅ Vaste wekelijkse beschikbaarheid voor ${target.name} succesvol opgeslagen! Deze keert elke week automatisch terug.`);
+    } else {
+      // Beschikbaarheid voor een specifieke week opslaan
+      const existing = availabilities.find(a => a.employeeId === target.id && a.weekNumber === managerAvailTargetWeek);
+      const newAvail: EmployeeAvailability = {
+        id: existing?.id || `av_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        employeeId: target.id,
+        weekNumber: managerAvailTargetWeek,
+        days: managerAvailDays
+      };
+      if (onUpdateAvailability) {
+        onUpdateAvailability(newAvail, managerAvailNotes.trim() || undefined);
+      }
+      setSixWeeksSuccessMsg(`✅ Beschikbaarheid voor ${target.name} (Week ${managerAvailTargetWeek}) succesvol ingegeven en opgeslagen in de cloud!`);
+    }
+
+    setShowEnterAvailabilityModal(false);
+    setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
   };
 
   const handleSaveShift = (e: React.FormEvent) => {
@@ -2416,22 +2514,26 @@ export default function ManagerDashboard({
                             <div className="space-y-2 min-h-[64px] flex flex-col justify-start">
                               {dayShifts.map((sh) => {
                                 const candidatesCount = swapRequests.find(r => r.shiftId === sh.id)?.candidates?.length || 0;
+                                const isConfirmed = sh.acknowledged;
+                                const isCancelled = sh.status === 'draft';
+                                const cardColorStyle = isCancelled
+                                  ? 'border-2 border-dashed border-red-300 bg-rose-50/90 text-red-700'
+                                  : isConfirmed
+                                  ? 'border-2 border-emerald-300 bg-emerald-50 text-emerald-950 shadow-2xs'
+                                  : 'border-2 border-amber-300 bg-amber-50 text-amber-950 shadow-2xs';
+
                                 return (
                                 <div
                                   key={sh.id}
                                   onClick={() => handleOpenEditShift(sh)}
-                                  className={`p-2.5 rounded-2xl text-left border cursor-pointer transition relative group/shift hover:shadow-md ${emp.textBgColor} ${
-                                    sh.isOpenShift 
-                                      ? 'border-2 border-amber-400 bg-amber-50/60 ring-1 ring-amber-300/70 shadow-xs' 
-                                      : sh.status === 'draft' 
-                                        ? 'border-2 border-dashed border-slate-300 bg-slate-50/80 opacity-90' 
-                                        : 'border border-emerald-200/90 bg-white/95 hover:border-emerald-300 shadow-2xs'
+                                  className={`p-2.5 rounded-2xl text-left border cursor-pointer transition relative group/shift hover:shadow-md ${cardColorStyle} ${
+                                    sh.isOpenShift ? 'ring-2 ring-amber-400' : ''
                                   }`}
                                 >
                                   {/* Shift times and quick action buttons */}
                                   <div className="flex items-center justify-between gap-1">
-                                    <span className="text-xs font-black text-slate-800 flex items-center gap-1">
-                                      <Clock size={11} className="inline opacity-70 text-slate-500" />
+                                    <span className={`text-xs font-black flex items-center gap-1 ${isCancelled ? 'text-red-600 line-through' : 'text-slate-900'}`}>
+                                      <Clock size={11} className={`inline opacity-70 ${isCancelled ? 'text-red-500' : 'text-slate-600'}`} />
                                       {sh.startTime} - {sh.endTime}
                                     </span>
                                     <div className="flex items-center gap-1 shrink-0">
@@ -2540,8 +2642,8 @@ export default function ManagerDashboard({
                                           }}
                                           className={`ml-1 inline-flex items-center gap-0.5 text-[8px] font-black uppercase px-1.5 py-0.2 rounded-md transition active:scale-95 cursor-pointer shadow-2xs ${
                                             sh.acknowledged
-                                              ? 'bg-emerald-200 hover:bg-rose-200 text-emerald-950 hover:text-rose-950 border border-emerald-400'
-                                              : 'bg-rose-200 hover:bg-emerald-200 text-rose-950 hover:text-emerald-950 border border-rose-400 animate-pulse'
+                                              ? 'bg-emerald-200 hover:bg-amber-200 text-emerald-950 hover:text-amber-950 border border-emerald-400'
+                                              : 'bg-amber-200 hover:bg-emerald-200 text-amber-950 hover:text-emerald-950 border border-amber-400'
                                           }`}
                                           title={
                                             sh.acknowledged
@@ -2552,12 +2654,12 @@ export default function ManagerDashboard({
                                           {sh.acknowledged ? (
                                             <>
                                               <span className="text-emerald-800 font-black">✓</span>
-                                              <span>Akkoord</span>
+                                              <span>Bevestigd</span>
                                             </>
                                           ) : (
                                             <>
-                                              <span className="w-1.5 h-1.5 bg-rose-600 rounded-full" />
-                                              <span>Bevestig?</span>
+                                              <span className="w-1.5 h-1.5 bg-amber-600 rounded-full" />
+                                              <span>Niet bevestigd</span>
                                             </>
                                           )}
                                         </button>
@@ -2767,6 +2869,15 @@ export default function ManagerDashboard({
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleOpenEnterAvailabilityModal()}
+                  className="px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-orange-400"
+                  title="Geef namens een personeelslid beschikbaarheden in (voor een specifieke week of als vaste wekelijkse herhaling)"
+                >
+                  <PenLine size={15} />
+                  <span>➕ Beschikbaarheid Ingeven</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowAvailabilityChart(prev => !prev)}
@@ -3362,15 +3473,25 @@ export default function ManagerDashboard({
                                 </span>
                                 <div className="truncate flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-1">
-                                    <p className="text-xs font-black text-slate-800 leading-tight uppercase truncate max-w-[115px]" title={emp.name}>{emp.name}</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => setSelectedAvailabilityDetail({ employee: emp, weekNumber: selectedManagerWeek })}
-                                      className="p-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 transition cursor-pointer shrink-0"
-                                      title="Bekijk alle weekdetails en uren van deze medewerker"
-                                    >
-                                      <Eye size={12} />
-                                    </button>
+                                    <p className="text-xs font-black text-slate-800 leading-tight uppercase truncate max-w-[100px]" title={emp.name}>{emp.name}</p>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenEnterAvailabilityModal(emp, selectedManagerWeek)}
+                                        className="p-1 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-850 border border-orange-300 transition cursor-pointer shrink-0"
+                                        title={`Geef/bewerk beschikbaarheid voor ${emp.name} (Week ${selectedManagerWeek} of vast)`}
+                                      >
+                                        <PenLine size={12} className="text-orange-700" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedAvailabilityDetail({ employee: emp, weekNumber: selectedManagerWeek })}
+                                        className="p-1 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 transition cursor-pointer shrink-0"
+                                        title="Bekijk alle weekdetails en uren van deze medewerker"
+                                      >
+                                        <Eye size={12} />
+                                      </button>
+                                    </div>
                                   </div>
                                   <span className="text-[9px] font-black uppercase text-orange-600 tracking-wider block truncate">
                                     {emp.statuut} {emp.contractDaysPerWeek === 4 ? '(4d)' : ''} ({emp.experience})
@@ -4714,6 +4835,368 @@ export default function ManagerDashboard({
       )}
 
 
+      {/* BEHEERDER BESCHIKBAARHEID INGEVEN / BEWERKEN MODAL */}
+      {showEnterAvailabilityModal && (() => {
+        const targetEmp = employees.find(e => e.id === managerAvailTargetEmpId) || employees[0];
+        const targetWk = managerAvailTargetWeek;
+        const meta = getWeekMeta(targetWk);
+
+        const setAllDaysStatus = (status: DayAvailability['status'], startTime = 'Open', endTime = 'Sluit') => {
+          setManagerAvailDays(Array.from({ length: 7 }, (_, i) => ({
+            day: i,
+            status,
+            startTime: status !== 'unavailable' ? startTime : undefined,
+            endTime: status !== 'unavailable' ? endTime : undefined,
+            notes: ''
+          })));
+        };
+
+        const setWeekendAvailable = () => {
+          setManagerAvailDays(prev => prev.map(d => {
+            // 4 = Vrijdag, 5 = Zaterdag, 6 = Zondag
+            if (d.day >= 4) {
+              return { ...d, status: 'available', startTime: '16:00', endTime: 'Sluit' };
+            }
+            return { ...d, status: 'unavailable', startTime: undefined, endTime: undefined };
+          }));
+        };
+
+        const updateDayField = (dayIdx: number, updates: Partial<DayAvailability>) => {
+          setManagerAvailDays(prev => prev.map(d => d.day === dayIdx ? { ...d, ...updates } : d));
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
+            <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-orange-200 overflow-hidden flex flex-col max-h-[92vh]">
+              {/* Header */}
+              <div className="px-6 py-4 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 text-white flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center text-xl shrink-0">
+                    📝
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black uppercase tracking-tight">
+                      Beschikbaarheid Ingeven door Beheerder
+                    </h3>
+                    <p className="text-xs text-orange-100 font-medium">
+                      Geef hier namens personeelsleden hun beschikbaarheid op voor een specifieke week of als wekelijks vaste shiften.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowEnterAvailabilityModal(false)}
+                  className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Form Body */}
+              <div className="p-6 space-y-5 overflow-y-auto flex-1 text-left">
+                {/* Top row: Employee selector & Type selector */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-orange-50/60 p-4 rounded-2xl border border-orange-200">
+                  <div>
+                    <label className="text-xs font-black uppercase text-slate-700 tracking-tight block mb-1.5">
+                      Kies Personeelslid:
+                    </label>
+                    <select
+                      value={managerAvailTargetEmpId}
+                      onChange={(e) => {
+                        const empId = e.target.value;
+                        setManagerAvailTargetEmpId(empId);
+                        const newEmp = employees.find(em => em.id === empId);
+                        if (newEmp) {
+                          loadAvailForEmployee(newEmp, managerAvailTargetWeek, managerAvailIsRecurring);
+                        }
+                      }}
+                      className="w-full bg-white border-2 border-orange-300 text-slate-800 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-400 cursor-pointer shadow-xs"
+                    >
+                      {sortEmployeesByFirstName(employees.filter(e => e.id !== 'emp1')).map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} ({emp.statuut} • {emp.department === 'keuken' ? 'Keuken' : 'Zaal'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-black uppercase text-slate-700 tracking-tight block mb-1.5">
+                      Type Invoer:
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManagerAvailIsRecurring(false);
+                          if (targetEmp) loadAvailForEmployee(targetEmp, managerAvailTargetWeek, false);
+                        }}
+                        className={`py-2 px-3 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center justify-center gap-1 border ${
+                          !managerAvailIsRecurring
+                            ? 'bg-orange-500 text-white border-orange-600 shadow-xs'
+                            : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
+                        }`}
+                      >
+                        <CalendarIcon size={12} />
+                        <span>Specifieke Week</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManagerAvailIsRecurring(true);
+                          if (targetEmp) loadAvailForEmployee(targetEmp, managerAvailTargetWeek, true);
+                        }}
+                        className={`py-2 px-3 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center justify-center gap-1 border ${
+                          managerAvailIsRecurring
+                            ? 'bg-orange-500 text-white border-orange-600 shadow-xs'
+                            : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
+                        }`}
+                      >
+                        <span>🔁 Vaste Herhaling</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {!managerAvailIsRecurring ? (
+                  <div className="flex items-center gap-2 flex-wrap bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                    <span className="text-xs font-black uppercase text-slate-600 mr-2">Selecteer Week:</span>
+                    {activeWeeks.map(w => (
+                      <button
+                        key={w.weekNumber}
+                        type="button"
+                        onClick={() => {
+                          setManagerAvailTargetWeek(w.weekNumber);
+                          if (targetEmp) loadAvailForEmployee(targetEmp, w.weekNumber, false);
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                          managerAvailTargetWeek === w.weekNumber
+                            ? 'bg-orange-500 text-white shadow-xs'
+                            : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        Week {w.weekNumber}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-indigo-50/70 p-3 rounded-2xl border border-indigo-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🔁</span>
+                      <div>
+                        <p className="font-extrabold text-indigo-950">Vaste wekelijkse beschikbaarheid (terugkerend patroon)</p>
+                        <p className="text-[11px] text-indigo-800">Wordt automatisch toegepast op alle toekomstige weken waarvoor geen specifieke invoer is.</p>
+                      </div>
+                    </div>
+                    <select
+                      value={managerAvailFrequency}
+                      onChange={(e) => setManagerAvailFrequency(e.target.value as any)}
+                      className="bg-white border border-indigo-300 text-indigo-950 font-bold rounded-xl px-2.5 py-1 text-xs"
+                    >
+                      <option value="every_week">Elke week herhalen</option>
+                      <option value="even_weeks">Om de 2 weken (Even)</option>
+                      <option value="odd_weeks">Om de 2 weken (Oneven)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Quick Preset Buttons */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-black uppercase text-slate-500">Snel-knoppen:</span>
+                  <button
+                    type="button"
+                    onClick={() => setAllDaysStatus('available', 'Open', 'Sluit')}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    ✓ Alles Beschikbaar (Open-Sluit)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllDaysStatus('available', '16:00', '23:00')}
+                    className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    🕒 Avonddienst (16u - 23u)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={setWeekendAvailable}
+                    className="px-2.5 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    📅 Enkel Weekend (Vr-Zo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllDaysStatus('unavailable')}
+                    className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    ✕ Alles Niet-Beschikbaar (Verlof)
+                  </button>
+                </div>
+
+                {/* Days of the Week configuration */}
+                <div className="space-y-3">
+                  {DAYS_OF_WEEK.map((dName, dIdx) => {
+                    const dInfo = getDayDateInfo(managerAvailTargetWeek, dIdx);
+                    const dayData = managerAvailDays.find(d => d.day === dIdx) || {
+                      day: dIdx,
+                      status: 'available' as const,
+                      startTime: 'Open',
+                      endTime: 'Sluit',
+                      notes: ''
+                    };
+
+                    return (
+                      <div
+                        key={dIdx}
+                        className={`p-3.5 rounded-2xl border-2 transition ${
+                          dayData.status === 'preferred' ? 'bg-amber-50/80 border-amber-300' :
+                          dayData.status === 'available' ? 'bg-emerald-50/70 border-emerald-300' :
+                          dayData.status === 'unavailable' ? 'bg-rose-50/70 border-rose-300' :
+                          'bg-slate-50 border-slate-200'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="w-28 shrink-0">
+                            <span className="font-black text-xs uppercase text-slate-800 block">{dName}</span>
+                            {!managerAvailIsRecurring && (
+                              <span className="text-[11px] font-bold text-orange-700">{dInfo.shortDate}</span>
+                            )}
+                          </div>
+
+                          {/* Status Options */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => updateDayField(dIdx, { 
+                                status: 'available', 
+                                startTime: dayData.startTime || 'Open', 
+                                endTime: dayData.endTime || 'Sluit' 
+                              })}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer border ${
+                                dayData.status === 'available'
+                                  ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                                  : 'bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50'
+                              }`}
+                            >
+                              ✓ Beschikbaar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateDayField(dIdx, { 
+                                status: 'preferred', 
+                                startTime: dayData.startTime || 'Open', 
+                                endTime: dayData.endTime || 'Sluit' 
+                              })}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer border ${
+                                dayData.status === 'preferred'
+                                  ? 'bg-amber-500 text-amber-950 border-amber-600 shadow-xs font-black'
+                                  : 'bg-white text-amber-800 border-amber-200 hover:bg-amber-50'
+                              }`}
+                            >
+                              ⭐ Voorkeur
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateDayField(dIdx, { 
+                                status: 'unavailable', 
+                                startTime: undefined, 
+                                endTime: undefined 
+                              })}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer border ${
+                                dayData.status === 'unavailable'
+                                  ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                                  : 'bg-white text-rose-800 border-rose-200 hover:bg-rose-50'
+                              }`}
+                            >
+                              ✕ Niet-beschikbaar
+                            </button>
+                          </div>
+
+                          {/* Time fields (only for available/preferred) */}
+                          {dayData.status !== 'unavailable' ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={dayData.startTime || ''}
+                                onChange={(e) => updateDayField(dIdx, { startTime: e.target.value })}
+                                placeholder="Van (16:00)"
+                                className="w-24 bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 text-center"
+                              />
+                              <span className="text-slate-400 font-bold">-</span>
+                              <input
+                                type="text"
+                                value={dayData.endTime || ''}
+                                onChange={(e) => updateDayField(dIdx, { endTime: e.target.value })}
+                                placeholder="Tot (23:00)"
+                                className="w-24 bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 text-center"
+                              />
+                            </div>
+                          ) : (
+                            <div className="text-xs text-rose-600 font-bold italic px-2">
+                              Hele dag niet inzetbaar
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Day note input */}
+                        <div className="mt-2 pt-2 border-t border-black/5 flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Notitie:</span>
+                          <input
+                            type="text"
+                            value={dayData.notes || ''}
+                            onChange={(e) => updateDayField(dIdx, { notes: e.target.value })}
+                            placeholder="Optionele opmerking (bijv. 'Moet op tijd weg ivm trein')"
+                            className="flex-1 bg-white/90 border border-slate-200 rounded-lg px-2 py-0.5 text-xs text-slate-700 placeholder:text-slate-350"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Overall notes */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <label className="text-xs font-black uppercase text-slate-700 tracking-tight block mb-1">
+                    Algemene toelichting / afspraak door beheerder Hans Stevens:
+                  </label>
+                  <input
+                    type="text"
+                    value={managerAvailNotes}
+                    onChange={(e) => setManagerAvailNotes(e.target.value)}
+                    placeholder="Bijv: 'Telefonisch afgesproken met medewerker op 29/09'"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <p className="text-xs text-slate-500 font-medium">
+                  🔒 Beschikbaarheid wordt direct opgeslagen in Google Cloud Firestore en bijgewerkt in alle roosters.
+                </p>
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowEnterAvailabilityModal(false)}
+                    className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
+                  >
+                    Annuleren
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveManagerAvailability}
+                    className="px-6 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Check size={14} className="stroke-[3]" />
+                    <span>Opslaan & Toepassen ✓</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* MEDEWERKER BESCHIKBAARHEID DETAIL OVERZICHT MODAL */}
       {selectedAvailabilityDetail && (() => {
         const targetEmp = selectedAvailabilityDetail.employee;
@@ -4876,13 +5359,28 @@ export default function ManagerDashboard({
                 <p className="text-xs text-slate-500 font-medium">
                   💡 Tip: Je kunt in het toevoegen/bewerken venster van een dienst direct met één klik de gewenste uren overnemen.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setSelectedAvailabilityDetail(null)}
-                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-                >
-                  Sluiten
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const emp = targetEmp;
+                      const wk = targetWk;
+                      setSelectedAvailabilityDetail(null);
+                      handleOpenEnterAvailabilityModal(emp, wk);
+                    }}
+                    className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-md active:scale-95"
+                  >
+                    <PenLine size={13} />
+                    <span>Beschikbaarheid Aanpassen / Ingeven</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAvailabilityDetail(null)}
+                    className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+                  >
+                    Sluiten
+                  </button>
+                </div>
               </div>
             </div>
           </div>

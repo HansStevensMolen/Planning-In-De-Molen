@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Employee, Shift, Department } from '../types';
 import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
-import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
 
 interface SchedulePrintModalProps {
   isOpen: boolean;
@@ -694,7 +694,11 @@ export default function SchedulePrintModal({
                     {DAYS_OF_WEEK.map((dayName, dayIdx) => {
                       const dayShifts = weekShifts
                         .filter(s => s.day === dayIdx)
-                        .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+                        .sort((a, b) => {
+                          const diff = parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime);
+                          if (diff !== 0) return diff;
+                          return (a.startTime || '').localeCompare(b.startTime || '');
+                        });
 
                       const keukenShifts = dayShifts.filter(s => s.department === 'keuken');
                       const zaalShifts = dayShifts.filter(s => (s.department || 'zaal') === 'zaal');
@@ -720,13 +724,21 @@ export default function SchedulePrintModal({
                                     const hours = calculateShiftHours(shift.startTime, shift.endTime);
                                     const roleBadge = getKitchenRoleBadge(shift, emp);
 
+                                    const isConfirmed = shift.acknowledged;
+                                    const isCancelled = shift.status === 'draft';
+                                    const cardColor = isCancelled 
+                                      ? 'border-dashed border-red-300 bg-rose-50 text-red-700' 
+                                      : isConfirmed 
+                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-950' 
+                                      : 'border-amber-300 bg-amber-50 text-amber-950';
+
                                     return (
                                       <div
                                         key={shift.id}
-                                        className="p-2 rounded-lg border-2 border-orange-200 bg-orange-50/50 text-left leading-tight shadow-2xs"
+                                        className={`p-2 rounded-lg border-2 text-left leading-tight shadow-2xs ${cardColor}`}
                                       >
                                         <div className="flex items-center justify-between gap-1">
-                                          <span className={`font-black text-slate-950 truncate ${
+                                          <span className={`font-black truncate ${isCancelled ? 'text-red-700 line-through' : 'text-slate-950'} ${
                                             fontSize === 'large' ? 'text-[13.5px]' : 'text-[12px]'
                                           }`}>
                                             {emp?.name || 'Onbekend'}
@@ -736,11 +748,21 @@ export default function SchedulePrintModal({
                                           </span>
                                         </div>
                                         
-                                        <div className={`font-black text-slate-850 flex items-center justify-between mt-1 ${
+                                        <div className={`font-black flex items-center justify-between mt-1 ${isCancelled ? 'text-red-600 line-through' : 'text-slate-850'} ${
                                           fontSize === 'large' ? 'text-[12px]' : 'text-[10.5px]'
                                         }`}>
-                                          <span className="text-orange-950">{shift.startTime} – {shift.endTime}</span>
+                                          <span>{shift.startTime} – {shift.endTime}</span>
                                           <span className="text-[9px] text-slate-500 font-bold">({hours}u)</span>
+                                        </div>
+
+                                        <div className="mt-1 flex items-center justify-between text-[8px] font-black uppercase">
+                                          {isCancelled ? (
+                                            <span className="text-red-600 font-bold">Geannuleerd</span>
+                                          ) : isConfirmed ? (
+                                            <span className="text-emerald-700">✓ Bevestigd</span>
+                                          ) : (
+                                            <span className="text-amber-800">⏳ Niet bevestigd</span>
+                                          )}
                                         </div>
 
                                         {shift.notes && (

@@ -601,10 +601,37 @@ export default function StaffPortal({
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
   const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
 
+  // Berichten & meldingen over gewijzigde shiften door de beheerder gericht aan deze medewerker
+  const shiftChangeNotices = notices.filter(n => 
+    n.targetEmployeeId === activeEmployeeId && 
+    n.category === 'wijziging'
+  );
+
   // Push notification permission state & automated reminder dialog state
   const [pushStatus, setPushStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
   const [showReminderModal, setShowReminderModal] = useState<boolean>(false);
   const [hasAutoTriggeredAlert, setHasAutoTriggeredAlert] = useState<boolean>(false);
+
+  // Notificatie wanneer de beheerder een shift heeft gewijzigd
+  React.useEffect(() => {
+    if (!currentEmployee || shiftChangeNotices.length === 0) return;
+    const latestChange = shiftChangeNotices[0];
+    const key = `shift_change_notif_seen_${latestChange.id}`;
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, 'true');
+      playAlertChime();
+      if (getPushNotificationPermission() === 'granted') {
+        try {
+          new Notification(latestChange.title, {
+            body: latestChange.content,
+            icon: '/favicon.ico'
+          });
+        } catch (e) {
+          console.warn('Push error:', e);
+        }
+      }
+    }
+  }, [shiftChangeNotices.length, currentEmployee?.id]);
 
   // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij diensten die binnen 24 uur of 1 uur beginnen
   React.useEffect(() => {
@@ -1740,51 +1767,119 @@ export default function StaffPortal({
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Notificatie als de beheerder een shift heeft gewijzigd */}
+                {shiftChangeNotices.length > 0 && (
+                  <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-3.5 sm:p-4 rounded-2xl shadow-md border-2 border-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-xl shrink-0">
+                        🔄
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-full">
+                            Shift Gewijzigd
+                          </span>
+                          <span className="text-xs font-bold text-amber-100">Melding van beheerder</span>
+                        </div>
+                        <p className="text-xs font-black text-white mt-0.5">
+                          {shiftChangeNotices[0].title}
+                        </p>
+                        <p className="text-[11px] text-amber-100 font-medium">
+                          {shiftChangeNotices[0].content}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSubTab('berichten')}
+                      className="px-3.5 py-1.5 bg-white text-orange-700 hover:bg-orange-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+                    >
+                      Bekijk Bericht 💬
+                    </button>
+                  </div>
+                )}
+
+                {/* Kleur-indicatoren Legende voor het personeelsrooster */}
+                <div className="bg-white p-3 rounded-2xl border-2 border-slate-200 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm">🎨</span>
+                    <span className="text-xs font-black text-slate-800 uppercase tracking-tight">Kleur-indicatoren Rooster:</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-[10.5px] font-black uppercase">
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-950 border border-emerald-400 shadow-2xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block"></span>
+                      <span>Bevestigd (Groene achtergrond)</span>
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-amber-100 text-amber-950 border border-amber-400 shadow-2xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+                      <span>Niet bevestigd (Gele achtergrond)</span>
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-rose-50 text-red-600 border border-rose-300 shadow-2xs flex items-center gap-1.5 font-bold">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-600 inline-block"></span>
+                      <span>Geannuleerd (Rode tekstkleur)</span>
+                    </span>
+                  </div>
+                </div>
+
                 {personalShifts.map((sh) => {
                   const alertDetails = getShift24HourDetails(sh, currentTime);
                   const isUrgent = !!alertDetails?.isWithin24Hours;
                   const isUrgentUnconfirmed = isUrgent && !sh.acknowledged;
-                  return (
+                    const isConfirmed = sh.acknowledged;
+                    const isCancelled = (sh as any).isCancelled || sh.status === 'draft';
+                    
+                    // Exacte kleur-indicatoren volgens gebruikerswens:
+                    // 'bevestigd' -> groene achtergrond
+                    // 'niet bevestigd' -> gele achtergrond
+                    // 'geannuleerd' -> rode tekstkleur
+                    let cardBgClass = '';
+                    if (isCancelled) {
+                      cardBgClass = 'bg-rose-50 border-2 border-rose-300 text-red-600';
+                    } else if (isConfirmed) {
+                      cardBgClass = 'bg-emerald-100 border-2 border-emerald-400 ring-2 ring-emerald-200 text-emerald-950';
+                    } else {
+                      cardBgClass = 'bg-amber-100 border-2 border-amber-400 ring-2 ring-amber-200 text-amber-950';
+                    }
+
+                    return (
                     <div 
                       key={sh.id} 
-                      className={`bg-white p-4 rounded-2xl border shadow-sm transition space-y-3 relative overflow-hidden ${
-                        isUrgentUnconfirmed
-                          ? 'border-2 border-red-500 ring-4 ring-red-200/90 bg-red-50/30 shadow-lg'
-                          : isUrgent
-                          ? 'border-emerald-400 ring-2 ring-emerald-100 bg-emerald-50/10'
-                          : (!sh.acknowledged ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-100')
+                      className={`p-4 rounded-2xl border shadow-sm transition space-y-3 relative overflow-hidden ${cardBgClass} ${
+                        isUrgentUnconfirmed ? 'ring-4 ring-red-300 shadow-md' : ''
                       }`}
                     >
-                      {isUrgentUnconfirmed ? (
-                        <span className="absolute top-0 right-0 px-3 py-1 rounded-bl-xl bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm animate-pulse">
-                          <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
-                          <AlarmClock size={11} className="stroke-[3]" />
-                          <span>🚨 ALARM: NOG NIET BEVESTIGD • {alertDetails?.timeRemainingText}</span>
+                      {/* Status Badge */}
+                      {isCancelled ? (
+                        <span className="absolute top-0 right-0 px-2.5 py-0.5 rounded-bl-xl bg-red-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1 shadow-xs">
+                          ✕ Geannuleerd
                         </span>
-                      ) : isUrgent ? (
-                        <span className="absolute top-0 right-0 px-3 py-1 rounded-bl-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1 shadow-xs">
+                      ) : isConfirmed ? (
+                        <span className="absolute top-0 right-0 px-2.5 py-0.5 rounded-bl-xl bg-emerald-600 text-[10px] text-white font-black tracking-wider uppercase flex items-center gap-1 shadow-xs">
                           <CheckCheck size={11} className="stroke-[3]" />
-                          <span>Bevestigd ✓ • {alertDetails?.timeRemainingText}</span>
+                          <span>✓ Bevestigd (Gezien)</span>
                         </span>
                       ) : (
-                        !sh.acknowledged && (
-                          <span className="absolute top-0 right-0 px-2 py-0.5 rounded-bl-xl bg-amber-500 text-[9px] text-white font-bold tracking-wider uppercase">Nieuw</span>
-                        )
+                        <span className="absolute top-0 right-0 px-2.5 py-0.5 rounded-bl-xl bg-amber-500 text-[10px] text-amber-950 font-black tracking-wider uppercase flex items-center gap-1 shadow-xs border-b border-l border-amber-400">
+                          <span>⏳ Niet bevestigd</span>
+                        </span>
                       )}
 
                       <div className="flex items-start justify-between">
                         <div>
-                          <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                          <h4 className={`font-black text-sm flex items-center gap-1.5 ${isCancelled ? 'text-red-600 line-through font-bold' : 'text-slate-900'}`}>
                             <span>{DAYS_OF_WEEK[sh.day]}</span>
                             <span className="text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md shadow-2xs">
                               {getDayDateInfo(selectedRosterWeek, sh.day).shortDate}
                             </span>
+                            {isCancelled && <span className="text-red-600 font-black text-xs uppercase ml-1">(Geannuleerd)</span>}
                           </h4>
                           <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                            <div className="flex items-center space-x-1.5 text-[10px] text-orange-950 font-black bg-orange-50 px-2.5 py-1 rounded-lg w-fit border-2 border-orange-100 uppercase tracking-tight">
-                              <Clock size={12} className="text-orange-500 shrink-0 stroke-[2.5]" />
+                            <div className={`flex items-center space-x-1.5 text-[10px] font-black px-2.5 py-1 rounded-lg w-fit border-2 uppercase tracking-tight ${
+                              isCancelled ? 'bg-rose-100 border-rose-300 text-red-600 font-bold' : 'bg-white border-orange-200 text-orange-950'
+                            }`}>
+                              <Clock size={12} className={isCancelled ? 'text-red-600' : 'text-orange-500'} />
                               <span>{sh.startTime} - {sh.endTime}</span>
-                              <span className="text-orange-600 font-extrabold ml-1">({calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes)}u)</span>
+                              <span className="font-extrabold ml-1">({calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes)}u)</span>
                             </div>
                             {(() => {
                               const timing = getShiftTimingDetails(sh);
@@ -1801,35 +1896,39 @@ export default function StaffPortal({
                         </div>
 
                       <div className="text-right">
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Afdeling</span>
-                        <p className="text-xs font-black text-slate-750 capitalize">{(sh.department || currentEmployee.department) === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}</p>
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Afdeling</span>
+                        <p className="text-xs font-black text-slate-800 capitalize">{(sh.department || currentEmployee.department) === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}</p>
                       </div>
                     </div>
 
                     {sh.notes && (
-                      <p className="text-xs text-slate-500 italic bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                      <p className={`text-xs italic rounded-xl p-2.5 border ${isCancelled ? 'bg-red-50 text-red-700 border-red-200' : 'bg-white/90 text-slate-700 border-slate-200'}`}>
                         "{sh.notes}"
                       </p>
                     )}
 
                     {/* Acknowledge & Calendar button */}
                     <div className="flex items-center gap-2 pt-1">
-                      {!sh.acknowledged ? (
+                      {!sh.acknowledged && !isCancelled ? (
                         <button
                           onClick={() => handleAcknowledgeClick(sh.id)}
                           className={`flex-1 py-2.5 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center justify-center space-x-1.5 duration-100 ${
                             isUrgentUnconfirmed
                               ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 hover:from-red-700 hover:to-amber-700 ring-2 ring-red-300 animate-pulse'
-                              : 'bg-orange-500 hover:bg-orange-600'
+                              : 'bg-amber-600 hover:bg-amber-700'
                           }`}
                         >
                           <Check size={14} className="stroke-[3]" />
-                          <span>{isUrgentUnconfirmed ? '🚨 Nu Bevestigen ("Gezien")' : 'Dienst Bevestigen'}</span>
+                          <span>{isUrgentUnconfirmed ? '🚨 Nu Bevestigen ("Gezien")' : 'Dienst Bevestigen (Naar Groen)'}</span>
                         </button>
+                      ) : isConfirmed ? (
+                        <div className="flex-1 bg-emerald-100 text-emerald-950 border-2 border-emerald-300 rounded-xl p-2 text-[10px] font-black uppercase tracking-tight flex items-center justify-center gap-1.5 shadow-2xs">
+                          <CheckCheck size={14} className="text-emerald-700 shrink-0 stroke-[3]" />
+                          <span>Bevestigd als Gezien ✓</span>
+                        </div>
                       ) : (
-                        <div className="flex-1 bg-emerald-100 text-emerald-950 border-2 border-emerald-200 rounded-xl p-2 text-[10px] font-black uppercase tracking-tight flex items-center justify-center gap-1.5">
-                          <CheckCheck size={14} className="text-emerald-600 shrink-0 stroke-[3]" />
-                          <span>Gezien</span>
+                        <div className="flex-1 bg-red-100 text-red-700 border-2 border-red-300 rounded-xl p-2 text-[10px] font-black uppercase tracking-tight flex items-center justify-center gap-1.5">
+                          <span>Dienst Geannuleerd</span>
                         </div>
                       )}
 
@@ -1882,22 +1981,12 @@ export default function StaffPortal({
               <div className="grid grid-cols-7 gap-2 min-w-[700px]">
                 {DAYS_OF_WEEK.map((day, dayIdx) => {
                   const dayDateInfo = getDayDateInfo(selectedRosterWeek, dayIdx);
-                  const parseTimeToMinutes = (t: string): number => {
-                    if (!t) return 999;
-                    const match = t.trim().toLowerCase().match(/^(\d{1,2})[:uh](\d{2})?$/);
-                    if (match) {
-                      return parseInt(match[1], 10) * 60 + (match[2] ? parseInt(match[2], 10) : 0);
-                    }
-                    const single = parseInt(t, 10);
-                    if (!isNaN(single)) return single * 60;
-                    if (t.toLowerCase().includes('open')) return 11 * 60 + 30;
-                    return 999;
-                  };
 
+                  // Chronologische volgorde van beginnen voor het personeel
                   const dayShifts = publishedTeamShifts
                     .filter(s => s.day === dayIdx)
                     .sort((a, b) => {
-                      const diff = parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime);
+                      const diff = parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime);
                       if (diff !== 0) return diff;
                       return (a.startTime || '').localeCompare(b.startTime || '');
                     });
@@ -1919,14 +2008,27 @@ export default function StaffPortal({
                           const isSelf = emp.id === activeEmployeeId;
                           const alertDetails = getShift24HourDetails(sh, currentTime);
                           const isUrgent = !!alertDetails?.isWithin24Hours;
-                          const borderStyle = isSelf
-                            ? (isUrgent ? 'border-red-500 ring-4 ring-red-100 bg-red-50/25 font-bold animate-[pulse_2.5s_infinite]' : 'border-orange-500 ring-2 ring-orange-100 bg-orange-50/30 font-bold')
-                            : (isUrgent ? 'border-red-300 ring-2 ring-red-50 bg-red-50/10' : 'border-orange-50/80 bg-orange-50/10');
+                          const isConfirmed = sh.acknowledged;
+                          const isCancelled = (sh as any).isCancelled || sh.status === 'draft';
+
+                          // Kleur-indicatoren: 'bevestigd' -> groen, 'niet bevestigd' -> geel, 'geannuleerd' -> rode tekst
+                          let bgAndBorder = '';
+                          if (isCancelled) {
+                            bgAndBorder = 'bg-rose-50 border-2 border-rose-300 text-red-600';
+                          } else if (isConfirmed) {
+                            bgAndBorder = isSelf 
+                              ? 'bg-emerald-100 border-2 border-emerald-500 ring-2 ring-emerald-300 text-emerald-950 shadow-xs'
+                              : 'bg-emerald-100 border border-emerald-400 text-emerald-950 shadow-2xs';
+                          } else {
+                            bgAndBorder = isSelf
+                              ? 'bg-amber-100 border-2 border-amber-500 ring-2 ring-amber-300 text-amber-950 shadow-xs'
+                              : 'bg-amber-100 border border-amber-400 text-amber-950 shadow-2xs';
+                          }
 
                           return (
                             <div
                               key={sh.id}
-                              className={`p-2.5 rounded-2xl border text-left flex flex-col justify-between transition-all ${borderStyle}`}
+                              className={`p-2.5 rounded-2xl border text-left flex flex-col justify-between transition-all ${bgAndBorder}`}
                             >
                               <div>
                                 <div className="flex items-center space-x-1.5 mb-1.5">
@@ -1940,28 +2042,39 @@ export default function StaffPortal({
                                       emp.name.split(' ').map(n => n[0]).join('')
                                     )}
                                   </div>
-                                  <span className="text-[10px] font-extrabold text-slate-800 truncate" title={emp.name}>
-                                    {emp.name.split(' ')[0]}
+                                  <span className={`text-[10px] font-extrabold truncate ${isCancelled ? 'text-red-600 line-through font-bold' : 'text-slate-900'}`} title={emp.name}>
+                                    {emp.name.split(' ')[0]} {isSelf && '(jij)'}
                                   </span>
                                 </div>
-                                <span className="text-[9px] font-black text-slate-600 block tracking-tight">
+                                <span className={`text-[9.5px] font-black block tracking-tight ${isCancelled ? 'text-red-600 line-through font-bold' : isConfirmed ? 'text-emerald-950' : 'text-amber-950'}`}>
                                   {sh.startTime} - {sh.endTime}
                                 </span>
-                                {isUrgent && (
+                                {isCancelled ? (
+                                  <span className="inline-block mt-1 px-1.5 py-0.2 bg-red-600 text-white rounded text-[7.5px] font-black uppercase">
+                                    Geannuleerd
+                                  </span>
+                                ) : isUrgent ? (
                                   <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 bg-red-600 text-white rounded text-[8px] font-black uppercase tracking-tight w-fit animate-pulse shadow-xs">
                                     <AlarmClock size={8} className="stroke-[3]" />
                                     <span>{alertDetails?.isOngoing ? 'Nu bezig' : '<24u'}</span>
                                   </span>
-                                )}
+                                ) : null}
                               </div>
 
-                              <div className="mt-2.5 pt-1.5 border-t border-orange-50/100 flex items-center justify-between">
-                                <span className="text-[8px] px-1.5 py-0.5 bg-orange-100/60 text-orange-950 font-black uppercase rounded">
+                              <div className="mt-2 pt-1.5 border-t border-black/10 flex items-center justify-between">
+                                <span className="text-[8px] px-1.5 py-0.5 bg-white/70 text-slate-800 font-black uppercase rounded shadow-2xs">
                                   {emp.department === 'keuken' ? 'Keuken' : 'Zaal'}
                                 </span>
-                                {sh.acknowledged && (
-                                  <CheckCheck size={12} className="text-emerald-600 stroke-[3.5]" title="Gezien" />
-                                )}
+                                {isConfirmed ? (
+                                  <span className="text-[8px] font-black text-emerald-800 inline-flex items-center gap-0.5" title="Gezien & Bevestigd">
+                                    <CheckCheck size={11} className="text-emerald-700 stroke-[3.5]" />
+                                    <span>Gezien</span>
+                                  </span>
+                                ) : !isCancelled ? (
+                                  <span className="text-[7.5px] font-black text-amber-800 bg-amber-200/80 px-1 py-0.2 rounded" title="Nog niet bevestigd">
+                                    Wacht
+                                  </span>
+                                ) : null}
                               </div>
                             </div>
                           );
@@ -2540,8 +2653,8 @@ export default function StaffPortal({
             </div>
           </div>
 
-          {/* Mode Selector for Flexi / Student / Extra */}
-          {isFlexiStudentExtra && (
+          {/* Mode Selector for All Staff Members (Vaste vs Wekelijkse Beschikbaarheid) */}
+          {currentEmployee && (
             <div className="bg-white p-2.5 rounded-2xl border-2 border-orange-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div className="flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl">
                 <button
@@ -2566,7 +2679,7 @@ export default function StaffPortal({
                   }`}
                 >
                   <Repeat size={14} />
-                  <span>Vaste Beschikbaarheid 🔁 ({currentEmployee?.statuut})</span>
+                  <span>Vaste Beschikbaarheid 🔁 (Elke week terugkerend)</span>
                   {currentEmployee?.recurringAvailability?.active && (
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                   )}
@@ -2583,8 +2696,8 @@ export default function StaffPortal({
             </div>
           )}
 
-          {/* VIEW 1: RECURRING AVAILABILITY FORM (Flexi, Student, Extra) */}
-          {availViewMode === 'recurring' && isFlexiStudentExtra ? (
+          {/* VIEW 1: RECURRING AVAILABILITY FORM (Voor al het personeel) */}
+          {availViewMode === 'recurring' ? (
             <div className="space-y-6">
               {/* Frequency Header & Toggle */}
               <div className="bg-white p-5 rounded-3xl border-2 border-orange-200 shadow-sm space-y-4">
@@ -2595,7 +2708,7 @@ export default function StaffPortal({
                       <span>Vaste Beschikbaarheid Instellen ({currentEmployee?.name} • {currentEmployee?.statuut})</span>
                     </h4>
                     <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Als {currentEmployee?.statuut} kun je hier vaste shiften opgeven die je elke week of om de 2 weken wilt draaien.
+                      Geef hier vaste shiften op die elke week automatisch terugkeren in Café In De Molen. Je hoeft dit niet elke week opnieuw door te geven!
                     </p>
                   </div>
 
@@ -2907,8 +3020,8 @@ export default function StaffPortal({
             </div>
           ) : (
             <>
-              {/* Optional Quick-Apply Banner for Flexi/Student/Extra with active recurring availability */}
-              {isFlexiStudentExtra && currentEmployee?.recurringAvailability?.active && (
+              {/* Quick-Apply Banner for staff with active recurring availability */}
+              {currentEmployee?.recurringAvailability?.active && (
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-2xl border-2 border-blue-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-xl bg-blue-500 text-white flex items-center justify-center font-bold text-sm shrink-0">
@@ -2916,13 +3029,13 @@ export default function StaffPortal({
                     </div>
                     <div>
                       <h4 className="font-extrabold text-xs text-blue-950 uppercase tracking-tight">
-                        Vaste Beschikbaarheid Actief ({
+                        Vaste Wekelijkse Beschikbaarheid Actief ({
                           currentEmployee.recurringAvailability.frequency === 'every_week' ? 'Elke week' :
                           currentEmployee.recurringAvailability.frequency === 'even_weeks' ? 'Om de 2 weken (Even)' : 'Om de 2 weken (Oneven)'
                         })
                       </h4>
                       <p className="text-[11px] text-blue-800 font-medium">
-                        Wil je jouw vaste shiften overnemen voor geselecteerde <strong>Week {selectedWeek}</strong>?
+                        Wil je jouw vaste wekelijkse shiften overnemen voor geselecteerde <strong>Week {selectedWeek}</strong>?
                       </p>
                     </div>
                   </div>
@@ -2937,17 +3050,17 @@ export default function StaffPortal({
                 </div>
               )}
 
-              {/* Prompt to set fixed availability for Flexi/Student/Extra if not set yet */}
-              {isFlexiStudentExtra && !currentEmployee?.recurringAvailability?.active && (
+              {/* Prompt to set fixed recurring availability if not set yet */}
+              {!currentEmployee?.recurringAvailability?.active && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 p-4 rounded-2xl border-2 border-orange-200/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <span className="text-xl">🔁</span>
                     <div>
                       <h4 className="font-extrabold text-xs text-orange-950 uppercase tracking-tight">
-                        Werk je vaak op vaste dagen/uren ({currentEmployee?.statuut})?
+                        Werk je vaak op vaste dagen of uren ({currentEmployee?.name})?
                       </h4>
                       <p className="text-[11px] text-orange-900 font-medium">
-                        Stel je vaste shiften éénmalig in via 'Vaste Beschikbaarheid', zodat je ze niet elke week opnieuw hoeft in te vullen!
+                        Stel je vaste beschikbaarheid éénmalig in via 'Vaste Beschikbaarheid', zodat deze elke week automatisch terugkeert!
                       </p>
                     </div>
                   </div>
@@ -2956,7 +3069,7 @@ export default function StaffPortal({
                     onClick={() => setAvailViewMode('recurring')}
                     className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-black uppercase tracking-tight rounded-xl transition cursor-pointer shrink-0 shadow-xs"
                   >
-                    <span>Vaste Shiften Instellen 🔁</span>
+                    <span>Vaste Beschikbaarheid Instellen 🔁</span>
                   </button>
                 </div>
               )}

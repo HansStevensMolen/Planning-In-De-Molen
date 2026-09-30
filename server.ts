@@ -2,6 +2,7 @@ import "./src/utils/fixDirname";
 import express, { Request, Response } from "express";
 import path from "path";
 import dotenv from "dotenv";
+import { execSync } from "child_process";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -59,6 +60,21 @@ async function startServer() {
     } catch (err: any) {
       console.error("Fout bij downloaden van .ics bestand:", err);
       return res.status(500).send("Fout bij genereren van kalenderbestand.");
+    }
+  });
+
+  // Codebase ZIP export endpoint voor GitHub / Backup
+  app.get("/api/export-zip", (_req: Request, res: Response) => {
+    try {
+      const zipPath = "/tmp/cafe-in-de-molen-project.zip";
+      execSync("git archive --format=zip -o " + zipPath + " HEAD", { cwd: process.cwd() });
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", 'attachment; filename="cafe-in-de-molen-codebase.zip"');
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      return res.sendFile(zipPath);
+    } catch (err: any) {
+      console.error("Fout bij exporteren zip:", err);
+      return res.status(500).send("Fout bij genereren van ZIP bestand.");
     }
   });
 
