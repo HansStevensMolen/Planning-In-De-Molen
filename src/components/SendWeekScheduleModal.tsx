@@ -7,6 +7,7 @@ import {
   Share2, 
   Bell, 
   Printer, 
+  Download,
   CheckCircle2, 
   Sparkles, 
   AlertCircle,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Shift, Employee, Notice } from '../types';
 import { CURRENT_WEEK_NUMBER, getWeekMeta } from '../utils/weekUtils';
+import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 
 interface SendWeekScheduleModalProps {
   isOpen: boolean;
@@ -67,7 +69,7 @@ export default function SendWeekScheduleModal({
   const handleBroadcastNotice = () => {
     if (onPostNotice) {
       const title = `📢 Planning Week ${selectedWeek} (${weekMeta.dateRange}) staat online!`;
-      const content = `Beste teamleden, de officiële diensten voor Week ${selectedWeek} (${weekMeta.dateRange}) zijn definitief gepubliceerd door Hans Stevens. Bekijk je ingeplande uren in het portaal en bevestig je diensten als 'Gezien'!`;
+      const content = `Beste teamleden, de officiële diensten voor Week ${selectedWeek} (${weekMeta.dateRange}) zijn definitief gepubliceerd. Bekijk je ingeplande uren in het portaal en bevestig je diensten als 'Gezien'!\n\nGroeten,\nHans`;
       onPostNotice(title, content, 'planning');
       setSentNoticeToast(`Notificatie voor Week ${selectedWeek} succesvol geplaatst op het prikbord en verzonden naar het personeel!`);
       setTimeout(() => setSentNoticeToast(null), 4000);
@@ -348,33 +350,50 @@ export default function SendWeekScheduleModal({
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 text-slate-800">
                     <div className="w-8 h-8 rounded-xl bg-slate-800 text-white flex items-center justify-center shrink-0 shadow-xs">
-                      <Printer size={16} />
+                      <Download size={16} />
                     </div>
                     <span className="font-black text-xs uppercase tracking-tight text-slate-900">
-                      A4 Print / PDF
+                      A4 Print / PDF Weekplanning
                     </span>
                   </div>
                   <h4 className="text-sm font-black text-slate-900">
-                    Print Week {selectedWeek} voor Keuken/Café
+                    PDF Weekplanning Week {selectedWeek}
                   </h4>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Download of print direct een overzichtelijk A4 weekrooster om op te hangen in het café of de keuken.
+                    Download de weekplanning in de officiële In De Molen layout (7 pagina's A4 Liggend met oranje headers en 30-minuten tijdsblokken).
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onOpenPrintModal) {
-                      onOpenPrintModal();
-                      onClose();
-                    }
-                  }}
-                  className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer active:scale-95"
-                >
-                  <Printer size={14} />
-                  <span>Print PDF Rooster (Week {selectedWeek}) 🖨️</span>
-                </button>
+                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedWeek);
+                      downloadInDeMolenPdf(selectedWeek, employees, weekShifts);
+                      setSentNoticeToast(`PDF Weekplanning voor Week ${selectedWeek} (7 pagina's in officiële layout) is succesvol gedownload!`);
+                    }}
+                    className="flex-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                    title={`Download direct de complete Week ${selectedWeek} planning als PDF in de officiële In De Molen layout`}
+                  >
+                    <Download size={14} />
+                    <span>Download PDF (Origineel) 📥</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onOpenPrintModal) {
+                        onOpenPrintModal();
+                        onClose();
+                      }
+                    }}
+                    className="py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs uppercase tracking-tight rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                    title="Open het print- en voorvertoningsvenster"
+                  >
+                    <Printer size={14} />
+                    <span>Print / Bekijk 🖨️</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

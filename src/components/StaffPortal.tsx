@@ -49,6 +49,7 @@ import { Employee, Shift, Notice, SwapRequest, EmployeeAvailability, DayAvailabi
 import InDeMolenLogo from './InDeMolenLogo';
 import StaffProfileModal from './StaffProfileModal';
 import SchedulePrintModal from './SchedulePrintModal';
+import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import StaffLogin from './StaffLogin';
 import StaffShiftAlarmModal from './StaffShiftAlarmModal';
 import OpenShiftPopUpModal from './OpenShiftPopUpModal';
@@ -1962,8 +1963,20 @@ export default function StaffPortal({
                 <span className="text-[9px] text-orange-600 font-black bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md uppercase tracking-tight animate-pulse">Live</span>
               </div>
 
-              {/* Print PDF button */}
+              {/* Print PDF & Download PDF buttons */}
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const weekShifts = shifts.filter(s => (s.weekNumber || 41) === selectedRosterWeek && s.status === 'published');
+                    downloadInDeMolenPdf(selectedRosterWeek, employees, weekShifts);
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+                  title="Download direct de officiële planning als PDF in de originele In De Molen layout"
+                >
+                  <Download size={13} />
+                  <span>Download PDF 📥</span>
+                </button>
 
                 <button
                   type="button"

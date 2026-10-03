@@ -69,12 +69,13 @@ export interface Shift {
   day: number; // 0 = Maandag, 1 = Dinsdag, ..., 6 = Zondag
   startTime: string;
   endTime: string;
+  role?: string;
   notes?: string;
   acknowledged: boolean; // Has employee or manager confirmed?
   acknowledgedBy?: string; // Who confirmed (e.g. employee or manager)
   acknowledgedAt?: number; // Timestamp of confirmation
-  status: 'published' | 'draft';
-  updatedAt: number;
+  status: 'published' | 'draft' | 'archived';
+  updatedAt?: number;
   notifiedViaEmail?: boolean;
   notifiedViaWhatsApp?: boolean;
   isOpenShift?: boolean; // Shift opengesteld voor intekening

@@ -61,6 +61,7 @@ import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
 import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
+import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
 import StaffAvailabilityChart from './StaffAvailabilityChart';
@@ -215,6 +216,7 @@ export default function ManagerDashboard({
   // Six-weeks horizon states
   const [showSixWeeksModal, setShowSixWeeksModal] = useState(false);
   const [sixWeeksSuccessMsg, setSixWeeksSuccessMsg] = useState<string | null>(null);
+  const [pdfDownloadToast, setPdfDownloadToast] = useState<string | null>(null);
 
   // Dynamic active weeks and archive management
   const [extraWeekNumbers, setExtraWeekNumbers] = useState<number[]>([]);
@@ -1672,9 +1674,23 @@ export default function ManagerDashboard({
 
               <button
                 type="button"
+                onClick={() => {
+                  downloadInDeMolenPdf(selectedManagerWeek, employees, activeWeekShifts);
+                  setPdfDownloadToast(`Officiële weekplanning PDF (Week ${selectedManagerWeek}, alle 7 dagen) is gedownload in de originele In De Molen layout!`);
+                  setTimeout(() => setPdfDownloadToast(null), 6000);
+                }}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
+                title={`Download direct de officiële weekplanning Week ${selectedManagerWeek} als PDF (in de originele In De Molen layout van 7 pagina's)`}
+              >
+                <Download size={15} />
+                <span>Download PDF 📥</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowSchedulePrintModal(true)}
                 className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Print het huidige weekrooster in een strak, print-vriendelijk formaat voor in de keuken van het café"
+                title="Print het huidige weekrooster of bekijk het interactieve raster in een strak formaat"
               >
                 <Printer size={15} />
                 <span>Print PDF 🖨️</span>
@@ -1798,6 +1814,28 @@ export default function ManagerDashboard({
               <button 
                 type="button" 
                 onClick={() => setSixWeeksSuccessMsg(null)}
+                className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Success message banner for PDF download */}
+          {pdfDownloadToast && (
+            <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-3xl p-4 flex items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-emerald-600 text-white rounded-2xl shrink-0">
+                  <Download size={18} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black uppercase text-emerald-900 tracking-tight">PDF Weekplanning Gedownload</h4>
+                  <p className="text-xs font-bold leading-relaxed text-emerald-800">{pdfDownloadToast}</p>
+                </div>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setPdfDownloadToast(null)}
                 className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
               >
                 ✕
@@ -2098,9 +2136,23 @@ export default function ManagerDashboard({
 
               <button
                 type="button"
+                onClick={() => {
+                  downloadInDeMolenPdf(selectedManagerWeek, employees, activeWeekShifts);
+                  setPdfDownloadToast(`Officiële weekplanning PDF (Week ${selectedManagerWeek}, alle 7 dagen) is gedownload in de originele In De Molen layout!`);
+                  setTimeout(() => setPdfDownloadToast(null), 6000);
+                }}
+                className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-sm active:scale-95"
+                title={`Download direct de officiële planning van Week ${selectedManagerWeek} als PDF (in de originele In De Molen layout van 7 pagina's)`}
+              >
+                <Download size={14} />
+                <span>Download PDF 📥</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowSchedulePrintModal(true)}
                 className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-xs active:scale-95"
-                title={`Print Week ${selectedManagerWeek} als strakke PDF voor in de keuken van het café`}
+                title={`Print Week ${selectedManagerWeek} of bekijk het interactieve weekrooster`}
               >
                 <Printer size={14} className="text-rose-600" />
                 <span>Print PDF (Keuken/Café)</span>
@@ -6453,7 +6505,7 @@ export default function ManagerDashboard({
                             const raw = currentAssignedEmp.phone.replace(/[^0-9]/g, '');
                             const intlP = (raw.startsWith('0') && raw.length === 10) ? '32' + raw.substring(1) : raw;
                             const waMsg = encodeURIComponent(
-                              `Hallo ${currentAssignedEmp.name}! 👋\n\nHerinnering vanuit In De Molen voor je shift:\n📅 ${dayName} ${dayInfo.shortDate}\n⏰ ${selectedShift.startTime} - ${selectedShift.endTime} (${deptLabel})\n\nGelieve je aanwezigheid tijdig te bevestigen in het portaal. Tot dan!`
+                              `Hallo ${currentAssignedEmp.name}! 👋\n\nHerinnering voor je shift:\n📅 ${dayName} ${dayInfo.shortDate}\n⏰ ${selectedShift.startTime} - ${selectedShift.endTime} (${deptLabel})\n\nGelieve je aanwezigheid tijdig te bevestigen in het personeelsportaal. Tot dan!\n\nGroeten,\nHans`
                             );
                             window.open(`https://wa.me/${intlP}?text=${waMsg}`, '_blank');
                           }}

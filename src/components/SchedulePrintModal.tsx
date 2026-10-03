@@ -22,6 +22,7 @@ import {
 import { Employee, Shift, Department } from '../types';
 import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
 import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
+import { downloadInDeMolenPdf, buildInDeMolenDayGridData } from '../utils/inDeMolenPdfGenerator';
 
 interface SchedulePrintModalProps {
   isOpen: boolean;
@@ -60,6 +61,8 @@ export default function SchedulePrintModal({
     'Dienst ruilen? Gelieve tijdig door te geven via het personeelsportaal of aan Hans (016/46.13.00).'
   );
   const [printSuccessNotice, setPrintSuccessNotice] = useState<string | null>(null);
+  const [activeLayoutTab, setActiveLayoutTab] = useState<'grid' | 'classic'>('grid');
+  const [gridDayIndex, setGridDayIndex] = useState<number>(0);
 
   const printAreaRef = useRef<HTMLDivElement>(null);
 
@@ -149,6 +152,10 @@ export default function SchedulePrintModal({
 
   // Trigger print dialog
   const handlePrint = () => {
+    if (activeLayoutTab === 'grid') {
+      handleOpenInNewTab();
+      return;
+    }
     try {
       window.print();
       setPrintSuccessNotice('Printopdracht verstuurd. Kies "Opslaan als PDF" in het dialoogvenster om als PDF op te slaan.');
@@ -159,6 +166,64 @@ export default function SchedulePrintModal({
 
   // Generate self-contained standalone HTML document with complete CSS styling embedded
   const generateStandaloneHTML = (): string => {
+    if (activeLayoutTab === 'grid') {
+      const daysHtml = [0, 1, 2, 3, 4, 5, 6].map(dIdx => {
+        const grid = buildInDeMolenDayGridData(selectedWeek, dIdx, employees, weekShifts);
+        const rowsHtml = grid.rows.map(r => `
+          <tr>
+            <td style="border: 1px solid #000; padding: 2px 6px; font-weight: ${r.isSluit ? 'bold' : 'normal'}; background: #fff; text-align: left; font-size: 10px; width: 110px;">${r.slotLabel}</td>
+            ${r.cells.map((cell, cIdx) => {
+              const bg = cIdx < grid.activeColSpan ? '#e5e7eb' : '#ffffff';
+              return `<td style="border: 1px solid #000; padding: 2px 6px; background: ${bg}; font-size: 10px; text-align: left;">${cell}</td>`;
+            }).join('')}
+          </tr>
+        `).join('');
+
+        const emptyHeaderCols = Array.from({ length: Math.max(0, grid.totalColumns - 1 - grid.activeColSpan) })
+          .map(() => `<th style="border: 1px solid #000; background: #fff; width: 80px;"></th>`).join('');
+
+        return `
+          <div class="page-container" style="page-break-after: always; break-after: page; margin-bottom: 20px;">
+            <table style="border-collapse: collapse; border: 1.5px solid #000; width: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+              <thead>
+                <tr>
+                  <th style="border: 1px solid #000; background: #fff; width: 110px;"></th>
+                  <th colspan="${grid.activeColSpan}" style="border: 1px solid #000; background: #ff7f00; color: #000; font-size: 13px; font-weight: 800; padding: 6px; text-align: center;">${grid.headerTitle}</th>
+                  ${emptyHeaderCols}
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }).join('');
+
+      return `<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <title>In De Molen - Weekrooster Week ${selectedWeek}</title>
+  <style>
+    @page { size: A4 landscape; margin: 8mm; }
+    *, *:before, *:after { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 10px; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .page-container { page-break-after: always; break-after: page; }
+    @media print { .page-container:last-child { page-break-after: avoid; break-after: avoid; } }
+  </style>
+</head>
+<body>
+  ${daysHtml}
+  <script>
+    window.onload = function() {
+      setTimeout(function() { window.print(); }, 400);
+    };
+  </script>
+</body>
+</html>`;
+    }
+
     const printContent = printAreaRef.current ? printAreaRef.current.innerHTML : '';
     const deptTitle = selectedDepartment === 'keuken' 
       ? 'KEUKENROOSTER' 
@@ -413,6 +478,19 @@ export default function SchedulePrintModal({
           <div className="flex items-center space-x-2 self-end md:self-center flex-wrap">
             <button
               type="button"
+              onClick={() => {
+                downloadInDeMolenPdf(selectedWeek, employees, weekShifts);
+                setPrintSuccessNotice(`PDF voor Week ${selectedWeek} (7 pagina's A4 Liggend in officiële In De Molen layout) is succesvol gedownload!`);
+              }}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-2 shadow-lg shadow-emerald-950/30 transition active:scale-95 cursor-pointer"
+              title="Download direct de weekplanning als PDF (7 pagina's A4 Liggend in de officiële In De Molen layout)"
+            >
+              <Download size={16} />
+              <span>Download PDF (Originele Layout) 📥</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handlePrint}
               className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-2 shadow-lg shadow-orange-950/30 transition active:scale-95 cursor-pointer"
               title="Start direct het afdruk- of PDF-venster"
@@ -473,6 +551,39 @@ export default function SchedulePrintModal({
         <div className="bg-orange-50/70 border-b border-orange-200 p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0 print:hidden">
           <div className="flex flex-wrap items-center gap-3">
             
+            {/* Layout view toggle */}
+            <div className="flex items-center space-x-1.5">
+              <span className="font-black text-slate-700 uppercase tracking-wider text-[11px]">Weergave:</span>
+              <div className="inline-flex rounded-xl bg-white border-2 border-orange-300 p-0.5 shadow-xs">
+                <button
+                  type="button"
+                  onClick={() => setActiveLayoutTab('grid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 ${
+                    activeLayoutTab === 'grid' 
+                      ? 'bg-orange-600 text-white shadow-xs' 
+                      : 'text-slate-700 hover:bg-orange-50'
+                  }`}
+                  title="Originele In De Molen weekplanning raster per dag (A4 Liggend met oranje header)"
+                >
+                  <Sparkles size={13} className={activeLayoutTab === 'grid' ? 'text-amber-300' : 'text-orange-500'} />
+                  <span>Originele PDF Grid (7 Dagen)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveLayoutTab('classic')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 ${
+                    activeLayoutTab === 'classic' 
+                      ? 'bg-orange-600 text-white shadow-xs' 
+                      : 'text-slate-700 hover:bg-orange-50'
+                  }`}
+                  title="Klassieke printlijst voor aan de muur"
+                >
+                  <FileText size={13} />
+                  <span>Klassieke Lijst</span>
+                </button>
+              </div>
+            </div>
+
             {/* Format preset selector */}
             <div className="flex items-center space-x-1.5">
               <span className="font-black text-slate-700 uppercase tracking-wider text-[11px]">Formaat:</span>
@@ -604,9 +715,120 @@ export default function SchedulePrintModal({
         {/* Printable Canvas Area */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 bg-slate-100 print:bg-white print:p-0 print:overflow-visible">
           
-          <div 
-            ref={printAreaRef}
-            id="canteen-print-area"
+          {activeLayoutTab === 'grid' ? (
+            /* --- IN DE MOLEN ORIGINELE PDF GRID PREVIEW --- */
+            <div className="max-w-6xl mx-auto space-y-4">
+              {/* Day selection tabs & Download CTA */}
+              <div className="bg-white border-2 border-orange-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                  {DAYS_OF_WEEK.map((dName, dIdx) => {
+                    const dGrid = buildInDeMolenDayGridData(selectedWeek, dIdx, employees, weekShifts);
+                    const isSel = gridDayIndex === dIdx;
+                    return (
+                      <button
+                        key={dName}
+                        type="button"
+                        onClick={() => setGridDayIndex(dIdx)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5 active:scale-95 ${
+                          isSel
+                            ? 'bg-[#ff7f00] text-black shadow-md ring-2 ring-orange-400 font-extrabold scale-[1.02]'
+                            : 'bg-slate-100 text-slate-700 hover:bg-orange-50 border border-slate-200'
+                        }`}
+                      >
+                        <span>{dGrid.headerTitle}</span>
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${isSel ? 'bg-black text-white' : 'bg-slate-200 text-slate-700'}`}>
+                          {dGrid.employees.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadInDeMolenPdf(selectedWeek, employees, weekShifts, gridDayIndex);
+                      setPrintSuccessNotice(`PDF voor ${DAYS_OF_WEEK[gridDayIndex]} succesvol gedownload!`);
+                    }}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold uppercase transition flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                    title={`Download alleen de pagina van ${DAYS_OF_WEEK[gridDayIndex]} als PDF`}
+                  >
+                    <Download size={14} />
+                    <span>Download Dag ({DAYS_OF_WEEK[gridDayIndex]})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadInDeMolenPdf(selectedWeek, employees, weekShifts);
+                      setPrintSuccessNotice(`Weekplanning PDF (Week ${selectedWeek}, alle 7 pagina's) is succesvol gedownload in de officiële In De Molen layout!`);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95"
+                    title="Download het complete weekrooster met alle 7 dagen als 1 PDF document"
+                  >
+                    <Download size={15} />
+                    <span>Download Alle 7 Dagen (PDF) 📥</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Exact Table Canvas matching the screenshot */}
+              {(() => {
+                const currentGrid = buildInDeMolenDayGridData(selectedWeek, gridDayIndex, employees, weekShifts);
+                return (
+                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-300 overflow-x-auto">
+                    <div className="mb-2.5 flex items-center justify-between text-xs text-slate-500 font-medium">
+                      <span>📄 Pagina {gridDayIndex + 1} van 7 • <strong>{currentGrid.headerTitle}</strong></span>
+                      <span>A4 Liggend (Landscape) • {currentGrid.employees.length} medewerkers • 30-minuten tijdsblokken</span>
+                    </div>
+
+                    <table className="border-collapse border border-black bg-white mx-auto text-xs shadow-xs w-full max-w-5xl">
+                      <thead>
+                        <tr>
+                          <th className="border border-black bg-white w-28 p-1.5"></th>
+                          <th
+                            colSpan={currentGrid.activeColSpan}
+                            className="border border-black bg-[#ff7f00] text-black font-extrabold text-sm py-2 px-4 text-center tracking-tight"
+                          >
+                            {currentGrid.headerTitle}
+                          </th>
+                          {Array.from({ length: Math.max(0, currentGrid.totalColumns - 1 - currentGrid.activeColSpan) }).map((_, i) => (
+                            <th key={i} className="border border-black bg-white w-24 p-1.5"></th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentGrid.rows.map((row, rIdx) => (
+                          <tr key={rIdx}>
+                            <td className={`border border-black bg-white px-2 py-1 text-[11px] whitespace-nowrap text-left ${row.isSluit ? 'font-bold' : 'text-slate-800'}`}>
+                              {row.slotLabel}
+                            </td>
+                            {row.cells.map((cellText, cIdx) => {
+                              const isActiveCol = cIdx < currentGrid.activeColSpan;
+                              return (
+                                <td
+                                  key={cIdx}
+                                  className={`border border-black px-2 py-0.5 text-[11px] text-black whitespace-nowrap text-left ${
+                                    isActiveCol ? 'bg-[#e5e7eb] font-medium' : 'bg-white'
+                                  }`}
+                                >
+                                  {cellText}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+          ) : (
+            <div 
+              ref={printAreaRef}
+              id="canteen-print-area"
             className={`bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-slate-300 max-w-5xl mx-auto print:max-w-none print:w-full print:border-none print:shadow-none print:p-0 text-slate-900 font-sans ${
               fontSize === 'large' ? 'text-[12.5px]' : 'text-[11px]'
             }`}
@@ -907,6 +1129,7 @@ export default function SchedulePrintModal({
             </div>
 
           </div>
+        )}
 
         </div>
 

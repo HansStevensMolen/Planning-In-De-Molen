@@ -235,10 +235,14 @@ export function generateAutomatedReminderText(
   shiftsAlerts: Shift24HourAlert[]
 ): string {
   const count = shiftsAlerts.length;
-  const shiftLines = shiftsAlerts.map(sa => {
+  const sortedAlerts = [...shiftsAlerts].sort((a, b) => {
+    if (Number(a.shift.day) !== Number(b.shift.day)) return Number(a.shift.day) - Number(b.shift.day);
+    return (a.shift.startTime || '').localeCompare(b.shift.startTime || '');
+  });
+  const shiftLines = sortedAlerts.map(sa => {
     const dept = (sa.shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken' : 'Zaal';
     return `• ${sa.dayLabel} (${sa.formattedDate}): ${sa.shift.startTime} - ${sa.shift.endTime} (${dept}) — ${sa.timeRemainingText}`;
   }).join('\n');
 
-  return `Beste ${employee.name},\n\nDit is een automatische herinnering van Café In De Molen:\nJe hebt ${count === 1 ? 'een dienst' : `${count} diensten`} binnen 24 uur die nog niet gemarkeerd zijn als 'Gezien'.\n\n${shiftLines}\n\nGelieve je aanwezigheid zo snel mogelijk te bevestigen in het personeelsportaal zodat het team weet dat je paraat staat!\n\nMet vriendelijke groeten,\nCafé In De Molen`;
+  return `Beste ${employee.name},\n\nDit is een herinnering vanuit Hans:\nJe hebt ${count === 1 ? 'een dienst' : `${count} diensten`} binnen 24 uur die nog niet gemarkeerd zijn als 'Gezien'.\n\n${shiftLines}\n\nGelieve je aanwezigheid zo snel mogelijk te bevestigen in het personeelsportaal zodat het team weet dat je paraat staat!\n\nMet vriendelijke groeten,\nHans`;
 }

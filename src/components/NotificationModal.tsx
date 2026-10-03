@@ -366,7 +366,11 @@ export default function NotificationModal({
                             {empShifts.length} dienst(en)
                           </span>
                           <span className="text-[10px] text-slate-400">
-                            {empShifts.map(s => ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'][s.day]).join(', ')}
+                            {empShifts
+                              .slice()
+                              .sort((a, b) => Number(a.day) - Number(b.day))
+                              .map(s => ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'][Number(s.day)])
+                              .join(', ')}
                           </span>
                         </div>
 

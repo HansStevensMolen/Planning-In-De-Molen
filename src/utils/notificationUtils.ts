@@ -1,6 +1,7 @@
 import { Employee, Shift, Department } from '../types';
-import { getDateOfISOWeek, CURRENT_WEEK_INFO, getDayDateInfo } from './weekUtils';
+import { getDateOfISOWeek, CURRENT_WEEK_INFO, getDayDateInfo, getWeekMeta } from './weekUtils';
 import { getShiftTimingDetails } from './employeeAgeUtils';
+import { parseStartTimeToMinutes } from './employeeSortUtils';
 
 const DAYS_OF_WEEK = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
 
@@ -267,7 +268,7 @@ export function generateOutlookWebUrl(employee: Employee, shift: Shift, weekNumb
 
   const dept = (shift.department || employee.department || 'zaal') === 'keuken' ? 'Keuken' : 'Zaal';
   const subject = encodeURIComponent(`Werkdienst In De Molen (${dept})`);
-  const body = encodeURIComponent(`Beste ${employee.name},\nJe bent ingepland voor de dienst ${shift.startTime} - ${shift.endTime} (${dept}) bij Eet-staminée In De Molen.\n${shift.notes ? 'Opmerking: ' + shift.notes : ''}`);
+  const body = encodeURIComponent(`Beste ${employee.name},\nJe bent ingepland voor de dienst ${shift.startTime} - ${shift.endTime} (${dept}) bij Eet-staminée In De Molen.\n${shift.notes ? 'Opmerking: ' + shift.notes : ''}\n\nMet vriendelijke groeten,\nHans`);
   const location = encodeURIComponent('Eet-staminée In De Molen');
 
   return `https://outlook.live.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&location=${location}&startdt=${startDt}&enddt=${endDt}`;
@@ -301,6 +302,8 @@ export function cleanBelgianPhoneNumber(phone: string): string {
 
 /**
  * Generate personal WhatsApp message text with direct clickable link
+ * Dagen staan altijd chronologisch in volgorde (Maandag t/m Zondag).
+ * Ondertekend met Hans.
  */
 export function generateWhatsAppMessageText(
   employee: Employee,
@@ -308,19 +311,31 @@ export function generateWhatsAppMessageText(
   weekNumber: number,
   appUrl?: string
 ): string {
-  const empShifts = shifts.filter(s => s.employeeId === employee.id && s.status === 'published');
+  // Sorteer shiften altijd chronologisch op dag (0=Maandag -> 6=Zondag) en vervolgens op starttijd
+  const empShifts = shifts
+    .filter(s => s.employeeId === employee.id && s.status === 'published')
+    .sort((a, b) => {
+      const dayA = Number(a.day);
+      const dayB = Number(b.day);
+      if (dayA !== dayB) return dayA - dayB;
+      return parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime);
+    });
   const dept = employee.department === 'keuken' ? 'Keuken' : 'Zaal';
   const effectiveAppUrl = appUrl || getShareableAppUrl();
+  const meta = getWeekMeta(weekNumber);
+  const dateRangeStr = meta?.dateRange ? ` (${meta.dateRange})` : '';
 
   let message = `*Hallo ${employee.name}!*\n\n`;
-  message += `Hier is jouw werkrooster voor *Week ${weekNumber}* bij *Eet-staminée In De Molen* (${dept}):\n\n`;
+  message += `Hier is jouw werkrooster voor *Week ${weekNumber}*${dateRangeStr} (${dept}):\n\n`;
 
   if (empShifts.length === 0) {
     message += `_Je hebt deze week geen geplande diensten._\n\n`;
   } else {
+    // Dagen altijd in chronologische volgorde: Maandag t/m Zondag
     empShifts.forEach(s => {
-      const dayName = DAYS_OF_WEEK[s.day];
-      const dateInfo = getDayDateInfo(weekNumber, s.day);
+      const dayIdx = Number(s.day);
+      const dayName = DAYS_OF_WEEK[dayIdx] || `Dag ${dayIdx + 1}`;
+      const dateInfo = getDayDateInfo(weekNumber, dayIdx);
       const shiftDept = (s.department || employee.department) === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
       message += `• *${dayName} ${dateInfo.shortDate}*: ${s.startTime} - ${s.endTime} (${shiftDept})${s.notes ? ` _[${s.notes}]_` : ''}\n`;
     });
@@ -330,7 +345,7 @@ export function generateWhatsAppMessageText(
   message += `Gelieve je shifts te bekijken en te bevestigen in het personeelsportaal.\n\n`;
   message += `📱 *Klik hier om de app te openen en te bevestigen:*\n`;
   message += `${effectiveAppUrl}\n\n`;
-  message += `Veel succes en tot snel!\n_Eet-staminée In De Molen_`;
+  message += `Veel succes en tot snel!\nGroeten,\nHans`;
 
   return message;
 }
@@ -355,6 +370,8 @@ export function generateWhatsAppUrl(
 
 /**
  * Generate a complete team schedule message for WhatsApp Group (Zaal or Keuken)
+ * Dagen staan altijd chronologisch in volgorde (Maandag t/m Zondag).
+ * Ondertekend met Hans.
  */
 export function generateTeamWhatsAppSummary(
   employees: Employee[],
@@ -363,11 +380,12 @@ export function generateTeamWhatsAppSummary(
   department: Department | 'alles',
   appUrl?: string
 ): string {
-  const deptTitle = department === 'keuken' ? '🍳 KEUKEN' : department === 'zaal' ? '🍽️ ZAAL' : '🍻 TEAM IN DE MOLEN';
+  const deptTitle = department === 'keuken' ? '🍳 KEUKEN' : department === 'zaal' ? '🍽️ ZAAL' : '🍻 TEAM';
   const effectiveAppUrl = appUrl || getShareableAppUrl();
+  const meta = getWeekMeta(weekNumber);
+  const dateRangeStr = meta?.dateRange ? ` (${meta.dateRange})` : '';
   
-  let message = `📋 *PLANNING WEEK ${weekNumber} — ${deptTitle}*\n`;
-  message += `Eet-staminée In De Molen\n`;
+  let message = `📋 *PLANNING WEEK ${weekNumber}${dateRangeStr} — ${deptTitle}*\n`;
   message += `══════════════════════════\n\n`;
 
   const filteredShifts = shifts.filter(s => {
@@ -378,8 +396,11 @@ export function generateTeamWhatsAppSummary(
     return shiftDept === department;
   });
 
+  // Dagen ALTIJD chronologisch in volgorde (Maandag t/m Zondag)
   DAYS_OF_WEEK.forEach((dayName, dayIndex) => {
-    const dayShifts = filteredShifts.filter(s => s.day === dayIndex);
+    const dayShifts = filteredShifts
+      .filter(s => Number(s.day) === dayIndex)
+      .sort((a, b) => parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime));
     const dateInfo = getDayDateInfo(weekNumber, dayIndex);
     message += `📅 *${dayName.toUpperCase()} (${dateInfo.shortDate})*\n`;
     if (dayShifts.length === 0) {
@@ -389,7 +410,8 @@ export function generateTeamWhatsAppSummary(
         const emp = employees.find(e => e.id === s.employeeId);
         const name = emp ? emp.name : 'Medewerker';
         const roleBadge = emp?.experience === 'Verantwoordelijke' ? ' ⭐' : '';
-        message += `  • ${name}${roleBadge}: ${s.startTime} - ${s.endTime}${s.notes ? ` (${s.notes})` : ''}\n`;
+        const deptTag = (s.department || emp?.department) === 'keuken' ? 'Keuken' : 'Zaal';
+        message += `  • ${name}${roleBadge}: ${s.startTime} - ${s.endTime} (${deptTag})${s.notes ? ` [${s.notes}]` : ''}\n`;
       });
       message += `\n`;
     }
@@ -398,13 +420,15 @@ export function generateTeamWhatsAppSummary(
   message += `══════════════════════════\n`;
   message += `⚠️ Gelieve je diensten z.s.m. te bekijken en te bevestigen:\n`;
   message += `🔗 ${effectiveAppUrl}\n\n`;
-  message += `Groeten, Beheer In De Molen`;
+  message += `Groeten,\nHans`;
 
   return message;
 }
 
 /**
  * Generate mailto link for sending email schedule
+ * Dagen staan altijd chronologisch in volgorde (Maandag t/m Zondag).
+ * Ondertekend met Hans.
  */
 export function generateMailtoUrl(
   employee: Employee,
@@ -412,18 +436,29 @@ export function generateMailtoUrl(
   weekNumber: number,
   appUrl?: string
 ): string {
-  const empShifts = shifts.filter(s => s.employeeId === employee.id && s.status === 'published');
+  // Sorteer shiften chronologisch op dag (0=Maandag -> 6=Zondag) en starttijd
+  const empShifts = shifts
+    .filter(s => s.employeeId === employee.id && s.status === 'published')
+    .sort((a, b) => {
+      const dayA = Number(a.day);
+      const dayB = Number(b.day);
+      if (dayA !== dayB) return dayA - dayB;
+      return parseStartTimeToMinutes(a.startTime) - parseStartTimeToMinutes(b.startTime);
+    });
+  const meta = getWeekMeta(weekNumber);
+  const dateRangeStr = meta?.dateRange ? ` (${meta.dateRange})` : '';
   const subject = encodeURIComponent(`Werkrooster Week ${weekNumber} — In De Molen`);
   const dept = employee.department === 'keuken' ? 'Keuken' : 'Zaal';
 
   let body = `Beste ${employee.name},\n\n`;
-  body += `Hierbij ontvang je jouw werkplanning voor Week ${weekNumber} bij Eet-staminée In De Molen (Afdeling: ${dept}):\n\n`;
+  body += `Hierbij ontvang je jouw werkplanning voor Week ${weekNumber}${dateRangeStr} (Afdeling: ${dept}):\n\n`;
 
   if (empShifts.length === 0) {
     body += `Je hebt deze week geen ingeplande diensten.\n\n`;
   } else {
     empShifts.forEach(s => {
-      const dayName = DAYS_OF_WEEK[s.day];
+      const dayIdx = Number(s.day);
+      const dayName = DAYS_OF_WEEK[dayIdx] || `Dag ${dayIdx + 1}`;
       const shiftDept = (s.department || employee.department) === 'keuken' ? 'Keuken' : 'Zaal';
       body += `• ${dayName}: ${s.startTime} - ${s.endTime} (${shiftDept})${s.notes ? ' [' + s.notes + ']' : ''}\n`;
     });
@@ -434,7 +469,7 @@ export function generateMailtoUrl(
   if (appUrl) {
     body += `Portaal URL: ${appUrl}\n\n`;
   }
-  body += `Met vriendelijke groeten,\nHans Stevens\nBeheerder Eet-staminée In De Molen`;
+  body += `Met vriendelijke groeten,\nHans`;
 
   return `mailto:${employee.email || ''}?subject=${subject}&body=${encodeURIComponent(body)}`;
 }

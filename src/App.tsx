@@ -560,8 +560,10 @@ export default function App() {
     );
   };
 
-  const shToLogTitle = (status: 'draft' | 'published') => {
-    return status === 'draft' ? 'Ontwerp-dienst gemaakt' : 'Dienst direct gepubliceerd';
+  const shToLogTitle = (status: 'draft' | 'published' | 'archived') => {
+    if (status === 'draft') return 'Ontwerp-dienst gemaakt';
+    if (status === 'archived') return 'Gearchiveerde dienst';
+    return 'Dienst direct gepubliceerd';
   };
 
   // Action: Update Shift details
@@ -841,7 +843,9 @@ export default function App() {
       subtitle: `Stuur de actuele weekplanning van Week ${targetWeek} direct via WhatsApp naar de teamgroep:`,
       defaultMessage: generateScheduleUpdateWhatsAppText({
         weekNumber: targetWeek,
-        shiftsCount: weekShifts.length
+        shiftsCount: weekShifts.length,
+        shifts: weekShifts,
+        employees: employees
       })
     });
   };

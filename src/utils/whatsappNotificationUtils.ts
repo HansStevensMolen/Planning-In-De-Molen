@@ -97,36 +97,82 @@ export function buildWhatsAppWebShareUrl(text: string, targetPhone?: string): st
 
 /**
  * Generates WhatsApp message for a schedule update or publish event
+ * Dagen worden altijd chronologisch in volgorde getoond (Maandag t/m Zondag).
+ * Ondertekend door Hans.
  */
 export function generateScheduleUpdateWhatsAppText(params: {
   weekNumber: number;
   shiftsCount?: number;
+  shifts?: Shift[];
+  employees?: Employee[];
+  department?: Department | 'alles';
   appUrl?: string;
   notes?: string;
 }): string {
-  const { weekNumber, shiftsCount, appUrl, notes } = params;
+  const { weekNumber, shiftsCount, shifts, employees, department, appUrl, notes } = params;
   const meta = getWeekMeta(weekNumber);
   const effectiveAppUrl = appUrl || getShareableAppUrl();
   const dateRangeStr = meta?.dateRange ? ` (${meta.dateRange})` : '';
 
-  let msg = `📋 *ROOSTER UPDATE — WEEK ${weekNumber}*\n`;
-  msg += `*Eet-staminée In De Molen*\n`;
+  const deptTitle = department === 'keuken' ? '🍳 KEUKEN' : department === 'zaal' ? '🍽️ ZAAL' : 'PLANNING';
+
+  let msg = `📋 *ROOSTER WEEK ${weekNumber}${dateRangeStr} — ${deptTitle}*\n`;
   msg += `══════════════════════════\n\n`;
   msg += `Hallo team! 👋\n\n`;
-  msg += `Het werkrooster voor *Week ${weekNumber}*${dateRangeStr} is zojuist bijgewerkt en officieel geplaatst in het personeelsportaal.\n\n`;
+  msg += `Hier is de werkplanning voor *Week ${weekNumber}*${dateRangeStr}.\n\n`;
 
-  if (shiftsCount && shiftsCount > 0) {
-    msg += `📊 *Aantal ingeplande diensten:* ${shiftsCount}\n`;
-  }
   if (notes) {
-    msg += `ℹ️ *Toelichting:* ${notes}\n`;
+    msg += `ℹ️ *Toelichting:* ${notes}\n\n`;
   }
 
-  msg += `\n📱 *Bekijk direct jouw uren & bevestig je diensten:*\n`;
+  // Dagen ALTIJD in strikte chronologische volgorde: Maandag (0) t/m Zondag (6)
+  if (shifts && shifts.length > 0 && employees && employees.length > 0) {
+    const DAYS_NL = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
+    
+    const filteredShifts = shifts.filter(s => {
+      if (s.status !== 'published') return false;
+      if (!department || department === 'alles') return true;
+      const emp = employees.find(e => e.id === s.employeeId);
+      const shiftDept = s.department || emp?.department || 'zaal';
+      return shiftDept === department;
+    });
+
+    DAYS_NL.forEach((dayName, dayIndex) => {
+      const dayShifts = filteredShifts
+        .filter(s => Number(s.day) === dayIndex)
+        .sort((a, b) => {
+          const timeA = (a.startTime || '00:00').replace(':', '');
+          const timeB = (b.startTime || '00:00').replace(':', '');
+          return parseInt(timeA, 10) - parseInt(timeB, 10);
+        });
+
+      const dateInfo = getDayDateInfo(weekNumber, dayIndex);
+      msg += `📅 *${dayName.toUpperCase()} (${dateInfo.shortDate})*\n`;
+
+      if (dayShifts.length === 0) {
+        msg += `  _Geen diensten gepland_\n\n`;
+      } else {
+        dayShifts.forEach(s => {
+          const emp = employees.find(e => e.id === s.employeeId);
+          const name = emp ? emp.name : 'Medewerker';
+          const roleBadge = emp?.experience === 'Verantwoordelijke' ? ' ⭐' : '';
+          const deptLabel = (s.department || emp?.department) === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal';
+          msg += `  • ${name}${roleBadge}: ${s.startTime} - ${s.endTime} (${deptLabel})${s.notes ? ` [${s.notes}]` : ''}\n`;
+        });
+        msg += `\n`;
+      }
+    });
+
+    msg += `📊 *Totaal:* ${filteredShifts.length} dienst(en)\n\n`;
+  } else if (shiftsCount && shiftsCount > 0) {
+    msg += `📊 *Aantal ingeplande diensten:* ${shiftsCount}\n\n`;
+  }
+
+  msg += `📱 *Bekijk direct jouw uren & bevestig je diensten in het portaal:*\n`;
   msg += `👉 ${effectiveAppUrl}\n\n`;
-  msg += `⚠️ _Gelieve je diensten z.s.m. te bekijken en in de app aan te duiden als gezien._\n`;
+  msg += `⚠️ _Gelieve je diensten z.s.m. te bekijken en in de app aan te duiden als 'Gezien'._\n`;
   msg += `Heb je vragen of wens je onderling te ruilen? Gebruik de ruilfunctie in het portaal!\n\n`;
-  msg += `Tot snel op de vloer! 🍻\n_Beheerder Hans Stevens_`;
+  msg += `Tot snel op de vloer! 🍻\nGroeten,\nHans`;
 
   return msg;
 }
@@ -140,14 +186,14 @@ export function generateSixWeeksUpdateWhatsAppText(targetWeeks: number[], appUrl
   const lastWeek = targetWeeks[targetWeeks.length - 1];
 
   let msg = `📅 *6 WEKEN PLANNING GEPUBLICEERD!*\n`;
-  msg += `*Eet-staminée In De Molen*\n`;
+  msg += `*In De Molen*\n`;
   msg += `══════════════════════════\n\n`;
   msg += `Hallo iedereen! 👋\n\n`;
   msg += `De planning voor de komende 6 weken (*Week ${firstWeek} t/m Week ${lastWeek}*) staat officieel live in ons personeelsportaal!\n\n`;
   msg += `📱 *Open de app om je shifts te bekijken:*\n`;
   msg += `👉 ${effectiveAppUrl}\n\n`;
   msg += `💡 *Tip:* Je kunt je diensten met 1 klik synchroniseren naar je Google, Apple of Outlook agenda.\n\n`;
-  msg += `Groeten,\n_Hans Stevens (Beheerder)_`;
+  msg += `Groeten,\nHans`;
 
   return msg;
 }
@@ -163,7 +209,7 @@ export function generateNoticeWhatsAppText(notice: Notice, appUrl?: string): str
     notice.category === 'wijziging' ? '🔄' : '📢';
 
   let msg = `${categoryEmoji} *NIEUW BERICHT: ${notice.title.toUpperCase()}*\n`;
-  msg += `*Eet-staminée In De Molen*\n`;
+  msg += `*In De Molen*\n`;
   msg += `══════════════════════════\n\n`;
   msg += `${notice.content}\n\n`;
   msg += `──────────────────────────\n`;
@@ -171,7 +217,7 @@ export function generateNoticeWhatsAppText(notice: Notice, appUrl?: string): str
   msg += `📅 *Datum:* ${notice.date}\n\n`;
   msg += `📱 *Reageer & lees meer in het personeelsportaal:*\n`;
   msg += `👉 ${effectiveAppUrl}\n\n`;
-  msg += `_Eet-staminée In De Molen_`;
+  msg += `Groeten, Hans`;
 
   return msg;
 }
@@ -195,7 +241,7 @@ export function generateShiftModificationWhatsAppText(params: {
   const icon = changeType === 'verwijderd' ? '❌' : changeType === 'toegevoegd' ? '➕' : '🔄';
 
   let msg = `${icon} *ROOSTER ${changeType.toUpperCase()}: WEEK ${weekNumber}*\n`;
-  msg += `*Eet-staminée In De Molen*\n`;
+  msg += `*In De Molen*\n`;
   msg += `══════════════════════════\n\n`;
   msg += `Beste ${employeeName},\n\n`;
   
@@ -210,7 +256,7 @@ export function generateShiftModificationWhatsAppText(params: {
 
   msg += `📱 *Controleer je actuele rooster in het portaal:*\n`;
   msg += `👉 ${effectiveAppUrl}\n\n`;
-  msg += `Met vriendelijke groeten,\n_Hans Stevens (Beheerder)_`;
+  msg += `Met vriendelijke groeten,\nHans`;
 
   return msg;
 }
