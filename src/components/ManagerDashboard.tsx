@@ -66,7 +66,7 @@ import ShiftReminderModal from './ShiftReminderModal';
 import StaffAvailabilityChart from './StaffAvailabilityChart';
 import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks, getEffectiveEmployeeAvailability, isRecurringApplicableToWeek, DAYS_FULL_NL } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
-import { sortEmployeesByFirstName, sortEmployeesByDayAvailability } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, sortEmployeesByDayAvailability, sortEmployeesByPlanningStatus, normalizeFacebookUrl } from '../utils/employeeSortUtils';
 import {
   calculateAge,
   formatBirthDate,
@@ -202,8 +202,15 @@ export default function ManagerDashboard({
   const [managerAvailDeptFilter, setManagerAvailDeptFilter] = useState<'all' | Department>('all');
   const [managerAvailStatuutFilter, setManagerAvailStatuutFilter] = useState<'all' | EmployeeStatuut>('all');
   const [managerAvailExperienceFilter, setManagerAvailExperienceFilter] = useState<'all' | ExperienceLevel>('all');
-  const [managerAvailSortDay, setManagerAvailSortDay] = useState<number | 'name'>('name');
+  const [managerAvailScheduledFilter, setManagerAvailScheduledFilter] = useState<'all' | 'scheduled' | 'unscheduled'>('all');
+  const [managerAvailSortDay, setManagerAvailSortDay] = useState<number | 'name' | 'scheduled_first' | 'unscheduled_first'>('name');
   const [showAvailabilityChart, setShowAvailabilityChart] = useState<boolean>(true);
+
+  // Planning overview & filter state for managers (Zaal & Keuken)
+  const [planningSearch, setPlanningSearch] = useState<string>('');
+  const [planningScheduledFilter, setPlanningScheduledFilter] = useState<'all' | 'scheduled' | 'unscheduled'>('all');
+  const [planningSort, setPlanningSort] = useState<number | 'name' | 'scheduled_first' | 'unscheduled_first'>('name');
+  const [showPlanningScheduledDrawer, setShowPlanningScheduledDrawer] = useState<boolean>(false);
 
   // Six-weeks horizon states
   const [showSixWeeksModal, setShowSixWeeksModal] = useState(false);
@@ -848,7 +855,7 @@ export default function ManagerDashboard({
       textColor: parts[2],
       email: newEmp.email || '',
       phone: newEmp.phone || '',
-      facebookUrl: newEmp.facebookUrl.trim() || undefined,
+      facebookUrl: normalizeFacebookUrl(newEmp.facebookUrl) || undefined,
       active: true,
       firstLoginComplete: true,
       pin: newEmp.pin.trim() || '1234',
@@ -939,14 +946,14 @@ export default function ManagerDashboard({
     const cleanPin = editEmpPin.trim() || '1234';
     onUpdateEmployee({
       ...emp,
-      name: editEmpName,
+      name: editEmpName.trim(),
       department: editEmpDepartment,
       statuut: editEmpStatuut,
       birthDate: editEmpBirthDate ? editEmpBirthDate : undefined,
       experience: editEmpExperience,
-      email: editEmpEmail,
-      phone: editEmpPhone,
-      facebookUrl: editEmpFacebook.trim() || undefined,
+      email: editEmpEmail.trim(),
+      phone: editEmpPhone.trim(),
+      facebookUrl: normalizeFacebookUrl(editEmpFacebook) || undefined,
       pin: cleanPin,
       role: editEmpRole
     });
@@ -1480,13 +1487,40 @@ export default function ManagerDashboard({
       {(activeSubTab === 'zaal' || activeSubTab === 'keuken') && (() => {
         const activeDept: Department = 'zaal';
         const isZaal = true;
-        const deptEmployees = sortEmployeesByFirstName(
-          employees.filter(emp => {
-            const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
-            const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
-            return matchStatuut && matchExperience;
-          })
+        const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+        const scheduledEmpIdsInWeek = new Set(
+          weekShifts.filter(s => s.employeeId && s.employeeId !== 'open_shift').map(s => s.employeeId)
         );
+        const allTeamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+        const scheduledTeamStaff = allTeamStaff.filter(e => scheduledEmpIdsInWeek.has(e.id));
+        const unscheduledTeamStaff = allTeamStaff.filter(e => !scheduledEmpIdsInWeek.has(e.id));
+
+        const baseFiltered = employees.filter(emp => {
+          if (emp.id === 'open_shift') return false;
+          const matchSearch = planningSearch.trim() === '' || emp.name.toLowerCase().includes(planningSearch.toLowerCase());
+          const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
+          const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
+          const isScheduled = scheduledEmpIdsInWeek.has(emp.id);
+          const matchScheduled = planningScheduledFilter === 'all'
+            ? true
+            : planningScheduledFilter === 'scheduled'
+              ? isScheduled
+              : !isScheduled;
+          return matchSearch && matchStatuut && matchExperience && matchScheduled && emp.id !== 'emp1';
+        });
+
+        let deptEmployees: Employee[] = [];
+        if (planningSort === 'name') {
+          deptEmployees = sortEmployeesByFirstName(baseFiltered);
+        } else if (planningSort === 'scheduled_first') {
+          deptEmployees = sortEmployeesByPlanningStatus(baseFiltered, selectedManagerWeek, shifts, true);
+        } else if (planningSort === 'unscheduled_first') {
+          deptEmployees = sortEmployeesByPlanningStatus(baseFiltered, selectedManagerWeek, shifts, false);
+        } else if (typeof planningSort === 'number') {
+          deptEmployees = sortEmployeesByDayAvailability(baseFiltered, planningSort, selectedManagerWeek, availabilities);
+        } else {
+          deptEmployees = sortEmployeesByFirstName(baseFiltered);
+        }
 
         return (
         <div className="space-y-4">
@@ -1506,6 +1540,54 @@ export default function ManagerDashboard({
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+              {/* Zoekbalk in planning */}
+              <div className="w-full sm:w-48 relative">
+                <input
+                  type="text"
+                  placeholder="Zoek medewerker..."
+                  value={planningSearch}
+                  onChange={(e) => setPlanningSearch(e.target.value)}
+                  className="w-full bg-white border-2 border-orange-200 text-slate-800 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+                {planningSearch && (
+                  <button
+                    onClick={() => setPlanningSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Sorteer dropdown (zoals in beschikbaarheden!) */}
+              <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                <label className="text-[10px] font-black uppercase text-slate-500 whitespace-nowrap">
+                  Sorteer:
+                </label>
+                <select
+                  value={planningSort === 'name' ? 'name' : planningSort.toString()}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'name' || val === 'scheduled_first' || val === 'unscheduled_first') {
+                      setPlanningSort(val);
+                    } else {
+                      setPlanningSort(parseInt(val, 10));
+                    }
+                  }}
+                  className="w-full sm:w-auto bg-orange-50 border-2 border-orange-300 text-orange-950 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none cursor-pointer shadow-xs"
+                  title="Sorteer het rooster op naam, wie al ingepland is, of op beschikbaarheid per dag (net zoals in de beschikbaarheden)"
+                >
+                  <option value="name">🔤 Standaard (A-Z)</option>
+                  <option value="scheduled_first">✅ Al ingepland eerst</option>
+                  <option value="unscheduled_first">⏳ Nog niet ingepland eerst</option>
+                  {DAYS_OF_WEEK.map((d, dIdx) => (
+                    <option key={dIdx} value={dIdx.toString()}>
+                      📅 {d} (Beschikbaar eerst, vaste eerst)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <select
                 value={selectedStatuutFilter}
                 onChange={(e) => setSelectedStatuutFilter(e.target.value as any)}
@@ -1529,6 +1611,20 @@ export default function ManagerDashboard({
                 <option value="Ervaren">Ervaren</option>
                 <option value="Verantwoordelijke">Verantwoordelijke</option>
               </select>
+
+              <button
+                type="button"
+                onClick={() => setShowPlanningScheduledDrawer(prev => !prev)}
+                className={`px-4 py-2 text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-sm transition active:scale-95 cursor-pointer tracking-tight border-2 ${
+                  showPlanningScheduledDrawer
+                    ? 'bg-amber-500 text-white border-amber-600'
+                    : 'bg-white hover:bg-orange-50 text-orange-950 border-orange-300'
+                }`}
+                title="Bekijk een overzichtelijk dashboard van wie al ingepland is en wie nog niet in Week "
+              >
+                <Users size={15} className={showPlanningScheduledDrawer ? 'text-white' : 'text-orange-600'} />
+                <span>Overzicht Ingepland ({scheduledTeamStaff.length}/{allTeamStaff.length})</span>
+              </button>
 
               <button
                 type="button"
@@ -2257,6 +2353,221 @@ export default function ManagerDashboard({
             );
           })()}
 
+          {/* Quick Status Filter bar: Alle / Al Ingepland / Nog Niet Ingepland in Planning */}
+          {(() => {
+            const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+            const scheduledStaffIds = new Set(currentWeekShifts.filter(s => s.employeeId && s.employeeId !== 'open_shift').map(s => s.employeeId));
+            const teamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+            const scheduledStaff = teamStaff.filter(e => scheduledStaffIds.has(e.id));
+            const unscheduledStaff = teamStaff.filter(e => !scheduledStaffIds.has(e.id));
+
+            return (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPlanningScheduledFilter("all")}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                        planningScheduledFilter === "all"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      <span>👥 Alle Medewerkers</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                        planningScheduledFilter === "all" ? "bg-slate-700 text-white" : "bg-white text-slate-700"
+                      }`}>
+                        {teamStaff.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPlanningScheduledFilter("scheduled")}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                        planningScheduledFilter === "scheduled"
+                          ? "bg-emerald-600 text-white shadow-xs"
+                          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300"
+                      }`}
+                    >
+                      <span>✅ Al Ingepland</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                        planningScheduledFilter === "scheduled" ? "bg-emerald-800 text-emerald-100" : "bg-emerald-200 text-emerald-950"
+                      }`}>
+                        {scheduledStaff.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPlanningScheduledFilter("unscheduled")}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                        planningScheduledFilter === "unscheduled"
+                          ? "bg-amber-500 text-white shadow-xs"
+                          : "bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300"
+                      }`}
+                    >
+                      <span>⏳ Nog Niet Ingepland</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                        planningScheduledFilter === "unscheduled" ? "bg-amber-700 text-amber-100" : "bg-amber-200 text-amber-950"
+                      }`}>
+                        {unscheduledStaff.length}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs font-bold text-slate-500">
+                      Toont <span className="font-black text-slate-800">{deptEmployees.length}</span> van {teamStaff.length} teamleden in rooster
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowPlanningScheduledDrawer(prev => !prev)}
+                      className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-950 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Users size={14} className="text-orange-700" />
+                      <span>{showPlanningScheduledDrawer ? 'Verberg Details ▲' : 'Bekijk Lijst Ingepland vs Niet Ingepland ▼'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Interactief overzicht van wie al ingepland is en wie nog niet */}
+                {showPlanningScheduledDrawer && (
+                  <div className="bg-gradient-to-br from-slate-50 to-orange-50/40 p-5 rounded-3xl border-2 border-orange-200 shadow-md space-y-4 animate-in fade-in slide-in-from-top-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2 border-b border-orange-200/80 pb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="p-2 bg-orange-500 text-white rounded-xl text-sm">📊</span>
+                        <div>
+                          <h4 className="text-sm font-black uppercase text-slate-900 tracking-tight">
+                            Overzicht Personeelsplanning Week {selectedManagerWeek}
+                          </h4>
+                          <p className="text-xs text-slate-500">
+                            Bekijk direct wie al diensten heeft en wie nog beschikbaar is om in te vullen.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowPlanningScheduledDrawer(false)}
+                        className="text-xs font-bold text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                      >
+                        ✕ Sluiten
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* 1. Al ingepland */}
+                      <div className="bg-white p-4 rounded-2xl border-2 border-emerald-200 shadow-2xs space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                            <h5 className="text-xs font-black uppercase tracking-tight text-emerald-950">
+                              ✅ Al Ingepland ({scheduledStaff.length} medewerkers)
+                            </h5>
+                          </div>
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                            {currentWeekShifts.length} shifts totaal
+                          </span>
+                        </div>
+
+                        {scheduledStaff.length === 0 ? (
+                          <p className="text-xs text-slate-400 italic py-2">
+                            Er is nog niemand ingepland voor Week {selectedManagerWeek}.
+                          </p>
+                        ) : (
+                          <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100">
+                            {scheduledStaff.map((emp) => {
+                              const empHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+                              const empShiftCount = currentWeekShifts.filter(s => s.employeeId === emp.id).length;
+                              return (
+                                <div key={emp.id} className="pt-1.5 flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-2 truncate">
+                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: emp.color }} />
+                                    <span className="font-black text-slate-800 truncate">{emp.name}</span>
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold">({emp.statuut})</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="text-[11px] font-mono font-bold text-emerald-900 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                      {empShiftCount} {empShiftCount === 1 ? 'dienst' : 'diensten'} • {empHours}u
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 2. Nog NIET ingepland */}
+                      <div className="bg-white p-4 rounded-2xl border-2 border-amber-300 shadow-2xs space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                            <h5 className="text-xs font-black uppercase tracking-tight text-amber-950">
+                              ⏳ Nog Niet Ingepland ({unscheduledStaff.length} medewerkers)
+                            </h5>
+                          </div>
+                          <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                            Kandidaten om in te vullen
+                          </span>
+                        </div>
+
+                        {unscheduledStaff.length === 0 ? (
+                          <p className="text-xs text-emerald-700 font-bold py-2 flex items-center gap-1">
+                            <Check size={14} className="stroke-[3]" />
+                            Geweldig! Alle medewerkers zijn ingepland voor deze week.
+                          </p>
+                        ) : (
+                          <div className="max-h-64 overflow-y-auto space-y-2 pr-1 divide-y divide-slate-100">
+                            {unscheduledStaff.map((emp) => {
+                              const eff = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
+                              const availDays = eff.availability?.days.filter(d => d.status === 'available' || d.status === 'preferred') || [];
+                              const availDayNames = availDays.map(d => DAYS_OF_WEEK[d.day]).join(', ');
+
+                              return (
+                                <div key={emp.id} className="pt-2 flex items-center justify-between gap-2 text-xs">
+                                  <div className="truncate flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 truncate">
+                                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: emp.color }} />
+                                      <span className="font-black text-slate-800 truncate">{emp.name}</span>
+                                      <span className="text-[10px] text-orange-700 bg-orange-100 px-1.5 py-0.2 rounded font-black uppercase">
+                                        {emp.statuut}
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                                      {availDays.length > 0 ? (
+                                        <span className="text-emerald-700 font-bold">✓ Beschikbaar: {availDayNames}</span>
+                                      ) : (
+                                        <span className="text-slate-400 italic">Geen voorkeur opgegeven</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const firstAvailDay = availDays[0]?.day ?? 4;
+                                      handleOpenAddShift(emp.id, firstAvailDay);
+                                    }}
+                                    className="px-2.5 py-1 text-[10px] font-black uppercase bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition active:scale-95 shrink-0 shadow-2xs cursor-pointer flex items-center gap-1"
+                                    title={`Plan ${emp.name} in voor week ${selectedManagerWeek}`}
+                                  >
+                                    <Plus size={11} className="stroke-[3]" />
+                                    <span>Plan In</span>
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Grid view - Vibrant Palette Style with Sticky Column (Names) and Sticky Row (Days) */}
           <div className="bg-white rounded-3xl shadow-md border-2 border-orange-100 overflow-hidden flex flex-col">
             <div className="overflow-auto max-h-[75vh] relative">
@@ -2452,8 +2763,23 @@ export default function ManagerDashboard({
                                   {empHours}u
                                 </span>
                               </div>
-                              <div className="text-[10px] font-black text-orange-600 uppercase tracking-wide truncate">
-                                {emp.statuut} ({emp.experience})
+                              <div className="flex items-center justify-between text-[10px] mt-0.5 gap-1">
+                                <span className="font-black text-orange-600 uppercase tracking-wide truncate">
+                                  {emp.statuut} ({emp.experience})
+                                </span>
+                                {(() => {
+                                  const count = shifts.filter(s => s.employeeId === emp.id && (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek).length;
+                                  return count > 0 ? (
+                                    <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.2 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 shrink-0">
+                                      <Check size={9} className="stroke-[3.5]" />
+                                      <span>{count} {count === 1 ? 'shift' : 'shifts'}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
+                                      <span>⏳ 0 shifts</span>
+                                    </span>
+                                  );
+                                })()}
                               </div>
 
                               {/* Visuele Waarschuwing Overwerk (> 45u) */}
@@ -2837,17 +3163,37 @@ export default function ManagerDashboard({
 
       {/* 1b. BESCHIKBAARHEID TAB - STRICTLY ADMIN ONLY */}
       {activeSubTab === 'beschikbaarheid' && (() => {
+        const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+        const scheduledEmpIdsInWeek = new Set(weekShifts.map(s => s.employeeId));
+        const allTeamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+        const scheduledTeamCount = allTeamStaff.filter(e => scheduledEmpIdsInWeek.has(e.id)).length;
+        const unscheduledTeamCount = allTeamStaff.filter(e => !scheduledEmpIdsInWeek.has(e.id)).length;
+
         const baseFiltered = employees.filter(emp => {
           const matchSearch = emp.name.toLowerCase().includes(managerAvailSearch.toLowerCase());
           const matchStatuut = managerAvailStatuutFilter === 'all' || emp.statuut === managerAvailStatuutFilter;
           const matchExperience = managerAvailExperienceFilter === 'all' || emp.experience === managerAvailExperienceFilter;
-          return matchSearch && matchStatuut && matchExperience && emp.id !== 'emp1'; // Don't show lead manager (Hans Stevens)
+          const isScheduled = scheduledEmpIdsInWeek.has(emp.id);
+          const matchScheduled = managerAvailScheduledFilter === 'all'
+            ? true
+            : managerAvailScheduledFilter === 'scheduled'
+              ? isScheduled
+              : !isScheduled;
+          return matchSearch && matchStatuut && matchExperience && matchScheduled && emp.id !== 'emp1';
         });
 
-        // Sorteren: standaard A-Z op naam of per dag (wie beschikbaar is bovenaan, beginnende met vaste werknemers)
-        const filteredEmployees = managerAvailSortDay === 'name'
-          ? sortEmployeesByFirstName(baseFiltered)
-          : sortEmployeesByDayAvailability(baseFiltered, managerAvailSortDay, selectedManagerWeek, availabilities);
+        let filteredEmployees: Employee[] = [];
+        if (managerAvailSortDay === 'name') {
+          filteredEmployees = sortEmployeesByFirstName(baseFiltered);
+        } else if (managerAvailSortDay === 'scheduled_first') {
+          filteredEmployees = sortEmployeesByPlanningStatus(baseFiltered, selectedManagerWeek, shifts, true);
+        } else if (managerAvailSortDay === 'unscheduled_first') {
+          filteredEmployees = sortEmployeesByPlanningStatus(baseFiltered, selectedManagerWeek, shifts, false);
+        } else if (typeof managerAvailSortDay === 'number') {
+          filteredEmployees = sortEmployeesByDayAvailability(baseFiltered, managerAvailSortDay, selectedManagerWeek, availabilities);
+        } else {
+          filteredEmployees = sortEmployeesByFirstName(baseFiltered);
+        }
 
         const totalSubmittedThisWeek = employees.filter(emp => 
           emp.id !== 'emp1' && availabilities.some(a => a.employeeId === emp.id && a.weekNumber === selectedManagerWeek)
@@ -3356,12 +3702,18 @@ export default function ManagerDashboard({
                     value={managerAvailSortDay === 'name' ? 'name' : managerAvailSortDay.toString()}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setManagerAvailSortDay(val === 'name' ? 'name' : parseInt(val, 10));
+                      if (val === 'name' || val === 'scheduled_first' || val === 'unscheduled_first') {
+                        setManagerAvailSortDay(val);
+                      } else {
+                        setManagerAvailSortDay(parseInt(val, 10));
+                      }
                     }}
                     className="w-full sm:w-auto bg-orange-50 border-2 border-orange-300 text-orange-950 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none cursor-pointer shadow-xs"
                     title="Sorteer de beschikbaarheden per dag: wie beschikbaar is komt bovenaan, beginnende met de vaste werknemers"
                   >
                     <option value="name">Standaard (A-Z op naam)</option>
+                    <option value="scheduled_first">✅ Al ingepland eerst</option>
+                    <option value="unscheduled_first">⏳ Nog niet ingepland eerst</option>
                     {DAYS_OF_WEEK.map((d, dIdx) => (
                       <option key={dIdx} value={dIdx.toString()}>
                         📅 {d} (Beschikbaar bovenaan, vaste eerst)
@@ -3371,6 +3723,66 @@ export default function ManagerDashboard({
                 </div>
               </div>
 
+            </div>
+
+            {/* Quick Status Filters for Availability Tab */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setManagerAvailScheduledFilter("all")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                    managerAvailScheduledFilter === "all"
+                      ? "bg-slate-900 text-white shadow-xs"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                  }`}
+                >
+                  <span>👥 Alle Personeel</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    managerAvailScheduledFilter === "all" ? "bg-slate-700 text-white" : "bg-white text-slate-700"
+                  }`}>
+                    {allTeamStaff.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setManagerAvailScheduledFilter("scheduled")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                    managerAvailScheduledFilter === "scheduled"
+                      ? "bg-emerald-600 text-white shadow-xs"
+                      : "bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300"
+                  }`}
+                >
+                  <span>✅ Al Ingepland</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    managerAvailScheduledFilter === "scheduled" ? "bg-emerald-800 text-emerald-100" : "bg-emerald-200 text-emerald-950"
+                  }`}>
+                    {scheduledTeamCount}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setManagerAvailScheduledFilter("unscheduled")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
+                    managerAvailScheduledFilter === "unscheduled"
+                      ? "bg-amber-500 text-white shadow-xs"
+                      : "bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300"
+                  }`}
+                >
+                  <span>⏳ Nog Niet Ingepland</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    managerAvailScheduledFilter === "unscheduled" ? "bg-amber-700 text-amber-100" : "bg-amber-200 text-amber-950"
+                  }`}>
+                    {unscheduledTeamCount}
+                  </span>
+                </button>
+              </div>
+
+              <div className="text-xs font-bold text-slate-500">
+                Toont <span className="font-black text-slate-800">{filteredEmployees.length}</span> van {allTeamStaff.length} teamleden
+              </div>
             </div>
 
             {/* Matrix Table with Sticky Column (Names) and Sticky Row (Days) */}
@@ -3454,6 +3866,9 @@ export default function ManagerDashboard({
                         const effectiveResult = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
                         const employeeAvail = effectiveResult.availability;
                         const isFromRecurring = effectiveResult.source === 'recurring';
+                        const empWeekShifts = shifts.filter(s => s.employeeId === emp.id && (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+                        const empWeekHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+                        const isScheduledThisWeek = empWeekShifts.length > 0;
                         
                         return (
                           <tr key={emp.id} className="hover:bg-orange-50/30 transition-all group">
@@ -3496,6 +3911,19 @@ export default function ManagerDashboard({
                                   <span className="text-[9px] font-black uppercase text-orange-600 tracking-wider block truncate">
                                     {emp.statuut} {emp.contractDaysPerWeek === 4 ? '(4d)' : ''} ({emp.experience})
                                   </span>
+                                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                                    {isScheduledThisWeek ? (
+                                      <span className="text-[9px] font-black text-emerald-950 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-2xs">
+                                        <span>✅</span>
+                                        <span>Ingepland: {empWeekShifts.length} {empWeekShifts.length === 1 ? 'shift' : 'shifts'} ({empWeekHours}u)</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] font-bold text-amber-950 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-2xs">
+                                        <span>⏳</span>
+                                        <span>Niet ingepland</span>
+                                      </span>
+                                    )}
+                                  </div>
                                   {employeeAvail ? (
                                     <div className="mt-0.5 flex flex-wrap items-center gap-1">
                                       {isFromRecurring ? (
@@ -3534,6 +3962,8 @@ export default function ManagerDashboard({
                             {/* Mon — Sun availability blocks */}
                             {Array.from({ length: 7 }).map((_, dayIdx) => {
                               const dayAvail = employeeAvail?.days.find(d => d.day === dayIdx);
+                              const dayEmpShifts = shifts.filter(s => s.employeeId === emp.id && s.day === dayIdx && (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
+                              const hasDayShift = dayEmpShifts.length > 0;
                               
                               let bgClass = 'bg-slate-50/50 text-slate-400';
                               let badgeText = 'Geen opgave';
@@ -3543,7 +3973,7 @@ export default function ManagerDashboard({
                               if (dayAvail) {
                                 hasNotes = !!dayAvail.notes?.trim();
                                 if (dayAvail.status === 'preferred') {
-                                  bgClass = 'bg-amber-50/70 border-amber-300 text-amber-950 font-extrabold';
+                                  bgClass = hasDayShift ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950' : 'bg-amber-50/70 border-amber-300 text-amber-950 font-extrabold';
                                   badgeText = 'Voorkeur';
                                   icon = '⭐';
                                 } else if (dayAvail.status === 'available') {
@@ -3551,7 +3981,7 @@ export default function ManagerDashboard({
                                   badgeText = 'Beschikbaar';
                                   icon = '✓';
                                 } else if (dayAvail.status === 'unavailable') {
-                                  bgClass = 'bg-rose-50/60 border-rose-300 text-rose-800';
+                                  bgClass = hasDayShift ? 'bg-amber-50 border-amber-300 text-amber-950' : 'bg-rose-50/60 border-rose-300 text-rose-800';
                                   badgeText = 'Niet-beschikbaar';
                                   icon = '✕';
                                 }
@@ -3561,25 +3991,57 @@ export default function ManagerDashboard({
                                 <td 
                                   key={dayIdx} 
                                   onClick={() => setSelectedAvailabilityDetail({ employee: emp, weekNumber: selectedManagerWeek })}
-                                  className={`px-2 py-2.5 border-r border-b border-slate-200/70 text-center min-w-[140px] cursor-pointer transition hover:bg-orange-100/50 hover:shadow-xs group/cell ${bgClass}`}
+                                  className={`px-2 py-2 border-r border-b border-slate-200/70 text-center min-w-[140px] cursor-pointer transition hover:bg-orange-100/50 hover:shadow-xs group/cell ${hasDayShift ? 'bg-emerald-50/40 ring-1 ring-emerald-300/60' : bgClass}`}
                                   title="Klik om alle weekdetails te bekijken"
                                 >
-                                  <div className="flex flex-col items-center justify-center space-y-1">
+                                  <div className="flex flex-col items-center justify-center space-y-1.5">
+                                    {/* 1. If scheduled on this day, show the shift card prominently! */}
+                                    {hasDayShift && (
+                                      <div className="w-full space-y-1">
+                                        {dayEmpShifts.map(sh => (
+                                          <div
+                                            key={sh.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleOpenEditShift(sh);
+                                            }}
+                                            className="w-full bg-gradient-to-r from-emerald-100 to-teal-50 border-2 border-emerald-500 text-emerald-950 rounded-xl p-1.5 shadow-2xs text-[10px] font-black flex flex-col gap-0.5 hover:shadow-sm transition cursor-pointer text-left ring-2 ring-emerald-300/40"
+                                            title="Ingeplande dienst (klik om te bewerken)"
+                                          >
+                                            <div className="flex items-center justify-between gap-1">
+                                              <span className="flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-950">
+                                                <span>📋</span>
+                                                <span>{sh.startTime} - {sh.endTime}</span>
+                                              </span>
+                                              <span className={`text-[8px] font-black uppercase px-1 rounded border ${sh.department === 'keuken' ? 'bg-amber-200 text-amber-950 border-amber-300' : 'bg-orange-200 text-orange-950 border-orange-300'}`}>
+                                                {sh.department === 'keuken' ? 'Keuk' : 'Zaal'}
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-[8px] text-emerald-800 font-bold">
+                                              <span>{sh.acknowledged ? '✓ Bevestigd' : '⏳ Niet bevestigd'}</span>
+                                              <span className="text-[7.5px] uppercase text-emerald-700 underline font-black">Bewerk ➔</span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                    {/* 2. Availability status */}
                                     <div className="flex items-center justify-center gap-1">
                                       {isFromRecurring && <span className="text-[10px]" title="Vaste herhaling">🔁</span>}
                                       {dayAvail ? (
                                         dayAvail.status === 'preferred' ? (
-                                          <span className="px-2 py-0.5 rounded-full bg-amber-200/95 text-amber-950 font-black text-[10.5px] inline-flex items-center gap-1 shadow-2xs border border-amber-300">
+                                          <span className="px-2 py-0.5 rounded-full bg-amber-200/95 text-amber-950 font-black text-[10px] inline-flex items-center gap-1 shadow-2xs border border-amber-300">
                                             <span>⭐</span>
                                             <span>Voorkeur</span>
                                           </span>
                                         ) : dayAvail.status === 'available' ? (
-                                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-950 font-black text-[10.5px] inline-flex items-center gap-1 shadow-2xs border border-emerald-300">
+                                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-950 font-black text-[10px] inline-flex items-center gap-1 shadow-2xs border border-emerald-300">
                                             <span>✓</span>
                                             <span>Beschikbaar</span>
                                           </span>
                                         ) : (
-                                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 font-black text-[10px] inline-flex items-center gap-0.5 shadow-2xs border border-rose-200">
+                                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 font-black text-[9.5px] inline-flex items-center gap-0.5 shadow-2xs border border-rose-200">
                                             <span>✕</span>
                                             <span>Niet-beschikbaar</span>
                                           </span>
@@ -3591,17 +4053,45 @@ export default function ManagerDashboard({
 
                                     {/* Uren / Tijdsvenster: Van wanneer tot wanneer */}
                                     {dayAvail && dayAvail.status !== 'unavailable' && (dayAvail.startTime || dayAvail.endTime) && (
-                                      <div className="inline-flex items-center gap-1 text-[10px] font-black text-slate-900 bg-white/95 border border-slate-300 px-2 py-0.5 rounded-md shadow-2xs">
-                                        <Clock size={10} className="text-orange-600 shrink-0" />
+                                      <div className="inline-flex items-center gap-1 text-[9.5px] font-black text-slate-900 bg-white/95 border border-slate-300 px-1.5 py-0.5 rounded-md shadow-2xs">
+                                        <Clock size={9} className="text-orange-600 shrink-0" />
                                         <span>{dayAvail.startTime || 'Open'} - {dayAvail.endTime || 'Sluit'}</span>
                                       </div>
                                     )}
 
                                     {/* Opmerkingen / Toelichting */}
                                     {hasNotes && (
-                                      <div className="text-[9px] text-slate-700 italic bg-amber-50/90 border border-amber-200 px-1.5 py-0.5 rounded text-center leading-tight max-w-[130px] truncate" title={dayAvail?.notes}>
-                                        💬 "{dayAvail?.notes}"
+                                      <div className="text-[9px] text-slate-600 bg-white/90 px-1.5 py-0.5 rounded border border-slate-200 truncate max-w-[120px] font-medium" title={dayAvail.notes}>
+                                        💬 {dayAvail.notes}
                                       </div>
+                                    )}
+
+                                    {/* Quick Plan in action if NOT yet scheduled on this day and is available/preferred */}
+                                    {!hasDayShift && (dayAvail?.status === 'available' || dayAvail?.status === 'preferred') && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedShift({
+                                            isNew: true,
+                                            employeeId: emp.id,
+                                            department: emp.department || 'zaal',
+                                            weekNumber: selectedManagerWeek,
+                                            day: dayIdx,
+                                            startTime: dayAvail?.startTime || '17:00',
+                                            endTime: dayAvail?.endTime || '01:00',
+                                            notes: dayAvail?.notes || '',
+                                            status: 'published',
+                                            acknowledged: false
+                                          });
+                                          setShowShiftModal(true);
+                                        }}
+                                        className="mt-0.5 px-2 py-0.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-[9px] font-black uppercase tracking-tight shadow-2xs active:scale-95 transition cursor-pointer flex items-center justify-center gap-1 mx-auto"
+                                        title={`Plan ${emp.name} direct in op ${DAYS_OF_WEEK[dayIdx]}`}
+                                      >
+                                        <Plus size={9} className="stroke-[3]" />
+                                        <span>Plan in</span>
+                                      </button>
                                     )}
                                   </div>
                                 </td>
@@ -4443,8 +4933,8 @@ export default function ManagerDashboard({
                           <span>Facebook Profiel URL</span>
                         </label>
                         <input
-                          type="url"
-                          placeholder="https://www.facebook.com/..."
+                          type="text"
+                          placeholder="bijv. facebook.com/naam of https://..."
                           value={editEmpFacebook}
                           onChange={(e) => setEditEmpFacebook(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-250 text-slate-850 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 font-semibold"
@@ -6209,8 +6699,8 @@ export default function ManagerDashboard({
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-600">Facebook URL</label>
                     <input
-                      type="url"
-                      placeholder="https://facebook.com/..."
+                      type="text"
+                      placeholder="bijv. facebook.com/naam of https://..."
                       value={newEmp.facebookUrl}
                       onChange={(e) => setNewEmp({ ...newEmp, facebookUrl: e.target.value })}
                       className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500"

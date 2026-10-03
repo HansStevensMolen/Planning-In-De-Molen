@@ -354,6 +354,9 @@ export function calculateEmployeeDiff(
       if (row.contractDaysPerWeek !== undefined && row.contractDaysPerWeek !== match.contractDaysPerWeek) {
         changes.push(`Dagen/week: "${match.contractDaysPerWeek ?? '-'}" ➔ "${row.contractDaysPerWeek}"`);
       }
+      if (row.facebookUrl !== undefined && row.facebookUrl !== match.facebookUrl) {
+        changes.push(`Facebook: "${match.facebookUrl || '-'}" ➔ "${row.facebookUrl || '-'}"`);
+      }
       if (row.active !== undefined && row.active !== match.active) {
         changes.push(`Status: ${match.active ? 'Actief' : 'Inactief'} ➔ ${row.active ? 'Actief' : 'Inactief'}`);
       }

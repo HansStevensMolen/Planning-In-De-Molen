@@ -425,7 +425,22 @@ export async function saveEmployeesToCloud(employees: Employee[]): Promise<void>
       updatedAtFormatted: formatDutchDateTime()
     });
     await setDoc(docRef, sanitizedPayload);
-    console.log(`[Firebase] Saved ${employees.length} employees to Firestore.`);
+    console.log(`[Firebase] Saved ${employees.length} employees to team/employees_list.`);
+
+    // Also sync individual documents in background batches of 25
+    try {
+      for (let i = 0; i < employees.length; i += 25) {
+        const chunk = employees.slice(i, i + 25);
+        const batch = writeBatch(db);
+        chunk.forEach(e => {
+          const empDocRef = doc(db, 'employees', e.id);
+          batch.set(empDocRef, sanitizeForFirestore(e), { merge: true });
+        });
+        await batch.commit();
+      }
+    } catch (batchErr) {
+      console.warn('[Firebase] Warning syncing individual employee docs:', batchErr);
+    }
   } catch (error) {
     console.warn('[Firebase] Could not save employees to Firestore:', error);
   }
@@ -439,6 +454,16 @@ export async function fetchEmployeesFromCloud(): Promise<Employee[] | null> {
       const data = docSnap.data();
       if (Array.isArray(data?.employees) && data.employees.length > 0) {
         return data.employees as Employee[];
+      }
+    }
+
+    // Fallback: fetch from employees collection
+    const empCol = await getDocs(collection(db, 'employees'));
+    if (!empCol.empty) {
+      const list: Employee[] = [];
+      empCol.forEach(d => list.push(d.data() as Employee));
+      if (list.length > 0) {
+        return list;
       }
     }
   } catch (error) {
@@ -744,7 +769,12 @@ export async function restoreFullTeamAndAvailabilitiesFromCloudArchive(): Promis
     empMap.set('emp1', { id: 'emp1', name: 'Hans Stevens', department: 'zaal' });
   }
 
-  // Construct full Employee objects
+  // Pre-load current cloud employees and INITIAL_EMPLOYEES to preserve all fields (birthDate, phone, facebookUrl, etc.)
+  const existingCloudEmployees = (await fetchEmployeesFromCloud()) || [];
+  const existingEmployeesMap = new Map<string, Employee>();
+  existingCloudEmployees.forEach(e => existingEmployeesMap.set(e.id, e));
+
+  // Construct full Employee objects, preserving any existing contact info and settings
   const restoredEmployees: Employee[] = [];
   const PALETTE_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#14b8a6'];
   const PALETTE_BGS = [
@@ -760,29 +790,40 @@ export async function restoreFullTeamAndAvailabilitiesFromCloudArchive(): Promis
 
   let colorIdx = 0;
   empMap.forEach((info, id) => {
+    const existing = existingEmployeesMap.get(id);
     const isManager = id === 'emp1' || info.name.toLowerCase().includes('hans stevens');
-    const color = isManager ? '#0d9488' : PALETTE_COLORS[colorIdx % PALETTE_COLORS.length];
-    const bg = isManager ? 'bg-teal-50 border-teal-200 text-teal-700' : PALETTE_BGS[colorIdx % PALETTE_BGS.length];
+    const color = existing?.color || (isManager ? '#0d9488' : PALETTE_COLORS[colorIdx % PALETTE_COLORS.length]);
+    const bg = existing?.textBgColor || (isManager ? 'bg-teal-50 border-teal-200 text-teal-700' : PALETTE_BGS[colorIdx % PALETTE_BGS.length]);
     const bgParts = bg.split(' ');
     colorIdx++;
 
     restoredEmployees.push({
       id,
-      name: info.name,
-      department: info.department,
-      statuut: isManager ? 'Vast' : (info.department === 'keuken' ? 'Flexi' : 'Student'),
-      experience: isManager ? 'Verantwoordelijke' : 'Ervaren',
-      contractDaysPerWeek: isManager ? 5 : 2,
-      role: isManager ? 'beheerder' : 'personeel',
+      name: existing?.name || info.name,
+      department: existing?.department || info.department,
+      statuut: existing?.statuut || (isManager ? 'Vast' : (info.department === 'keuken' ? 'Flexi' : 'Student')),
+      experience: existing?.experience || (isManager ? 'Verantwoordelijke' : 'Ervaren'),
+      contractDaysPerWeek: existing?.contractDaysPerWeek ?? (isManager ? 5 : 2),
+      role: existing?.role || (isManager ? 'beheerder' : 'personeel'),
       color,
-      textBgColor: `${bgParts[0]} ${bgParts[1]}`,
-      textColor: bgParts[2],
-      email: isManager ? 'hans.stevens@gemeenteschoolbierbeek.be' : undefined,
-      phone: isManager ? '0475 12 34 56' : undefined,
-      active: true,
-      firstLoginComplete: true,
-      pin: '1234'
+      textBgColor: existing?.textBgColor || `${bgParts[0]} ${bgParts[1]}`,
+      textColor: existing?.textColor || bgParts[2],
+      email: existing?.email || (isManager ? 'hans.stevens@gemeenteschoolbierbeek.be' : undefined),
+      phone: existing?.phone || (isManager ? '0474623264' : undefined),
+      birthDate: existing?.birthDate,
+      facebookUrl: existing?.facebookUrl,
+      avatarUrl: existing?.avatarUrl,
+      active: existing?.active ?? true,
+      firstLoginComplete: existing?.firstLoginComplete ?? true,
+      pin: existing?.pin || '1234'
     });
+  });
+
+  // Also include any employees in existingCloudEmployees that didn't have an availability record
+  existingCloudEmployees.forEach(e => {
+    if (!restoredEmployees.some(re => re.id === e.id)) {
+      restoredEmployees.push(e);
+    }
   });
 
   const restoredAvailabilities = Array.from(availMap.values());

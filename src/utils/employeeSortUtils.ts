@@ -1,5 +1,75 @@
-import { Employee, EmployeeAvailability } from '../types';
+import { Employee, EmployeeAvailability, Shift } from '../types';
 import { getEffectiveEmployeeAvailability } from './weekUtils';
+
+/**
+ * Normaliseert invoer voor een Facebook-profiel naar een volwaardige werkende Facebook URL.
+ * Accepteert gebruikersnamen (bijv. "milan.dresselaers"), @handles of volledige URLs.
+ */
+export function normalizeFacebookUrl(input?: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (trimmed.startsWith('facebook.com/') || trimmed.startsWith('www.facebook.com/')) {
+    return `https://${trimmed}`;
+  }
+  const cleanHandle = trimmed.replace(/^@/, '').replace(/^\/+/, '');
+  return `https://www.facebook.com/${cleanHandle}`;
+}
+
+/**
+ * Sorteert medewerkers op basis van hun planningsstatus in een specifieke week:
+ * - scheduledFirst = true: wie al minstens 1 shift heeft komt bovenaan, gerangschikt op aantal shifts (meeste eerst), dan statuut, dan alfabetisch.
+ * - scheduledFirst = false: wie nog 0 shifts heeft komt bovenaan, zodat de beheerder direct ziet wie nog ingepland moet worden!
+ */
+export function sortEmployeesByPlanningStatus(
+  employees: Employee[],
+  weekNumber: number,
+  shifts: Shift[],
+  scheduledFirst: boolean
+): Employee[] {
+  const scheduledCountMap = new Map<string, number>();
+  shifts.forEach(s => {
+    if ((s.weekNumber || 1) === weekNumber && s.employeeId && s.employeeId !== 'open_shift') {
+      scheduledCountMap.set(s.employeeId, (scheduledCountMap.get(s.employeeId) || 0) + 1);
+    }
+  });
+
+  return [...employees].sort((a, b) => {
+    const aCount = scheduledCountMap.get(a.id) || 0;
+    const bCount = scheduledCountMap.get(b.id) || 0;
+    const aIsSched = aCount > 0;
+    const bIsSched = bCount > 0;
+
+    if (scheduledFirst) {
+      if (aIsSched && !bIsSched) return -1;
+      if (!aIsSched && bIsSched) return 1;
+      if (aIsSched && bIsSched && aCount !== bCount) return bCount - aCount;
+    } else {
+      if (!aIsSched && bIsSched) return -1;
+      if (aIsSched && !bIsSched) return 1;
+    }
+
+    // Statuut rangorde: Vast (0), Flexi (1), Student (2), Extra (3)
+    const statuutRank = (s?: string) => {
+      if (s === 'Vast') return 0;
+      if (s === 'Flexi') return 1;
+      if (s === 'Student') return 2;
+      return 3;
+    };
+    const rankDiff = statuutRank(a.statuut) - statuutRank(b.statuut);
+    if (rankDiff !== 0) return rankDiff;
+
+    // Alfabetisch op voornaam
+    const aName = (a.name || '').trim();
+    const bName = (b.name || '').trim();
+    const aFirst = aName.split(/\s+/)[0] || '';
+    const bFirst = bName.split(/\s+/)[0] || '';
+    const firstComp = aFirst.localeCompare(bFirst, 'nl', { sensitivity: 'base' });
+    if (firstComp !== 0) return firstComp;
+    return aName.localeCompare(bName, 'nl', { sensitivity: 'base' });
+  });
+}
 
 /**
  * Garandeert dat elke medewerker in de lijst een uniek ID heeft.

@@ -88,14 +88,31 @@ const SHARED_APP_URL = typeof window !== 'undefined'
   : 'https://ais-pre-m2somphks3peywsj3udb6b-287536891405.europe-west3.run.app';
 
 export default function App() {
-  // Load state from localStorage or fallback to defaults
+  // Load state from localStorage or fallback to defaults (with intelligent field merging)
   const [employees, setEmployees] = useState<Employee[]>(() => {
     const saved = localStorage.getItem('cafe_employees');
     if (saved) {
       try {
         const parsed: Employee[] = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return sortEmployeesByFirstName(deduplicateEmployees(parsed));
+          const parsedMap = new Map(parsed.map(e => [e.id, e]));
+          const merged = INITIAL_EMPLOYEES.map(initEmp => {
+            const p = parsedMap.get(initEmp.id);
+            if (!p) return initEmp;
+            return {
+              ...initEmp,
+              ...p,
+              birthDate: p.birthDate || initEmp.birthDate,
+              phone: p.phone || initEmp.phone,
+              facebookUrl: p.facebookUrl || initEmp.facebookUrl
+            };
+          });
+          parsed.forEach(p => {
+            if (!merged.some(m => m.id === p.id)) {
+              merged.push(p);
+            }
+          });
+          return sortEmployeesByFirstName(deduplicateEmployees(merged));
         }
       } catch (e) {
         // ignore
@@ -371,10 +388,28 @@ export default function App() {
         let hasDataInCloud = false;
 
         if (cloudEmployees && cloudEmployees.length > 1) {
-          setEmployees(sortEmployeesByFirstName(deduplicateEmployees(cloudEmployees)));
+          const cloudMap = new Map(cloudEmployees.map(e => [e.id, e]));
+          const merged = INITIAL_EMPLOYEES.map(initEmp => {
+            const ce = cloudMap.get(initEmp.id);
+            if (!ce) return initEmp;
+            return {
+              ...initEmp,
+              ...ce,
+              birthDate: ce.birthDate || initEmp.birthDate,
+              phone: ce.phone || initEmp.phone,
+              facebookUrl: ce.facebookUrl || initEmp.facebookUrl
+            };
+          });
+          cloudEmployees.forEach(ce => {
+            if (!merged.some(m => m.id === ce.id)) {
+              merged.push(ce);
+            }
+          });
+          const sorted = sortEmployeesByFirstName(deduplicateEmployees(merged));
+          setEmployees(sorted);
           hasDataInCloud = true;
         } else if (INITIAL_EMPLOYEES.length > 1) {
-          // If cloud has <= 1 employee, restore our 46-person team immediately
+          // If cloud has <= 1 employee, restore our complete team with full data immediately
           const restoredTeam = sortEmployeesByFirstName(deduplicateEmployees(INITIAL_EMPLOYEES));
           setEmployees(restoredTeam);
           saveEmployeesToCloud(restoredTeam);
