@@ -42,6 +42,8 @@ import {
   Zap,
   Send,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ShieldAlert,
   ShieldCheck,
   Crown,
@@ -217,6 +219,10 @@ export default function ManagerDashboard({
   const [showSixWeeksModal, setShowSixWeeksModal] = useState(false);
   const [sixWeeksSuccessMsg, setSixWeeksSuccessMsg] = useState<string | null>(null);
   const [pdfDownloadToast, setPdfDownloadToast] = useState<string | null>(null);
+  const [showMoreActionsMenu, setShowMoreActionsMenu] = useState(false);
+  const [showSixWeeksHorizonDrawer, setShowSixWeeksHorizonDrawer] = useState(false);
+  const [showAutoPlanPanel, setShowAutoPlanPanel] = useState(false);
+  const [showComplianceDetails, setShowComplianceDetails] = useState(false);
 
   // Dynamic active weeks and archive management
   const [extraWeekNumbers, setExtraWeekNumbers] = useState<number[]>([]);
@@ -1125,167 +1131,199 @@ export default function ManagerDashboard({
   };
 
   return (
-    <div className="space-y-6 font-sans">
+    <div className="space-y-5 font-sans">
       
-      {/* ⚡ SNELLE ACTIES (QUICK ACTIONS) SECTIE */}
-      <section 
-        id="quick-actions-panel"
-        aria-label="Snelle Acties"
-        className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white rounded-3xl p-4 sm:p-5 shadow-lg border-2 border-slate-800 relative overflow-hidden"
-      >
-        <div className="absolute -right-10 -top-10 w-40 h-40 bg-orange-500/10 rounded-full blur-2xl pointer-events-none" />
-        <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
-
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="p-1.5 bg-orange-500 text-white rounded-xl shadow-sm">
-                <Zap size={16} className="fill-white" />
-              </span>
-              <h2 className="text-sm sm:text-base font-black uppercase tracking-tight text-white flex items-center gap-2">
-                <span>Snelle Acties</span>
-                <span className="bg-orange-500/20 text-orange-400 border border-orange-500/40 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
-                  Snellere Workflow
-                </span>
-              </h2>
-            </div>
-            <p className="text-xs text-slate-300 font-medium">
-              Directe knoppen voor dagelijks beheer • Actieve week: <strong className="text-orange-400 font-bold">Week {selectedManagerWeek}</strong> ({getWeekMeta(selectedManagerWeek).dateRange})
-            </p>
+      {/* 🌟 VEREENVOUDIGDE & OVERZICHTELIJKE HEADER */}
+      <header className="bg-white rounded-3xl p-4 sm:p-5 shadow-sm border border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+              Beheerdersdashboard
+            </h1>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-900 border border-orange-200">
+              In De Molen
+            </span>
           </div>
+          <p className="text-xs text-slate-500 font-medium mt-0.5">
+            Eenvoudig weekbeheer & planning • <strong className="text-slate-800 font-bold">Week {selectedManagerWeek}</strong> ({getWeekMeta(selectedManagerWeek).dateRange})
+          </p>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
-            {/* 1. Directe knop: Nieuwe Dienst Aanmaken */}
+        {/* Primaire actieknoppen in 1 strakke groep */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* 1. Nieuwe Dienst Aanmaken */}
+          <button
+            type="button"
+            onClick={handleOpenCreateShiftQuickAction}
+            className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            title="Nieuwe dienst aanmaken in de planning"
+          >
+            <Plus size={16} className="stroke-[3]" />
+            <span>Nieuwe Dienst</span>
+          </button>
+
+          {/* 2. Download PDF (Originele Layout) */}
+          <button
+            type="button"
+            onClick={() => {
+              downloadInDeMolenPdf(selectedManagerWeek, employees, activeWeekShifts);
+              setPdfDownloadToast(`Officiële weekplanning PDF (Week ${selectedManagerWeek}, alle 7 dagen) is gedownload in de originele In De Molen layout!`);
+              setTimeout(() => setPdfDownloadToast(null), 6000);
+            }}
+            className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            title={`Download direct de officiële planning van Week ${selectedManagerWeek} als PDF`}
+          >
+            <Download size={15} />
+            <span>Download PDF</span>
+          </button>
+
+          {/* 3. Verstuur Week (Notificaties & WhatsApp) */}
+          <button
+            type="button"
+            onClick={() => {
+              setSendTargetWeek(selectedManagerWeek);
+              setShowSendWeekScheduleModal(true);
+            }}
+            className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            title="Verstuur het weekrooster naar het personeel"
+          >
+            <Send size={14} />
+            <span>Verstuur Week</span>
+          </button>
+
+          {/* 4. Meer Acties Dropdown Menu */}
+          <div className="relative">
             <button
-              id="quick-action-create-shift-btn"
               type="button"
-              onClick={handleOpenCreateShiftQuickAction}
-              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-orange-500/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
-              title="Open direct het venster om een nieuwe dienst aan te maken"
+              onClick={() => setShowMoreActionsMenu(prev => !prev)}
+              className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-tight rounded-xl border border-slate-300 transition active:scale-95 flex items-center gap-1 cursor-pointer"
+              title="Meer beheerfuncties en acties"
             >
-              <CalendarPlus size={17} className="stroke-[2.5]" />
-              <span>Nieuwe Dienst Aanmaken</span>
+              <span>Acties</span>
+              <ChevronDown size={14} className={`transition-transform duration-200 ${showMoreActionsMenu ? 'rotate-180' : ''}`} />
             </button>
 
-            {/* Directe knop: Openstaande Dienst Instellen */}
-            <button
-              id="quick-action-create-open-shift-btn"
-              type="button"
-              onClick={() => {
-                setSelectedShift({
-                  isNew: true,
-                  isOpenShift: true,
-                  weekNumber: selectedManagerWeek,
-                  department: activeSubTab === 'keuken' ? 'keuken' : 'zaal',
-                  employeeId: employees[0]?.id || '',
-                  startTime: '11:30',
-                  endTime: activeSubTab === 'keuken' ? '23:00' : '01:00',
-                  day: 4, // Vrijdag
-                  status: 'published',
-                  acknowledged: false,
-                  notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!'
-                });
-                setShowShiftModal(true);
-              }}
-              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-amber-500/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
-              title="Stel direct een openstaande dienst in waarop medewerkers kunnen intekenen via het Ruilbord"
-            >
-              <Megaphone size={17} className="stroke-[2.5]" />
-              <span>Open Dienst Instellen 📢</span>
-            </button>
-
-            {/* Directe knop: Shift-Herinneringen Komende Werkdag */}
-            <button
-              id="quick-action-shift-reminders-btn"
-              type="button"
-              onClick={() => setShowShiftReminderModal(true)}
-              className="px-4 py-2.5 sm:py-3 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-amber-500/25 flex items-center gap-2 transition-all duration-150 cursor-pointer hover:shadow-lg"
-              title="Stuur met 1 klik een shift-herinnering naar medewerkers ter voorbereiding op de komende werkdag"
-            >
-              <BellRing size={17} className="stroke-[2.5] animate-pulse" />
-              <span>Herinneringen Werkdag 🔔</span>
-            </button>
-
-            {/* 2. Directe knop: Mededeling Plaatsen */}
-            <button
-              id="quick-action-post-notice-btn"
-              type="button"
-              onClick={() => setShowQuickNoticeModal(true)}
-              className="px-4 py-2.5 sm:py-3 bg-slate-800 hover:bg-slate-750 text-white font-black text-xs uppercase tracking-tight rounded-xl border border-slate-700 hover:border-orange-500/60 shadow-sm flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer"
-              title="Plaats direct een mededeling voor het personeelsteam"
-            >
-              <Megaphone size={17} className="text-orange-400 stroke-[2.5]" />
-              <span>Mededeling Plaatsen</span>
-            </button>
-
-            {/* Directe knop: Shiften Versturen naar Personeel (Kies Week) */}
-            <button
-              id="quick-action-send-shifts-btn"
-              type="button"
-              onClick={() => {
-                setSendTargetWeek(selectedManagerWeek);
-                setShowSendWeekScheduleModal(true);
-              }}
-              className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-teal-600 via-emerald-600 to-teal-700 hover:from-teal-700 hover:to-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-emerald-600/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
-              title="Kies van welke week je de shiften naar het personeel verstuurt (via WhatsApp, Notificaties of Portaal)"
-            >
-              <Send size={17} className="stroke-[2.5]" />
-              <span>Shiften Sturen (Kies Week) 📤</span>
-            </button>
-
-            {/* Directe knop: Deel Rooster via WhatsApp / Messenger */}
-            {onShareWhatsAppSchedule && (
-              <button
-                id="quick-action-whatsapp-schedule-btn"
-                type="button"
-                onClick={() => onShareWhatsAppSchedule(selectedManagerWeek)}
-                className="px-4 py-2.5 sm:py-3 bg-gradient-to-r from-emerald-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-emerald-600/25 flex items-center gap-2 transition-all duration-150 active:scale-95 cursor-pointer hover:shadow-lg"
-                title="Deel de actuele weekplanning direct via WhatsApp of Facebook Messenger in de teamgroep"
+            {showMoreActionsMenu && (
+              <div 
+                className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in slide-in-from-top-2 text-xs"
+                onClick={() => setShowMoreActionsMenu(false)}
               >
-                <MessageSquare size={17} className="stroke-[2.5]" />
-                <span>Deel Rooster (WhatsApp / Messenger) 💬</span>
-              </button>
-            )}
+                <button
+                  type="button"
+                  onClick={() => setShowSchedulePrintModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Printer size={15} className="text-slate-500" />
+                  <span>Print- / Weergavevenster</span>
+                </button>
 
-            {/* Quick jump to notice board if there are active notices */}
-            {notices.length > 0 && (
-              <button
-                id="quick-action-view-board-btn"
-                type="button"
-                onClick={() => setActiveSubTab('berichten')}
-                className="px-3 py-2.5 sm:py-3 bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-white font-bold text-xs rounded-xl border border-slate-700/60 transition active:scale-95 cursor-pointer flex items-center gap-1.5"
-                title="Bekijk alle actieve mededelingen op het prikbord"
-              >
-                <FileText size={14} />
-                <span className="hidden sm:inline">Prikbord ({notices.length})</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedShift({
+                      isNew: true,
+                      isOpenShift: true,
+                      weekNumber: selectedManagerWeek,
+                      department: 'zaal',
+                      employeeId: employees[0]?.id || '',
+                      startTime: '11:30',
+                      endTime: '01:00',
+                      day: 4,
+                      status: 'published',
+                      acknowledged: false,
+                      notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!'
+                    });
+                    setShowShiftModal(true);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Megaphone size={15} className="text-amber-600" />
+                  <span>Open Dienst Plaatsen</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowShiftReminderModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <BellRing size={15} className="text-amber-500" />
+                  <span>Shift-Herinneringen Sturen</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowQuickNoticeModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <FileText size={15} className="text-blue-500" />
+                  <span>Mededeling op Prikbord</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Bot size={15} className="text-orange-500" />
+                  <span>Gemini AI Roostervoorstel</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowNotificationModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Share2 size={15} className="text-emerald-600" />
+                  <span>Notificatiehub (1-op-1)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab('beschikbaarheid')}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <BarChart3 size={15} className="text-purple-500" />
+                  <span>Beschikbaarheden Grafiek</span>
+                </button>
+
+                <div className="border-t border-slate-100 my-1"></div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowBackupModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Database size={15} className="text-slate-500" />
+                  <span>Cloud Backups & Archief</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
-      </section>
+      </header>
 
-      {/* Overview Stat Cards - Vibrant Palette Theme */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
-          <div className="p-3 bg-orange-500 rounded-2xl text-white shadow-lg shadow-orange-100 shrink-0">
-            <CalendarIcon size={24} />
+      {/* 📊 OVERZICHTELIJKE KPI BALK (4 COMPACTE KAARTEN) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex items-center gap-3 shadow-2xs">
+          <div className="w-10 h-10 rounded-xl bg-orange-100 text-orange-700 flex items-center justify-center shrink-0">
+            <CalendarIcon size={18} />
           </div>
-          <div>
-            <p className="text-[10px] text-orange-650 text-orange-600 font-extrabold uppercase tracking-wide">Aantal diensten</p>
-            <h3 className="text-2xl font-black text-slate-800 mt-1">{totalShiftsCount}</h3>
-            <p className="text-xs text-slate-500">{publishedShiftsCount} gepubliceerd • {loggedDraftShiftsCount} draft</p>
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide truncate">Diensten W{selectedManagerWeek}</div>
+            <div className="text-lg font-black text-slate-900 leading-tight">{totalShiftsCount}</div>
+            <div className="text-[10px] text-slate-500 truncate">{publishedShiftsCount} pub · {loggedDraftShiftsCount} concept</div>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center justify-between gap-2">
-          <div className="flex items-center space-x-4">
-            <div className="p-3 bg-emerald-500 rounded-2xl text-white shadow-lg shadow-emerald-100 shrink-0">
-              <FileCheck size={24} />
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex items-center justify-between gap-2 shadow-2xs">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+              <FileCheck size={18} />
             </div>
-            <div>
-              <p className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-wide">Gezien/Bevestigd</p>
-              <h3 className="text-2xl font-black text-slate-800 mt-1">{confirmationRate}%</h3>
-              <p className="text-xs text-slate-500">{confirmedShiftsCount} van de {publishedShiftsCount} bevestigd</p>
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide truncate">Bevestigd</div>
+              <div className="text-lg font-black text-slate-900 leading-tight">{confirmationRate}%</div>
+              <div className="text-[10px] text-slate-500 truncate">{confirmedShiftsCount} van de {publishedShiftsCount}</div>
             </div>
           </div>
           {publishedShiftsCount > confirmedShiftsCount && (
@@ -1304,64 +1342,74 @@ export default function ManagerDashboard({
                   });
                   onBatchUpdateShifts(updated, `Alle shiften van Week ${selectedManagerWeek} bevestigd door beheerder`);
                 }
-                setSixWeeksSuccessMsg(`✅ Alle ${unconfirmed.length} openstaande shiften van Week ${selectedManagerWeek} zijn direct bevestigd door beheerder Hans Stevens!`);
+                setSixWeeksSuccessMsg(`✅ Alle ${unconfirmed.length} openstaande shiften van Week ${selectedManagerWeek} zijn bevestigd!`);
                 setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
               }}
-              className="px-2.5 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border border-emerald-300 rounded-xl text-[10px] font-black uppercase tracking-tight transition cursor-pointer active:scale-95 shadow-2xs shrink-0"
-              title="Bevestig alle openstaande shiften van deze week in één klik als beheerder"
+              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[10px] font-black uppercase tracking-tight transition cursor-pointer shrink-0"
+              title="Bevestig alle openstaande shiften in 1 klik"
             >
-              Bevestig ({publishedShiftsCount - confirmedShiftsCount} ✓)
+              Bevestig ({publishedShiftsCount - confirmedShiftsCount})
             </button>
           )}
         </div>
 
-        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
-          <div className="p-3 bg-amber-500 rounded-2xl text-white shadow-lg shadow-amber-100 relative shrink-0">
-            <ArrowLeftRight size={24} />
+        <div 
+          onClick={() => setActiveSubTab('verzoeken')}
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex items-center gap-3 cursor-pointer hover:border-orange-300 transition shadow-2xs"
+          title="Klik om naar ruilverzoeken te gaan"
+        >
+          <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center relative shrink-0">
+            <ArrowLeftRight size={18} />
             {loggedPendingSwapsCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-[10px] text-white font-black rounded-full flex items-center justify-center border border-white animate-pulse">!</span>
+              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-[9px] text-white font-black rounded-full flex items-center justify-center animate-pulse">
+                {loggedPendingSwapsCount}
+              </span>
             )}
           </div>
-          <div>
-            <p className="text-[10px] text-amber-600 font-extrabold uppercase tracking-wide">Ruilverzoeken</p>
-            <h3 className="text-2xl font-black text-slate-800 mt-1">{loggedPendingSwapsCount} openstaand</h3>
-            <p className="text-xs text-slate-500">Wacht op jouw actie</p>
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide truncate">Ruilverzoeken</div>
+            <div className="text-lg font-black text-slate-900 leading-tight">{loggedPendingSwapsCount}</div>
+            <div className="text-[10px] text-slate-500 truncate">{loggedPendingSwapsCount > 0 ? 'Wacht op actie' : 'Geen openstaand'}</div>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-3xl shadow-sm border-2 border-orange-100 flex items-center space-x-4">
-          <div className="p-3 bg-pink-500 rounded-2xl text-white shadow-lg shadow-pink-100 shrink-0">
-            <Users size={24} />
+        <div 
+          onClick={() => setActiveSubTab('team')}
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex items-center gap-3 cursor-pointer hover:border-orange-300 transition shadow-2xs"
+          title="Klik om personeelslijst te bekijken"
+        >
+          <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+            <Users size={18} />
           </div>
-          <div>
-            <p className="text-[10px] text-pink-600 font-extrabold uppercase tracking-wide">Actief Personeel</p>
-            <h3 className="text-2xl font-black text-slate-800 mt-1">{employees.length}</h3>
-            <p className="text-xs text-slate-500">Aantal medewerkers</p>
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide truncate">Personeel</div>
+            <div className="text-lg font-black text-slate-900 leading-tight">{employees.length}</div>
+            <div className="text-[10px] text-slate-500 truncate">Actieve medewerkers</div>
           </div>
         </div>
       </div>
 
-      {/* Draft shifts bar - Vibrant Palette Theme */}
-      {loggedDraftShiftsCount > 0 ? (
-        <div className="bg-orange-100 rounded-3xl border-2 border-orange-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-center space-x-3 text-orange-950">
-            <CircleAlert size={20} className="shrink-0 text-orange-600" />
+      {/* Concept-diensten alert banner (alleen zichtbaar indien er concepten zijn) */}
+      {loggedDraftShiftsCount > 0 && (
+        <div className="bg-amber-50 rounded-2xl border border-amber-300 p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-2xs">
+          <div className="flex items-center space-x-2.5 text-amber-950">
+            <CircleAlert size={18} className="shrink-0 text-amber-600" />
             <div>
-              <p className="font-extrabold text-sm uppercase tracking-tight">
-                Je hebt {loggedDraftShiftsCount} niet-gepubliceerde diensten in ontwerp voor Week {selectedManagerWeek}
-              </p>
-              <p className="text-xs text-orange-850">
-                Je medewerkers kunnen deze diensten pas zien zodra je ze officieel publiceert.
-              </p>
+              <span className="font-extrabold uppercase tracking-tight text-amber-900">
+                {loggedDraftShiftsCount} niet-gepubliceerde conceptdiensten in Week {selectedManagerWeek}
+              </span>
+              <span className="hidden md:inline text-amber-800 text-[11px] ml-2 font-medium">
+                — Medewerkers zien deze diensten pas na publicatie.
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             <button 
               onClick={() => onPublishAllDrafts(selectedManagerWeek)}
-              className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
+              className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5"
             >
-              <CheckCheck size={16} />
-              <span>Publiceer Week {selectedManagerWeek} Rooster ({loggedDraftShiftsCount})</span>
+              <CheckCheck size={14} />
+              <span>Publiceer Rooster ({loggedDraftShiftsCount})</span>
             </button>
             <button
               type="button"
@@ -1369,119 +1417,86 @@ export default function ManagerDashboard({
                 setSendTargetWeek(selectedManagerWeek);
                 setShowSendWeekScheduleModal(true);
               }}
-              className="px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 shrink-0 cursor-pointer"
-              title="Kies van welke week je de shiften wilt versturen naar het personeel"
+              className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
             >
-              <Send size={15} />
-              <span>Shiften Sturen (Kies Week) 📤</span>
+              Verstuur 📤
             </button>
-            {onShareWhatsAppSchedule && (
-              <button 
-                type="button"
-                onClick={() => onShareWhatsAppSchedule(selectedManagerWeek)}
-                className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 shrink-0 cursor-pointer"
-                title="Deel de planning direct via WhatsApp of Facebook Messenger"
-              >
-                <MessageSquare size={15} />
-                <span>Deel WhatsApp / Messenger</span>
-              </button>
-            )}
           </div>
         </div>
-      ) : totalDraftShiftsCount > 0 ? (
-        <div className="bg-amber-50 rounded-3xl border-2 border-amber-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-center space-x-3 text-amber-950">
-            <CircleAlert size={20} className="shrink-0 text-amber-600" />
-            <div>
-              <p className="font-extrabold text-sm uppercase tracking-tight">
-                Week {selectedManagerWeek} is up-to-date! Er zijn nog {totalDraftShiftsCount} concepten in andere weken.
-              </p>
-              <p className="text-xs text-amber-850">
-                Wil je alle resterende ontwerp-diensten over alle weken tegelijk publiceren?
-              </p>
-            </div>
-          </div>
-          <button 
-            onClick={() => onPublishAllDrafts()}
-            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-lg transition-transform active:scale-95 shrink-0 cursor-pointer"
-          >
-            <CheckCheck size={16} />
-            <span>Publiceer Alle Concepten ({totalDraftShiftsCount})</span>
-          </button>
-        </div>
-      ) : null}
+      )}
 
-      {/* Sub Navigation Tabs */}
-      <div className="bg-white rounded-2xl shadow-sm border-2 border-orange-100 p-1 flex flex-wrap gap-1 md:gap-0">
+      {/* 🧭 STRAKKE HOOFDNAVIGATIE TABS */}
+      <nav aria-label="Dashboard Navigatie" className="bg-slate-100 p-1 rounded-2xl flex flex-wrap gap-1 shadow-2xs">
         <button
           onClick={() => setActiveSubTab('zaal')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
-            activeSubTab === 'zaal' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'zaal' || activeSubTab === 'keuken' 
+              ? 'bg-white text-orange-950 shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <CalendarIcon size={16} />
-          <span>Planning & Rooster</span>
+          <CalendarIcon size={15} className={activeSubTab === 'zaal' || activeSubTab === 'keuken' ? 'text-orange-600' : 'text-slate-400'} />
+          <span>Weekplanning</span>
         </button>
+
         <button
           onClick={() => setActiveSubTab('beschikbaarheid')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
-            activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'beschikbaarheid' 
+              ? 'bg-white text-orange-950 shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Sparkles size={16} className="text-amber-500 fill-amber-300" />
+          <Sparkles size={15} className={activeSubTab === 'beschikbaarheid' ? 'text-amber-500' : 'text-slate-400'} />
           <span>Beschikbaarheden</span>
-          <span className="hidden xl:inline-block text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-900 border border-amber-300 rounded-full font-black">Alleen Beheerder</span>
         </button>
+
         <button
-          onClick={() => setShowNotificationModal(true)}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer text-slate-700 hover:bg-emerald-50 hover:text-emerald-800`}
-          title="Verstuur diensten via WhatsApp of exporteer naar Outlook"
+          onClick={() => setActiveSubTab('team')}
+          className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'team' 
+              ? 'bg-white text-orange-950 shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
         >
-          <Share2 size={16} className="text-emerald-600" />
-          <span>Notificaties & Delen</span>
+          <Users size={15} className={activeSubTab === 'team' ? 'text-indigo-600' : 'text-slate-400'} />
+          <span>Personeel ({employees.length})</span>
         </button>
-        <button
-          onClick={() => setShowBackupModal(true)}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer text-slate-700 hover:bg-orange-50 hover:text-orange-850`}
-          title="Bekijk de cloud backup van alle beschikbaarheden en definitieve planningen"
-        >
-          <Database size={16} className="text-orange-600" />
-          <span>Backups & Archief</span>
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-        </button>
+
         <button
           onClick={() => setActiveSubTab('verzoeken')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition relative active:scale-95 cursor-pointer ${
-            activeSubTab === 'verzoeken' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer relative ${
+            activeSubTab === 'verzoeken' 
+              ? 'bg-white text-orange-950 shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <ArrowLeftRight size={16} />
+          <ArrowLeftRight size={15} className={activeSubTab === 'verzoeken' ? 'text-orange-600' : 'text-slate-400'} />
           <span>Ruilverzoeken</span>
           {loggedPendingSwapsCount > 0 && (
-            <span className="shrink-0 ml-1.5 px-2 py-0.5 text-[10px] rounded-full bg-rose-500 text-white font-black">
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black bg-rose-500 text-white">
               {loggedPendingSwapsCount}
             </span>
           )}
         </button>
+
         <button
           onClick={() => setActiveSubTab('berichten')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
-            activeSubTab === 'berichten' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
+          className={`flex-1 min-w-[120px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'berichten' 
+              ? 'bg-white text-orange-950 shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Megaphone size={16} />
+          <Megaphone size={15} className={activeSubTab === 'berichten' ? 'text-orange-600' : 'text-slate-400'} />
           <span>Meldingsbord</span>
+          {notices.length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-slate-200 text-slate-700">
+              {notices.length}
+            </span>
+          )}
         </button>
-        <button
-          onClick={() => setActiveSubTab('team')}
-          className={`flex-1 py-3 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-2 transition active:scale-95 cursor-pointer ${
-            activeSubTab === 'team' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Users size={16} />
-          <span>Personeel</span>
-        </button>
-      </div>
+      </nav>
 
       {/* Content Areas */}
 
@@ -1526,241 +1541,12 @@ export default function ManagerDashboard({
 
         return (
         <div className="space-y-4">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">
-                  Weekplanning & Rooster (In De Molen)
-                </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-900 border border-orange-300">
-                  📋 Alle Medewerkers ({deptEmployees.length})
-                </span>
-              </div>
-              <p className="text-xs text-orange-600 font-bold uppercase">
-                Centraal weekrooster voor alle medewerkers • Klik op een vak om in te plannen
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-              {/* Zoekbalk in planning */}
-              <div className="w-full sm:w-48 relative">
-                <input
-                  type="text"
-                  placeholder="Zoek medewerker..."
-                  value={planningSearch}
-                  onChange={(e) => setPlanningSearch(e.target.value)}
-                  className="w-full bg-white border-2 border-orange-200 text-slate-800 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
-                />
-                {planningSearch && (
-                  <button
-                    onClick={() => setPlanningSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-
-              {/* Sorteer dropdown (zoals in beschikbaarheden!) */}
-              <div className="flex items-center gap-1.5 w-full sm:w-auto">
-                <label className="text-[10px] font-black uppercase text-slate-500 whitespace-nowrap">
-                  Sorteer:
-                </label>
-                <select
-                  value={planningSort === 'name' ? 'name' : planningSort.toString()}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === 'name' || val === 'scheduled_first' || val === 'unscheduled_first') {
-                      setPlanningSort(val);
-                    } else {
-                      setPlanningSort(parseInt(val, 10));
-                    }
-                  }}
-                  className="w-full sm:w-auto bg-orange-50 border-2 border-orange-300 text-orange-950 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none cursor-pointer shadow-xs"
-                  title="Sorteer het rooster op naam, wie al ingepland is, of op beschikbaarheid per dag (net zoals in de beschikbaarheden)"
-                >
-                  <option value="name">🔤 Standaard (A-Z)</option>
-                  <option value="scheduled_first">✅ Al ingepland eerst</option>
-                  <option value="unscheduled_first">⏳ Nog niet ingepland eerst</option>
-                  {DAYS_OF_WEEK.map((d, dIdx) => (
-                    <option key={dIdx} value={dIdx.toString()}>
-                      📅 {d} (Beschikbaar eerst, vaste eerst)
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <select
-                value={selectedStatuutFilter}
-                onChange={(e) => setSelectedStatuutFilter(e.target.value as any)}
-                className="bg-white border-2 border-orange-100 rounded-xl px-3 py-2 text-xs font-black uppercase text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
-              >
-                <option value="all">Alle Statuten</option>
-                <option value="Student">Student</option>
-                <option value="Flexi">Flexi</option>
-                <option value="Vast">Vast</option>
-                <option value="Extra">Extra</option>
-              </select>
-
-              <select
-                value={selectedExperienceFilter}
-                onChange={(e) => setSelectedExperienceFilter(e.target.value as any)}
-                className="bg-white border-2 border-orange-100 rounded-xl px-3 py-2 text-xs font-black uppercase text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
-              >
-                <option value="all">Alle Ervaring</option>
-                <option value="Beginner">Beginner</option>
-                <option value="Gemiddeld">Gemiddeld</option>
-                <option value="Ervaren">Ervaren</option>
-                <option value="Verantwoordelijke">Verantwoordelijke</option>
-              </select>
-
-              <button
-                type="button"
-                onClick={() => setShowPlanningScheduledDrawer(prev => !prev)}
-                className={`px-4 py-2 text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-sm transition active:scale-95 cursor-pointer tracking-tight border-2 ${
-                  showPlanningScheduledDrawer
-                    ? 'bg-amber-500 text-white border-amber-600'
-                    : 'bg-white hover:bg-orange-50 text-orange-950 border-orange-300'
-                }`}
-                title="Bekijk een overzichtelijk dashboard van wie al ingepland is en wie nog niet in Week "
-              >
-                <Users size={15} className={showPlanningScheduledDrawer ? 'text-white' : 'text-orange-600'} />
-                <span>Overzicht Ingepland ({scheduledTeamStaff.length}/{allTeamStaff.length})</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowGeminiModal(true)}
-                className="px-4 py-2.5 bg-gradient-to-r from-amber-400 via-orange-500 to-amber-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Genereer een AI roostervoorstel via Gemini API op basis van beschikbaarheid"
-              >
-                <Bot size={16} className="text-slate-950" />
-                <span>Gemini AI Voorstel ✨</span>
-              </button>
-
-              {onOpenShareModal && (
-                <button
-                  type="button"
-                  onClick={onOpenShareModal}
-                  className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                  title="Deel de planning en link met het team via WhatsApp of directe URL"
-                >
-                  <Share2 size={15} />
-                  <span>Delen met Team 🔗</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSendTargetWeek(selectedManagerWeek);
-                  setShowSendWeekScheduleModal(true);
-                }}
-                className="px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Kies van welke week je de shiften wilt versturen naar het personeel"
-              >
-                <Send size={15} />
-                <span>📤 Shiften Sturen (Kies Week)</span>
-              </button>
-
-              <button
-                onClick={() => setShowNotificationModal(true)}
-                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Notificeer personeel via WhatsApp of exporteer naar Outlook"
-              >
-                <Share2 size={15} />
-                <span>📲 Personeel Notificeren</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  downloadInDeMolenPdf(selectedManagerWeek, employees, activeWeekShifts);
-                  setPdfDownloadToast(`Officiële weekplanning PDF (Week ${selectedManagerWeek}, alle 7 dagen) is gedownload in de originele In De Molen layout!`);
-                  setTimeout(() => setPdfDownloadToast(null), 6000);
-                }}
-                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title={`Download direct de officiële weekplanning Week ${selectedManagerWeek} als PDF (in de originele In De Molen layout van 7 pagina's)`}
-              >
-                <Download size={15} />
-                <span>Download PDF 📥</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowSchedulePrintModal(true)}
-                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Print het huidige weekrooster of bekijk het interactieve raster in een strak formaat"
-              >
-                <Printer size={15} />
-                <span>Print PDF 🖨️</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveSubTab('beschikbaarheid')}
-                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 cursor-pointer tracking-tight"
-                title="Bekijk de visuele Recharts grafiek van de personeelsbeschikbaarheid per dag"
-              >
-                <BarChart3 size={15} />
-                <span>Beschikbaarheid Grafiek 📊</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setSelectedShift({
-                    isNew: true,
-                    employeeId: deptEmployees[0]?.id || employees[0]?.id || '',
-                    department: activeDept,
-                    weekNumber: selectedManagerWeek,
-                    day: 0,
-                    startTime: '17:00',
-                    endTime: '01:00',
-                    notes: '',
-                    status: 'draft',
-                    acknowledged: false
-                  });
-                  setShowShiftModal(true);
-                }}
-                className="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 tracking-tight cursor-pointer"
-              >
-                <Plus size={16} className="stroke-[3]" />
-                <span>Nieuwe Dienst +</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedShift({
-                    isNew: true,
-                    isOpenShift: true,
-                    employeeId: deptEmployees[0]?.id || employees[0]?.id || '',
-                    department: activeDept,
-                    weekNumber: selectedManagerWeek,
-                    day: 4, // Vrijdag
-                    startTime: '11:30',
-                    endTime: '01:00',
-                    notes: 'Openstaande dienst: wie kan er inspringen? Schrijf je direct in!',
-                    status: 'published',
-                    acknowledged: false
-                  });
-                  setShowShiftModal(true);
-                }}
-                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-1.5 shadow-md transition-transform active:scale-95 tracking-tight cursor-pointer"
-                title="Stel direct een openstaande dienst in waarop medewerkers kunnen intekenen via het Ruilbord"
-              >
-                <Megaphone size={15} className="stroke-[2.5]" />
-                <span>Open Dienst Instellen 📢</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Shift-Herinnering Toast Banner */}
+          {/* Active Toasts & Notifications */}
           {reminderToast && (
-            <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md animate-in fade-in slide-in-from-top-2">
+            <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center space-x-3">
-                <div className="p-2.5 bg-amber-500 text-white rounded-2xl shrink-0 shadow-xs ring-2 ring-amber-250">
-                  <BellRing size={20} className="animate-bounce stroke-[2.5]" />
+                <div className="p-2 bg-amber-500 text-white rounded-xl shrink-0 shadow-xs">
+                  <BellRing size={18} className="animate-bounce" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -1772,7 +1558,7 @@ export default function ManagerDashboard({
                     </span>
                   </div>
                   <p className="text-xs text-amber-900 mt-0.5">
-                    Dienst op <strong>{reminderToast.dayName} ({reminderToast.dateStr})</strong> van <strong>{reminderToast.timeStr}</strong>. Notificatie is direct klaargezet in het personeelsportaal.
+                    Dienst op <strong>{reminderToast.dayName} ({reminderToast.dateStr})</strong> van <strong>{reminderToast.timeStr}</strong>.
                   </p>
                 </div>
               </div>
@@ -1783,7 +1569,7 @@ export default function ManagerDashboard({
                     href={reminderToast.whatsAppUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-xs transition flex items-center gap-1.5 cursor-pointer"
                     title={`Open direct in WhatsApp voor ${reminderToast.phone}`}
                   >
                     <MessageCircle size={14} />
@@ -1802,12 +1588,11 @@ export default function ManagerDashboard({
             </div>
           )}
 
-          {/* Success message banner for 6-weeks actions */}
           {sixWeeksSuccessMsg && (
-            <div className="bg-emerald-50 border-2 border-emerald-400 text-emerald-900 rounded-3xl p-4 flex items-center justify-between gap-4 shadow-sm">
+            <div className="bg-emerald-50 border-2 border-emerald-400 text-emerald-900 rounded-2xl p-3 flex items-center justify-between gap-4 shadow-2xs">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-emerald-500 text-white rounded-2xl shrink-0">
-                  <CheckCheck size={18} />
+                <div className="p-1.5 bg-emerald-500 text-white rounded-xl shrink-0">
+                  <CheckCheck size={16} />
                 </div>
                 <p className="text-xs font-bold leading-relaxed">{sixWeeksSuccessMsg}</p>
               </div>
@@ -1821,16 +1606,15 @@ export default function ManagerDashboard({
             </div>
           )}
 
-          {/* Success message banner for PDF download */}
           {pdfDownloadToast && (
-            <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-3xl p-4 flex items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+            <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-2xl p-3 flex items-center justify-between gap-4 shadow-2xs animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-emerald-600 text-white rounded-2xl shrink-0">
-                  <Download size={18} />
+                <div className="p-1.5 bg-emerald-600 text-white rounded-xl shrink-0">
+                  <Download size={16} />
                 </div>
                 <div>
                   <h4 className="text-xs font-black uppercase text-emerald-900 tracking-tight">PDF Weekplanning Gedownload</h4>
-                  <p className="text-xs font-bold leading-relaxed text-emerald-800">{pdfDownloadToast}</p>
+                  <p className="text-xs font-bold text-emerald-800">{pdfDownloadToast}</p>
                 </div>
               </div>
               <button 
@@ -1843,356 +1627,19 @@ export default function ManagerDashboard({
             </div>
           )}
 
-          {/* 6-WEKEN HORIZON KAART: Telkens 6 weken vooruit klaargezet */}
-          <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-amber-500 rounded-3xl p-5 text-white shadow-lg border-2 border-orange-400">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  <span className="p-1.5 bg-white/20 rounded-xl text-lg">🗓️</span>
-                  <h3 className="text-sm font-black uppercase tracking-tight text-white flex items-center gap-2">
-                    <span>6-Weken Planning Horizon (W{UPCOMING_SIX_WEEKS_FROM_NEXT[0]} t/m W{UPCOMING_SIX_WEEKS_FROM_NEXT[UPCOMING_SIX_WEEKS_FROM_NEXT.length - 1]})</span>
-                    <span className="bg-white text-orange-700 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase">
-                      Telkens 6 Weken Vooruit
-                    </span>
-                  </h3>
-                </div>
-                <p className="text-xs text-orange-100 font-medium max-w-2xl leading-relaxed">
-                  Vanaf volgende week (Week {NEXT_WEEK_NUMBER}) zijn de werkplanningen 6 weken vooruit klaargezet en ingevuld voor zowel <strong>Zaal als Keuken</strong>. Personeel kan hun shifts vroegtijdig bekijken en beschikbaarheden tijdig doorgeven.
-                </p>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => handlePrepareSixWeeksHorizon(false, false)}
-                  className="px-4 py-2.5 bg-white hover:bg-orange-50 text-orange-700 text-xs font-black uppercase rounded-2xl shadow-md transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                  title="Controleer en vul alle 6 weken vooruit aan met complete, gebalanceerde roosters"
-                >
-                  <Sparkles size={15} className="text-amber-500" />
-                  <span>Bereid 6 Weken Voor</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePublishAllSixWeeks}
-                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-black uppercase rounded-2xl shadow-md transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                  title="Publiceer alle concept-diensten in de 6-weken horizon direct voor het personeel"
-                >
-                  <Megaphone size={15} />
-                  <span>Publiceer 6 Weken</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowSixWeeksModal(true)}
-                  className="px-3.5 py-2.5 bg-white/15 hover:bg-white/25 text-white border border-white/30 text-xs font-black uppercase rounded-2xl transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                  title="Bekijk de details en statistieken van alle 6 weken op een rij"
-                >
-                  <FileText size={15} />
-                  <span>Overzicht 6 Weken</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Quick mini-pills for each of the 6+ weeks */}
-            <div className="mt-4 pt-3 border-t border-white/20 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {UPCOMING_SIX_WEEKS_FROM_NEXT.map((wk) => {
-                const meta = getWeekMeta(wk);
-                const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk);
-                const draftCount = weekShifts.filter(s => s.status === 'draft').length;
-                const isSelected = selectedManagerWeek === wk;
-                const isPublished = weekShifts.length > 0 && draftCount === 0;
-
-                return (
-                  <button
-                    key={wk}
-                    type="button"
-                    onClick={() => {
-                      setSelectedManagerWeek(wk);
-                      setAutoPlanWeek(wk);
-                    }}
-                    className={`p-2.5 rounded-2xl text-left transition-all cursor-pointer flex flex-col justify-between ${
-                      isSelected
-                        ? 'bg-white text-orange-900 shadow-md ring-2 ring-white scale-[1.03]'
-                        : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-[11px] font-black uppercase ${isSelected ? 'text-orange-600' : 'text-orange-200'}`}>
-                        W{wk}
-                      </span>
-                      {wk === NEXT_WEEK_NUMBER && (
-                        <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase ${
-                          isSelected ? 'bg-orange-500 text-white' : 'bg-white text-orange-700'
-                        }`}>
-                          Volgende
-                        </span>
-                      )}
-                    </div>
-                    <div className={`text-[10px] font-bold truncate ${isSelected ? 'text-slate-600' : 'text-orange-100'}`}>
-                      {meta.dateRange.split('–')[0]?.trim()}
-                    </div>
-                    <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-white/15">
-                      <span className={`text-[11px] font-black ${isSelected ? 'text-slate-900' : 'text-white'}`}>
-                        {weekShifts.length} shifts
-                      </span>
-                      <span className={`w-2 h-2 rounded-full ${isPublished ? 'bg-emerald-400' : 'bg-amber-300 animate-pulse'}`} title={isPublished ? 'Gepubliceerd' : `${draftCount} concepten`}></span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Week Selector Bar - "Vanaf volgende week" selector */}
-          <div className="bg-white rounded-3xl p-4 shadow-md border-2 border-orange-200 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            <div className="flex items-center space-x-3">
-              <div className="p-3 bg-orange-500 text-white rounded-2xl shadow-sm">
-                <CalendarIcon size={20} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">
-                    Weekrooster Selectie
-                  </h3>
-                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
-                    isCurrentWeekSelectedArchived
-                      ? 'bg-amber-100 text-amber-800 border-amber-300'
-                      : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                  }`}>
-                    {isCurrentWeekSelectedArchived ? `📦 Week ${selectedManagerWeek} (Archief)` : `Week ${selectedManagerWeek} actief`}
-                  </span>
-
-                  {/* 1-click week lock toggle pill for manager */}
-                  {!isCurrentWeekSelectedArchived && (
-                    <button
-                      type="button"
-                      onClick={() => handleToggleWeekLock(selectedManagerWeek)}
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border transition cursor-pointer flex items-center gap-1 active:scale-95 ${
-                        isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
-                          ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
-                          : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-emerald-300'
-                      }`}
-                      title={
-                        isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
-                          ? 'Beschikbaarheid is vergrendeld. Klik om te openen voor personeel.'
-                          : 'Beschikbaarheid staat open. Klik om te vergrendelen.'
-                      }
-                    >
-                      {isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings) ? (
-                        <>
-                          <Lock size={9} />
-                          <span>Beschikbaarheid Dicht</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                          <span>Beschikbaarheid Open</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs text-slate-500 font-bold mt-0.5">
-                  {getWeekMeta(selectedManagerWeek).label} • {getWeekMeta(selectedManagerWeek).dateRange}
-                </p>
-              </div>
-            </div>
-
-            {/* Week pill buttons */}
-            <div className="flex flex-wrap items-center gap-1.5 w-full lg:w-auto">
-              {activeWeeks.map((w) => {
-                const isSelected = selectedManagerWeek === w.weekNumber;
-                const weekShiftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber).length;
-                const weekDraftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber && s.status === 'draft').length;
-
-                return (
-                  <button
-                    key={w.weekNumber}
-                    type="button"
-                    onClick={() => {
-                      setSelectedManagerWeek(w.weekNumber);
-                      setAutoPlanWeek(w.weekNumber);
-                    }}
-                    className={`px-3 py-2 rounded-2xl text-xs font-black uppercase transition-all duration-150 flex items-center gap-1.5 cursor-pointer ${
-                      isSelected
-                        ? 'bg-orange-500 text-white shadow-md ring-2 ring-orange-300 scale-[1.02]'
-                        : 'bg-orange-50/80 hover:bg-orange-100 text-slate-700 border border-orange-200'
-                    }`}
-                  >
-                    <span>{w.shortLabel}</span>
-                    {w.isUpcoming && (
-                      <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
-                        isSelected ? 'bg-white text-orange-600' : 'bg-orange-500 text-white'
-                      }`}>
-                        Vanaf volgend
-                      </span>
-                    )}
-                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
-                      isSelected ? 'bg-orange-600 text-white' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {weekShiftCount}
-                    </span>
-                    {weekDraftCount > 0 && (
-                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title={`${weekDraftCount} ontwerp-diensten`}></span>
-                    )}
-                  </button>
-                );
-              })}
-
-              {/* Add Next Week Button */}
-              <button
-                type="button"
-                onClick={handleAddNewWeek}
-                className="px-3 py-2 rounded-2xl text-xs font-black uppercase bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1 transition cursor-pointer shadow-sm"
-                title="Voeg automatisch de volgende week toe aan de planning"
-              >
-                <Plus size={14} className="stroke-[3]" />
-                <span>+ Week</span>
-              </button>
-
-              {/* Archive Dropdown Toggle */}
-              {archivedWeeks.length > 0 && (
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setShowArchiveMenu(prev => !prev)}
-                    className="px-3 py-2 rounded-2xl text-xs font-black uppercase bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1.5 transition cursor-pointer"
-                    title="Bekijk oudere gearchiveerde weken"
-                  >
-                    <Archive size={14} className="text-slate-500" />
-                    <span>Archief ({archivedWeeks.length})</span>
-                  </button>
-
-                  {showArchiveMenu && (
-                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-2xl border-2 border-slate-200 p-2 z-50 animate-in fade-in slide-in-from-top-2">
-                      <div className="text-[10px] font-black uppercase text-slate-400 px-3 py-1.5 tracking-wider border-b border-slate-100">
-                        📦 Gearchiveerde Weken
-                      </div>
-                      <div className="max-h-56 overflow-y-auto py-1 space-y-1">
-                        {archivedWeeks.map((aw) => {
-                          const isSel = selectedManagerWeek === aw.weekNumber;
-                          const shiftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === aw.weekNumber).length;
-                          return (
-                            <button
-                              key={aw.weekNumber}
-                              type="button"
-                              onClick={() => {
-                                setSelectedManagerWeek(aw.weekNumber);
-                                setAutoPlanWeek(aw.weekNumber);
-                                setShowArchiveMenu(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer ${
-                                isSel ? 'bg-amber-100 text-amber-900 font-black' : 'hover:bg-slate-50 text-slate-700'
-                              }`}
-                            >
-                              <div>
-                                <div>Week {aw.weekNumber}</div>
-                                <div className="text-[10px] text-slate-400 font-normal">{aw.dateRange}</div>
-                              </div>
-                              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                                {shiftCount} shifts
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Quick helper: copy previous week & clear week & print PDF */}
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {/* Quick bulk acknowledge all shifts for selectedManagerWeek */}
-              {activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const unconfirmedCount = activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length;
-                    if (onBulkAcknowledgeWeek) {
-                      onBulkAcknowledgeWeek(selectedManagerWeek, true);
-                    } else if (onBatchUpdateShifts) {
-                      const updated = shifts.map(s => {
-                        if ((s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'published') {
-                          return { ...s, acknowledged: true, acknowledgedBy: 'Hans Stevens (Beheerder)', acknowledgedAt: Date.now() };
-                        }
-                        return s;
-                      });
-                      onBatchUpdateShifts(updated, `Alle shiften van Week ${selectedManagerWeek} bevestigd door beheerder`);
-                    }
-                    setSixWeeksSuccessMsg(`✅ Alle ${unconfirmedCount} openstaande shiften van Week ${selectedManagerWeek} zijn bevestigd door beheerder Hans Stevens!`);
-                    setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
-                  }}
-                  className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-300 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-xs active:scale-95"
-                  title={`Bevestig alle ${activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length} onbevestigde shiften van Week ${selectedManagerWeek} in één klik als beheerder`}
-                >
-                  <Check size={14} className="text-emerald-600 stroke-[3]" />
-                  <span>Bevestig Alle Shiften ({activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length} ✓)</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  downloadInDeMolenPdf(selectedManagerWeek, employees, activeWeekShifts);
-                  setPdfDownloadToast(`Officiële weekplanning PDF (Week ${selectedManagerWeek}, alle 7 dagen) is gedownload in de originele In De Molen layout!`);
-                  setTimeout(() => setPdfDownloadToast(null), 6000);
-                }}
-                className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-sm active:scale-95"
-                title={`Download direct de officiële planning van Week ${selectedManagerWeek} als PDF (in de originele In De Molen layout van 7 pagina's)`}
-              >
-                <Download size={14} />
-                <span>Download PDF 📥</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowSchedulePrintModal(true)}
-                className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-xs active:scale-95"
-                title={`Print Week ${selectedManagerWeek} of bekijk het interactieve weekrooster`}
-              >
-                <Printer size={14} className="text-rose-600" />
-                <span>Print PDF (Keuken/Café)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleCopyPreviousWeekRoster}
-                className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
-                title={`Kopieer diensten van Week ${selectedManagerWeek - 1} naar Week ${selectedManagerWeek}`}
-              >
-                <RotateCcw size={14} />
-                <span>Kopieer W{selectedManagerWeek - 1}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleClearWeekRoster}
-                className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-black uppercase rounded-xl flex items-center gap-1.5 transition cursor-pointer border border-rose-200"
-                title={`Wis alle ingevulde diensten in Week ${selectedManagerWeek}`}
-              >
-                <Trash2 size={14} className="text-rose-600" />
-                <span>Wis W{selectedManagerWeek}</span>
-              </button>
-            </div>
-          </div>
-
           {/* Banner when viewing an archived week */}
           {isCurrentWeekSelectedArchived && (
-            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-200 text-amber-800 rounded-xl">
-                  <Archive size={18} />
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 bg-amber-200 text-amber-800 rounded-lg">
+                  <Archive size={16} />
                 </div>
                 <div>
                   <div className="text-xs font-black uppercase tracking-wide">
-                    📦 Je bekijkt een gearchiveerde week: Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
+                    📦 Gearchiveerde Week: Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
                   </div>
-                  <div className="text-xs text-amber-700 font-medium">
-                    Oudere weken worden automatisch gearchiveerd. Je kunt de historie nog steeds inzien en exporteren.
+                  <div className="text-[11px] text-amber-700 font-medium">
+                    Oudere weken worden bewaard ter referentie en export.
                   </div>
                 </div>
               </div>
@@ -2202,63 +1649,14 @@ export default function ManagerDashboard({
                   setSelectedManagerWeek(CURRENT_WEEK_NUMBER);
                   setAutoPlanWeek(CURRENT_WEEK_NUMBER);
                 }}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shrink-0"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shrink-0"
               >
                 Naar Huidige Week (W{CURRENT_WEEK_NUMBER})
               </button>
             </div>
           )}
 
-          {/* Slimme Auto-Planner Control Card */}
-          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl border-2 border-orange-400">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xl animate-pulse">⚡</span>
-                  <h3 className="text-base font-black uppercase tracking-tight">Slimme Auto-Planner</h3>
-                </div>
-                <p className="text-xs text-orange-100 font-bold max-w-3xl leading-relaxed">
-                  Genereer automatisch een optimaal werkschema: <strong>Overdag 2 personen</strong>, 's avonds <strong>Ma & Di: 4 pers.</strong>, <strong>Wo & Do: 5 pers.</strong>, <strong>Vr, Za & Zo: 7 pers.</strong> (waarvan <strong>1 sluit</strong> en <strong>1 hulpsluit</strong>). Respecteert ingediende beschikbaarheden, gewenste uren en contractlimieten.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-4 shrink-0">
-                <div className="flex flex-col text-left space-y-1">
-                  <label className="text-[10px] font-black uppercase text-orange-200">Gebruik Beschikbaarheid:</label>
-                  <select
-                    value={autoPlanWeek}
-                    onChange={(e) => setAutoPlanWeek(parseInt(e.target.value))}
-                    className="bg-white/10 hover:bg-white/25 border border-white/20 rounded-xl px-3 py-2 text-xs font-black text-white focus:outline-none cursor-pointer transition"
-                  >
-                    {activeWeeks.map((w) => (
-                      <option key={w.weekNumber} className="text-slate-800 font-bold" value={w.weekNumber}>
-                        Week {w.weekNumber} ({w.dateRange.split('–')[0]?.trim()}) {w.isNext ? '• Volgende week' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowGeminiModal(true)}
-                  className="px-5 py-3.5 bg-gradient-to-r from-amber-300 to-yellow-300 hover:from-amber-200 hover:to-yellow-200 text-slate-900 text-xs font-black uppercase rounded-2xl shadow-lg transition duration-100 active:scale-95 cursor-pointer mt-auto border-0 flex items-center gap-2"
-                  title="Genereer een slim voorstel voor het weekrooster via de server-side Gemini API"
-                >
-                  <Bot size={16} className="text-orange-700" />
-                  <span>Gemini AI Voorstel ✨</span>
-                </button>
-
-                <button
-                  onClick={handleAutoPlanClick}
-                  className="px-5 py-3.5 bg-white hover:bg-orange-50 text-orange-600 hover:text-orange-700 text-xs font-black uppercase rounded-2xl shadow-lg transition duration-100 active:scale-95 cursor-pointer mt-auto border-0"
-                >
-                  Genereer Planning 🪄
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Planning Voortgang Status Bar */}
+          {/* 🌟 1. UNIFIED COMPACT WEEK CONTROL BAR (Alles overzichtelijk in 1 elegante balk) */}
           {(() => {
             const currentWeekShifts = shifts.filter(s => 
               (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && 
@@ -2267,145 +1665,399 @@ export default function ManagerDashboard({
             const openCount = currentWeekShifts.filter(s => s.isOpenShift).length;
             const draftCount = currentWeekShifts.filter(s => !s.isOpenShift && s.status === 'draft').length;
             const publishedCount = currentWeekShifts.filter(s => !s.isOpenShift && s.status === 'published').length;
-            const acknowledgedCount = currentWeekShifts.filter(s => s.acknowledged).length;
-
-            // Urencontrole & Overwerkbewaking voor de geselecteerde week
-            const empComplianceList = deptEmployees.map(emp => {
-              const hours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
-              const compliance = checkWeeklyHoursCompliance(emp, hours);
-              return { emp, ...compliance };
-            });
-
-            const overtimeList = empComplianceList.filter(c => c.isOvertime);
-            const underhoursVastList = empComplianceList.filter(c => c.isVastUnderhours);
+            const unconfirmedCount = activeWeekShifts.filter(s => !s.acknowledged && s.status === 'published').length;
 
             return (
-              <div className="bg-white rounded-3xl p-4 border-2 border-orange-100 shadow-xs flex flex-col gap-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
-                      <span>📊 Voortgang Week {selectedManagerWeek}</span>
-                      <span className="text-slate-500 font-bold text-[11px]">({isZaal ? 'Zaal' : 'Keuken'})</span>:
-                    </span>
+              <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 flex flex-col gap-3">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                  
+                  {/* Left: Week Navigator with Pills */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-2xl mr-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const prevW = selectedManagerWeek - 1;
+                          if (prevW >= 1) {
+                            setSelectedManagerWeek(prevW);
+                            setAutoPlanWeek(prevW);
+                          }
+                        }}
+                        className="p-1.5 rounded-xl hover:bg-white text-slate-700 transition cursor-pointer"
+                        title="Vorige week"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span className="text-xs font-black uppercase px-2 text-slate-800 whitespace-nowrap">
+                        Week {selectedManagerWeek}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextW = selectedManagerWeek + 1;
+                          setSelectedManagerWeek(nextW);
+                          setAutoPlanWeek(nextW);
+                        }}
+                        className="p-1.5 rounded-xl hover:bg-white text-slate-700 transition cursor-pointer"
+                        title="Volgende week"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+
+                    {/* Active Week Quick Pills */}
+                    <div className="flex flex-wrap items-center gap-1">
+                      {activeWeeks.map((w) => {
+                        const isSelected = selectedManagerWeek === w.weekNumber;
+                        const wShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber);
+                        const wDrafts = wShifts.filter(s => s.status === 'draft').length;
+
+                        return (
+                          <button
+                            key={w.weekNumber}
+                            type="button"
+                            onClick={() => {
+                              setSelectedManagerWeek(w.weekNumber);
+                              setAutoPlanWeek(w.weekNumber);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase transition-all duration-150 flex items-center gap-1.5 cursor-pointer ${
+                              isSelected
+                                ? 'bg-orange-500 text-white shadow-xs scale-[1.02]'
+                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <span>W{w.weekNumber}</span>
+                            {w.isUpcoming && (
+                              <span className={`text-[8px] px-1 py-0.2 rounded-full font-black ${
+                                isSelected ? 'bg-white text-orange-600' : 'bg-orange-100 text-orange-800'
+                              }`}>
+                                Volgend
+                              </span>
+                            )}
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
+                              isSelected ? 'bg-orange-600 text-white' : 'bg-slate-200/80 text-slate-600'
+                            }`}>
+                              {wShifts.length}
+                            </span>
+                            {wDrafts > 0 && (
+                              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title={`${wDrafts} ontwerpen`} />
+                            )}
+                          </button>
+                        );
+                      })}
+
+                      {/* Add Week Button */}
+                      <button
+                        type="button"
+                        onClick={handleAddNewWeek}
+                        className="px-2.5 py-1.5 rounded-xl text-xs font-black uppercase bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1 transition cursor-pointer"
+                        title="Voeg de volgende week toe aan de planning"
+                      >
+                        <Plus size={13} className="stroke-[3]" />
+                        <span>Week</span>
+                      </button>
+
+                      {/* Archive Dropdown */}
+                      {archivedWeeks.length > 0 && (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setShowArchiveMenu(prev => !prev)}
+                            className="px-2.5 py-1.5 rounded-xl text-xs font-black uppercase bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 flex items-center gap-1 transition cursor-pointer"
+                          >
+                            <Archive size={13} className="text-slate-500" />
+                            <span>Archief ({archivedWeeks.length})</span>
+                          </button>
+
+                          {showArchiveMenu && (
+                            <div className="absolute left-0 top-full mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in slide-in-from-top-2">
+                              <div className="text-[10px] font-black uppercase text-slate-400 px-2 py-1 tracking-wider border-b border-slate-100">
+                                📦 Gearchiveerde Weken
+                              </div>
+                              <div className="max-h-48 overflow-y-auto py-1 space-y-1">
+                                {archivedWeeks.map((aw) => {
+                                  const isSel = selectedManagerWeek === aw.weekNumber;
+                                  const shiftCount = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === aw.weekNumber).length;
+                                  return (
+                                    <button
+                                      key={aw.weekNumber}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedManagerWeek(aw.weekNumber);
+                                        setAutoPlanWeek(aw.weekNumber);
+                                        setShowArchiveMenu(false);
+                                      }}
+                                      className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer ${
+                                        isSel ? 'bg-amber-100 text-amber-900 font-black' : 'hover:bg-slate-50 text-slate-700'
+                                      }`}
+                                    >
+                                      <div>
+                                        <div>Week {aw.weekNumber}</div>
+                                        <div className="text-[10px] text-slate-400 font-normal">{aw.dateRange}</div>
+                                      </div>
+                                      <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                                        {shiftCount}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 1-click week lock toggle pill */}
+                      {!isCurrentWeekSelectedArchived && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleWeekLock(selectedManagerWeek)}
+                          className={`px-2.5 py-1.5 rounded-xl text-xs font-black uppercase border transition cursor-pointer flex items-center gap-1.5 active:scale-95 ml-1 ${
+                            isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
+                              ? 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                          }`}
+                          title={
+                            isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings)
+                              ? 'Beschikbaarheid is vergrendeld. Klik om te openen.'
+                              : 'Beschikbaarheid staat open. Klik om te vergrendelen.'
+                          }
+                        >
+                          {isWeekAvailabilityLocked(selectedManagerWeek, CURRENT_WEEK_NUMBER, appSettings) ? (
+                            <>
+                              <Lock size={12} className="text-rose-600" />
+                              <span>Op Slot</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                              <span>Open voor Team</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
+                  {/* Right: Quick Status Chips & Actions */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Open Chip */}
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs" title="Openstaande shiften waarop personeel kan intekenen">
-                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                      <span>{openCount} Open</span>
-                    </span>
-
-                    {/* Ontwerp Chip */}
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs" title="Concept-shiften die nog niet definitief gepubliceerd zijn">
-                      <span className="w-2 h-2 rounded-full bg-slate-400" />
-                      <span>{draftCount} Ontwerp</span>
-                    </span>
-
-                    {/* Gepubliceerd Chip */}
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs" title="Gepubliceerde shiften, zichtbaar voor medewerkers">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      <span>{publishedCount} Gepubliceerd</span>
-                      {publishedCount > 0 && (
-                        <span className="text-[10px] text-emerald-700 font-bold ml-0.5" title="Waarvan gezien door medewerker">
-                          ({acknowledgedCount} ✓)
-                        </span>
+                    {/* Status chips */}
+                    <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-xl text-xs font-bold text-slate-600">
+                      <span>{currentWeekShifts.length} shiften</span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-emerald-700 font-black">{publishedCount} pub</span>
+                      {draftCount > 0 && (
+                        <>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-amber-700 font-black">{draftCount} concept</span>
+                        </>
                       )}
-                    </span>
+                      {openCount > 0 && (
+                        <>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-amber-900 font-black">{openCount} open</span>
+                        </>
+                      )}
+                    </div>
 
-                    {/* Visuele Waarschuwing Chip: Overwerk (> 45 uur) */}
-                    {overtimeList.length > 0 && (
-                      <span 
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-rose-100 text-rose-950 border-2 border-rose-400 shadow-2xs animate-pulse cursor-pointer" 
-                        title={`Overwerk waarschuwing: ${overtimeList.map(item => `${item.emp.name} (${item.hours}u, +${item.excessHours}u te veel)`).join(', ')}. Limiet is 45u per week om overwerk te voorkomen!`}
+                    {/* Quick Publish Drafts Button if drafts exist */}
+                    {draftCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onPublishAllDrafts(selectedManagerWeek)}
+                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-black uppercase rounded-xl flex items-center gap-1 transition shadow-2xs active:scale-95 cursor-pointer"
+                        title="Publiceer alle concept-diensten in Week "
                       >
-                        <AlertTriangle size={13} className="text-rose-600 shrink-0" />
-                        <span>{overtimeList.length}x Overwerk (&gt;45u) ⚠️</span>
-                      </span>
+                        <CheckCheck size={14} />
+                        <span>Publiceer ({draftCount})</span>
+                      </button>
                     )}
 
-                    {/* Visuele Waarschuwing Chip: Vaste medewerker onder contractnorm (< 42 uur) */}
-                    {underhoursVastList.length > 0 && (
-                      <span 
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-tight bg-amber-100 text-amber-950 border-2 border-amber-400 shadow-2xs cursor-pointer" 
-                        title={`Contractnorm waarschuwing: ${underhoursVastList.map(item => `${item.emp.name} (${item.hours}u / 42u, tekort van ${item.shortageHours}u)`).join(', ')}. Vaste krachten moeten 42u per week ingepland worden!`}
+                    {/* Bulk Acknowledge Shifts if unconfirmed exist */}
+                    {unconfirmedCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onBulkAcknowledgeWeek) {
+                            onBulkAcknowledgeWeek(selectedManagerWeek, true);
+                          } else if (onBatchUpdateShifts) {
+                            const updated = shifts.map(s => {
+                              if ((s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'published') {
+                                return { ...s, acknowledged: true, acknowledgedBy: 'Hans Stevens (Beheerder)', acknowledgedAt: Date.now() };
+                              }
+                              return s;
+                            });
+                            onBatchUpdateShifts(updated, `Alle shiften van Week ${selectedManagerWeek} bevestigd door beheerder`);
+                          }
+                          setSixWeeksSuccessMsg(`✅ Alle ${unconfirmedCount} openstaande shiften van Week ${selectedManagerWeek} bevestigd!`);
+                          setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+                        }}
+                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-black uppercase rounded-xl flex items-center gap-1 transition cursor-pointer"
+                        title="Bevestig alle shiften in deze week"
                       >
-                        <CircleAlert size={13} className="text-amber-700 shrink-0" />
-                        <span>{underhoursVastList.length}x Vast &lt; 42u ⚠️</span>
-                      </span>
+                        <Check size={13} className="text-emerald-600 stroke-[3]" />
+                        <span>Bevestig ({unconfirmedCount})</span>
+                      </button>
                     )}
 
-                    <span className="text-[11px] font-bold text-slate-400 pl-1">
-                      Totaal: {currentWeekShifts.length}
-                    </span>
+                    {/* Auto-Planner & 6-Weken Horizon Collapsible Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowAutoPlanPanel(prev => !prev)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer border ${
+                        showAutoPlanPanel
+                          ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                          : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                      }`}
+                      title="Open of sluit het geavanceerde 6-weken horizon en auto-planner paneel"
+                    >
+                      <Sparkles size={14} className={showAutoPlanPanel ? 'text-white' : 'text-amber-600'} />
+                      <span>Auto-Plan & 6 Weken</span>
+                      <ChevronDown size={13} className={`transition-transform duration-200 ${showAutoPlanPanel ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {/* Secondary actions: Copy & Clear */}
+                    <button
+                      type="button"
+                      onClick={handleCopyPreviousWeekRoster}
+                      className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition cursor-pointer text-xs font-bold"
+                      title={`Kopieer diensten van Week ${selectedManagerWeek - 1} naar Week ${selectedManagerWeek}`}
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleClearWeekRoster}
+                      className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl transition cursor-pointer text-xs font-bold"
+                      title={`Wis alle diensten in Week ${selectedManagerWeek}`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
 
-                {/* Uitgebreide Waarschuwingsbanner als er overwerk of vaste krachten onder de norm zijn */}
-                {(overtimeList.length > 0 || underhoursVastList.length > 0) && (
-                  <div className="pt-3 border-t border-orange-100 flex flex-col gap-2">
-                    {overtimeList.length > 0 && (
-                      <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-3 text-xs text-rose-950 flex items-start gap-2.5 shadow-2xs animate-in fade-in">
-                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between flex-wrap gap-1">
-                            <span className="font-black uppercase tracking-tight text-rose-900 text-[11px]">
-                              ⚠️ Overwerk Voorkomen (&gt; 45 uur ingepland in Week {selectedManagerWeek})
-                            </span>
-                            <span className="text-[10px] bg-rose-200 text-rose-900 font-black px-2 py-0.5 rounded-full uppercase">
-                              {overtimeList.length} {overtimeList.length === 1 ? 'medewerker heeft >45u' : 'medewerkers hebben >45u'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-rose-800 mt-0.5 font-medium">
-                            Om overwerk en overbelasting te voorkomen mag een medewerker maximaal 45 uur per week ingepland worden. Pas de diensten aan voor onderstaande {overtimeList.length === 1 ? 'medewerker' : 'medewerkers'}:
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {overtimeList.map(({ emp, hours, excessHours }) => (
-                              <span key={emp.id} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border-2 border-rose-300 font-bold text-xs text-rose-900 shadow-2xs">
-                                <span>{emp.name} ({emp.statuut}):</span>
-                                <span className="font-black text-rose-600 bg-rose-100 px-1.5 py-0.2 rounded-md">{hours}u</span>
-                                <span className="text-rose-500 font-bold text-[10px]">(+{excessHours}u overwerk)</span>
-                              </span>
-                            ))}
-                          </div>
+                {/* Collapsible Auto-Planner & 6-Weken Horizon Drawer */}
+                {showAutoPlanPanel && (
+                  <div className="mt-2 pt-3 border-t border-slate-100 bg-gradient-to-r from-orange-50/50 via-amber-50/40 to-slate-50 p-4 rounded-2xl border border-orange-200 space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="p-1 bg-orange-500 text-white rounded-lg text-xs">🗓️</span>
+                          <h4 className="text-xs font-black uppercase text-slate-900 tracking-tight">
+                            6-Weken Horizon & Slimme Auto-Planner (In De Molen)
+                          </h4>
+                          <span className="text-[10px] bg-orange-100 text-orange-800 font-black px-2 py-0.2 rounded-full uppercase">
+                            W{UPCOMING_SIX_WEEKS_FROM_NEXT[0]} t/m W{UPCOMING_SIX_WEEKS_FROM_NEXT[UPCOMING_SIX_WEEKS_FROM_NEXT.length - 1]}
+                          </span>
                         </div>
+                        <p className="text-[11px] text-slate-600 mt-0.5">
+                          Overdag 2 pers., avond Ma-Di: 4, Wo-Do: 5, Vr-Za-Zo: 7 pers. (waarvan 1 sluit & 1 hulpsluit tot 0u00).
+                        </p>
                       </div>
-                    )}
 
-                    {underhoursVastList.length > 0 && (
-                      <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 text-xs text-amber-950 flex items-start gap-2.5 shadow-2xs animate-in fade-in">
-                        <CircleAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between flex-wrap gap-1">
-                            <span className="font-black uppercase tracking-tight text-amber-900 text-[11px]">
-                              ⚠️ Vaste Krachten Onder Contractnorm (&lt; 42 uur in Week {selectedManagerWeek})
-                            </span>
-                            <span className="text-[10px] bg-amber-200 text-amber-900 font-black px-2 py-0.5 rounded-full uppercase">
-                              {underhoursVastList.length} {underhoursVastList.length === 1 ? 'vaste kracht onder 42u' : 'vaste krachten onder 42u'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-amber-800 mt-0.5 font-medium">
-                            Vaste medewerkers hebben een voltijdse contractnorm van 42 uur per week. Plan extra uren of shifts in om aan de vereiste 42 uur te geraken:
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {underhoursVastList.map(({ emp, hours, shortageHours }) => (
-                              <span key={emp.id} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border-2 border-amber-300 font-bold text-xs text-amber-900 shadow-2xs">
-                                <span>{emp.name}:</span>
-                                <span className="font-black text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded-md">{hours}u</span>
-                                <span className="text-amber-800 font-semibold text-[10px]">/ 42u norm (tekort van {shortageHours}u)</span>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handlePrepareSixWeeksHorizon(false, false)}
+                          className="px-3 py-1.5 bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 text-xs font-black uppercase rounded-xl transition shadow-2xs active:scale-95 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Sparkles size={13} className="text-amber-500" />
+                          <span>Vul 6 Weken Aan</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handlePublishAllSixWeeks}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase rounded-xl transition shadow-2xs active:scale-95 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Megaphone size={13} />
+                          <span>Publiceer 6 Weken</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleAutoPlanClick}
+                          className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-black uppercase rounded-xl transition shadow-2xs active:scale-95 flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Auto-Plan W{selectedManagerWeek} 🪄</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowGeminiModal(true)}
+                          className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 text-xs font-black uppercase rounded-xl transition shadow-2xs active:scale-95 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Bot size={14} />
+                          <span>Gemini AI ✨</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowSixWeeksModal(true)}
+                          className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                          title="Details per week"
+                        >
+                          <FileText size={13} />
+                        </button>
                       </div>
-                    )}
+                    </div>
+
+                    {/* Quick mini-pills for 6 weeks */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-orange-100">
+                      {UPCOMING_SIX_WEEKS_FROM_NEXT.map((wk) => {
+                        const meta = getWeekMeta(wk);
+                        const wkShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk);
+                        const dCount = wkShifts.filter(s => s.status === 'draft').length;
+                        const isSel = selectedManagerWeek === wk;
+                        const isPub = wkShifts.length > 0 && dCount === 0;
+
+                        return (
+                          <button
+                            key={wk}
+                            type="button"
+                            onClick={() => {
+                              setSelectedManagerWeek(wk);
+                              setAutoPlanWeek(wk);
+                            }}
+                            className={`p-2 rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between ${
+                              isSel
+                                ? 'bg-orange-500 text-white shadow-2xs'
+                                : 'bg-white hover:bg-orange-50/60 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-0.5">
+                              <span className={`text-[10px] font-black uppercase ${isSel ? 'text-white' : 'text-slate-800'}`}>
+                                W{wk}
+                              </span>
+                              {wk === NEXT_WEEK_NUMBER && (
+                                <span className={`text-[7.5px] font-black px-1 rounded-full uppercase ${
+                                  isSel ? 'bg-white text-orange-600' : 'bg-orange-100 text-orange-800'
+                                }`}>
+                                  Volgend
+                                </span>
+                              )}
+                            </div>
+                            <div className={`text-[9.5px] truncate font-medium ${isSel ? 'text-orange-100' : 'text-slate-400'}`}>
+                              {meta.dateRange.split('–')[0]?.trim()}
+                            </div>
+                            <div className="flex items-center justify-between mt-1 pt-1 border-t border-slate-100">
+                              <span className={`text-[10px] font-black ${isSel ? 'text-white' : 'text-slate-700'}`}>
+                                {wkShifts.length} sh
+                              </span>
+                              <span className={`w-1.5 h-1.5 rounded-full ${isPub ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
             );
           })()}
 
-          {/* Quick Status Filter bar: Alle / Al Ingepland / Nog Niet Ingepland in Planning */}
+          {/* 🌟 2. STREAMLINED ROSTER FILTER & SEARCH TOOLBAR (Direct boven het rooster) */}
           {(() => {
             const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
             const scheduledStaffIds = new Set(currentWeekShifts.filter(s => s.employeeId && s.employeeId !== 'open_shift').map(s => s.employeeId));
@@ -2413,205 +2065,259 @@ export default function ManagerDashboard({
             const scheduledStaff = teamStaff.filter(e => scheduledStaffIds.has(e.id));
             const unscheduledStaff = teamStaff.filter(e => !scheduledStaffIds.has(e.id));
 
+            // Compliance check
+            const empComplianceList = deptEmployees.map(emp => {
+              const hours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+              const compliance = checkWeeklyHoursCompliance(emp, hours);
+              return { emp, ...compliance };
+            });
+            const overtimeList = empComplianceList.filter(c => c.isOvertime);
+            const underhoursVastList = empComplianceList.filter(c => c.isVastUnderhours);
+
             return (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm">
+              <div className="space-y-2">
+                <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2.5">
+                  
+                  {/* Left: Search & Filter Pills */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPlanningScheduledFilter("all")}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
-                        planningScheduledFilter === "all"
-                          ? "bg-slate-900 text-white shadow-xs"
-                          : "bg-slate-100 hover:bg-slate-200 text-slate-700"
-                      }`}
-                    >
-                      <span>👥 Alle Medewerkers</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                        planningScheduledFilter === "all" ? "bg-slate-700 text-white" : "bg-white text-slate-700"
-                      }`}>
-                        {teamStaff.length}
-                      </span>
-                    </button>
+                    {/* Search */}
+                    <div className="w-40 sm:w-48 relative">
+                      <input
+                        type="text"
+                        placeholder="Zoek medewerker..."
+                        value={planningSearch}
+                        onChange={(e) => setPlanningSearch(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                      {planningSearch && (
+                        <button
+                          onClick={() => setPlanningSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setPlanningScheduledFilter("scheduled")}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
-                        planningScheduledFilter === "scheduled"
-                          ? "bg-emerald-600 text-white shadow-xs"
-                          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300"
-                      }`}
-                    >
-                      <span>✅ Al Ingepland</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                        planningScheduledFilter === "scheduled" ? "bg-emerald-800 text-emerald-100" : "bg-emerald-200 text-emerald-950"
-                      }`}>
-                        {scheduledStaff.length}
-                      </span>
-                    </button>
+                    {/* Status filter: Alle / Ingepland / Niet ingepland */}
+                    <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setPlanningScheduledFilter("all")}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer ${
+                          planningScheduledFilter === "all"
+                            ? "bg-white text-slate-900 shadow-2xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        Alle ({teamStaff.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlanningScheduledFilter("scheduled")}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer ${
+                          planningScheduledFilter === "scheduled"
+                            ? "bg-emerald-600 text-white shadow-2xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        Ingepland ({scheduledStaff.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlanningScheduledFilter("unscheduled")}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer ${
+                          planningScheduledFilter === "unscheduled"
+                            ? "bg-amber-500 text-white shadow-2xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        Niet Ingepland ({unscheduledStaff.length})
+                      </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setPlanningScheduledFilter("unscheduled")}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-2 cursor-pointer ${
-                        planningScheduledFilter === "unscheduled"
-                          ? "bg-amber-500 text-white shadow-xs"
-                          : "bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300"
-                      }`}
+                    {/* Sorteer */}
+                    <select
+                      value={planningSort === 'name' ? 'name' : planningSort.toString()}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === 'name' || val === 'scheduled_first' || val === 'unscheduled_first') {
+                          setPlanningSort(val);
+                        } else {
+                          setPlanningSort(parseInt(val, 10));
+                        }
+                      }}
+                      className="bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded-xl px-2.5 py-1.5 text-xs focus:outline-none cursor-pointer"
                     >
-                      <span>⏳ Nog Niet Ingepland</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                        planningScheduledFilter === "unscheduled" ? "bg-amber-700 text-amber-100" : "bg-amber-200 text-amber-950"
-                      }`}>
-                        {unscheduledStaff.length}
-                      </span>
-                    </button>
+                      <option value="name">🔤 Sorteer: A-Z</option>
+                      <option value="scheduled_first">✅ Al ingepland eerst</option>
+                      <option value="unscheduled_first">⏳ Niet ingepland eerst</option>
+                      {DAYS_OF_WEEK.map((d, dIdx) => (
+                        <option key={dIdx} value={dIdx.toString()}>
+                          📅 {d} beschikbaarheid
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Statuut */}
+                    <select
+                      value={selectedStatuutFilter}
+                      onChange={(e) => setSelectedStatuutFilter(e.target.value as any)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none cursor-pointer"
+                    >
+                      <option value="all">Alle Statuten</option>
+                      <option value="Student">Student</option>
+                      <option value="Flexi">Flexi</option>
+                      <option value="Vast">Vast</option>
+                      <option value="Extra">Extra</option>
+                    </select>
+
+                    {/* Ervaring */}
+                    <select
+                      value={selectedExperienceFilter}
+                      onChange={(e) => setSelectedExperienceFilter(e.target.value as any)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 focus:outline-none cursor-pointer hidden md:block"
+                    >
+                      <option value="all">Alle Ervaring</option>
+                      <option value="Beginner">Beginner</option>
+                      <option value="Gemiddeld">Gemiddeld</option>
+                      <option value="Ervaren">Ervaren</option>
+                      <option value="Verantwoordelijke">Verantwoordelijke</option>
+                    </select>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs font-bold text-slate-500">
-                      Toont <span className="font-black text-slate-800">{deptEmployees.length}</span> van {teamStaff.length} teamleden in rooster
-                    </div>
+                  {/* Right: Warnings chip & Details toggle */}
+                  <div className="flex items-center gap-2">
+                    {(overtimeList.length > 0 || underhoursVastList.length > 0) && (
+                      <button
+                        type="button"
+                        onClick={() => setShowComplianceDetails(prev => !prev)}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer"
+                        title="Klik om aandachtspunten te bekijken"
+                      >
+                        <AlertTriangle size={13} className="text-amber-600" />
+                        <span>{overtimeList.length + underhoursVastList.length} Aandachtspunten</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => setShowPlanningScheduledDrawer(prev => !prev)}
-                      className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-950 rounded-xl text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1.5"
+                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                      title="Bekijk lijst ingepland vs niet ingepland"
                     >
-                      <Users size={14} className="text-orange-700" />
-                      <span>{showPlanningScheduledDrawer ? 'Verberg Details ▲' : 'Bekijk Lijst Ingepland vs Niet Ingepland ▼'}</span>
+                      <Users size={13} className="text-slate-500" />
+                      <span>{showPlanningScheduledDrawer ? 'Verberg' : 'Lijst'} ({scheduledStaff.length}/{teamStaff.length})</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Interactief overzicht van wie al ingepland is en wie nog niet */}
-                {showPlanningScheduledDrawer && (
-                  <div className="bg-gradient-to-br from-slate-50 to-orange-50/40 p-5 rounded-3xl border-2 border-orange-200 shadow-md space-y-4 animate-in fade-in slide-in-from-top-2">
-                    <div className="flex items-center justify-between flex-wrap gap-2 border-b border-orange-200/80 pb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="p-2 bg-orange-500 text-white rounded-xl text-sm">📊</span>
-                        <div>
-                          <h4 className="text-sm font-black uppercase text-slate-900 tracking-tight">
-                            Overzicht Personeelsplanning Week {selectedManagerWeek}
-                          </h4>
-                          <p className="text-xs text-slate-500">
-                            Bekijk direct wie al diensten heeft en wie nog beschikbaar is om in te vullen.
-                          </p>
-                        </div>
+                {/* Collapsible Compliance Warning Banner (alleen indien open) */}
+                {showComplianceDetails && (overtimeList.length > 0 || underhoursVastList.length > 0) && (
+                  <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 text-xs text-amber-950 space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <div className="font-black uppercase tracking-tight flex items-center gap-1.5">
+                        <AlertTriangle size={15} className="text-amber-600" />
+                        <span>Urencontrole & Aandachtspunten Week {selectedManagerWeek}</span>
                       </div>
                       <button
                         type="button"
-                        onClick={() => setShowPlanningScheduledDrawer(false)}
-                        className="text-xs font-bold text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                        onClick={() => setShowComplianceDetails(false)}
+                        className="text-slate-400 hover:text-slate-600 text-xs font-bold"
                       >
                         ✕ Sluiten
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {/* 1. Al ingepland */}
-                      <div className="bg-white p-4 rounded-2xl border-2 border-emerald-200 shadow-2xs space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                            <h5 className="text-xs font-black uppercase tracking-tight text-emerald-950">
-                              ✅ Al Ingepland ({scheduledStaff.length} medewerkers)
-                            </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {overtimeList.length > 0 && (
+                        <div className="bg-white p-2.5 rounded-xl border border-rose-200">
+                          <div className="font-black text-rose-800 uppercase text-[11px] mb-1">
+                            ⚠️ Overwerk (&gt;45u): {overtimeList.length} medewerkers
                           </div>
-                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
-                            {currentWeekShifts.length} shifts totaal
-                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {overtimeList.map(({ emp, hours, excessHours }) => (
+                              <span key={emp.id} className="text-[11px] bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg text-rose-900 font-bold">
+                                {emp.name}: <strong>{hours}u</strong> (+{excessHours}u)
+                              </span>
+                            ))}
+                          </div>
                         </div>
+                      )}
 
-                        {scheduledStaff.length === 0 ? (
-                          <p className="text-xs text-slate-400 italic py-2">
-                            Er is nog niemand ingepland voor Week {selectedManagerWeek}.
-                          </p>
-                        ) : (
-                          <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100">
-                            {scheduledStaff.map((emp) => {
-                              const empHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
-                              const empShiftCount = currentWeekShifts.filter(s => s.employeeId === emp.id).length;
-                              return (
-                                <div key={emp.id} className="pt-1.5 flex items-center justify-between text-xs">
-                                  <div className="flex items-center gap-2 truncate">
-                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: emp.color }} />
-                                    <span className="font-black text-slate-800 truncate">{emp.name}</span>
-                                    <span className="text-[10px] text-slate-400 uppercase font-bold">({emp.statuut})</span>
-                                  </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <span className="text-[11px] font-mono font-bold text-emerald-900 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
-                                      {empShiftCount} {empShiftCount === 1 ? 'dienst' : 'diensten'} • {empHours}u
-                                    </span>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                      {underhoursVastList.length > 0 && (
+                        <div className="bg-white p-2.5 rounded-xl border border-amber-200">
+                          <div className="font-black text-amber-800 uppercase text-[11px] mb-1">
+                            ⚠️ Vaste krachten onder contractnorm (&lt;42u): {underhoursVastList.length}
                           </div>
-                        )}
+                          <div className="flex flex-wrap gap-1.5">
+                            {underhoursVastList.map(({ emp, hours, shortageHours }) => (
+                              <span key={emp.id} className="text-[11px] bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg text-amber-900 font-bold">
+                                {emp.name}: <strong>{hours}u</strong> / 42u (-{shortageHours}u)
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Collapsible Scheduled Drawer */}
+                {showPlanningScheduledDrawer && (
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3 animate-in fade-in">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                      <h4 className="text-xs font-black uppercase text-slate-800 tracking-tight">
+                        Overzicht Ingepland vs Niet Ingepland (Week {selectedManagerWeek})
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => setShowPlanningScheduledDrawer(false)}
+                        className="text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        ✕ Sluiten
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="bg-white p-3 rounded-xl border border-emerald-200">
+                        <div className="font-black uppercase text-emerald-800 text-[11px] mb-2 flex items-center justify-between">
+                          <span>✅ Ingepland ({scheduledStaff.length})</span>
+                          <span className="text-[10px] text-emerald-700">{currentWeekShifts.length} shiften</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto space-y-1 divide-y divide-slate-100">
+                          {scheduledStaff.map((emp) => {
+                            const empHours = calculateEmployeeWeeklyHours(emp.id, selectedManagerWeek, shifts);
+                            return (
+                              <div key={emp.id} className="pt-1 flex items-center justify-between">
+                                <span className="font-bold text-slate-800 truncate">{emp.name}</span>
+                                <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded text-[10px]">
+                                  {empHours}u
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
 
-                      {/* 2. Nog NIET ingepland */}
-                      <div className="bg-white p-4 rounded-2xl border-2 border-amber-300 shadow-2xs space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-                            <h5 className="text-xs font-black uppercase tracking-tight text-amber-950">
-                              ⏳ Nog Niet Ingepland ({unscheduledStaff.length} medewerkers)
-                            </h5>
-                          </div>
-                          <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
-                            Kandidaten om in te vullen
-                          </span>
+                      <div className="bg-white p-3 rounded-xl border border-amber-200">
+                        <div className="font-black uppercase text-amber-800 text-[11px] mb-2">
+                          ⏳ Nog Niet Ingepland ({unscheduledStaff.length})
                         </div>
-
-                        {unscheduledStaff.length === 0 ? (
-                          <p className="text-xs text-emerald-700 font-bold py-2 flex items-center gap-1">
-                            <Check size={14} className="stroke-[3]" />
-                            Geweldig! Alle medewerkers zijn ingepland voor deze week.
-                          </p>
-                        ) : (
-                          <div className="max-h-64 overflow-y-auto space-y-2 pr-1 divide-y divide-slate-100">
-                            {unscheduledStaff.map((emp) => {
-                              const eff = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
-                              const availDays = eff.availability?.days.filter(d => d.status === 'available' || d.status === 'preferred') || [];
-                              const availDayNames = availDays.map(d => DAYS_OF_WEEK[d.day]).join(', ');
-
-                              return (
-                                <div key={emp.id} className="pt-2 flex items-center justify-between gap-2 text-xs">
-                                  <div className="truncate flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 truncate">
-                                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: emp.color }} />
-                                      <span className="font-black text-slate-800 truncate">{emp.name}</span>
-                                      <span className="text-[10px] text-orange-700 bg-orange-100 px-1.5 py-0.2 rounded font-black uppercase">
-                                        {emp.statuut}
-                                      </span>
-                                    </div>
-                                    <div className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
-                                      {availDays.length > 0 ? (
-                                        <span className="text-emerald-700 font-bold">✓ Beschikbaar: {availDayNames}</span>
-                                      ) : (
-                                        <span className="text-slate-400 italic">Geen voorkeur opgegeven</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const firstAvailDay = availDays[0]?.day ?? 4;
-                                      handleOpenAddShift(emp.id, firstAvailDay);
-                                    }}
-                                    className="px-2.5 py-1 text-[10px] font-black uppercase bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition active:scale-95 shrink-0 shadow-2xs cursor-pointer flex items-center gap-1"
-                                    title={`Plan ${emp.name} in voor week ${selectedManagerWeek}`}
-                                  >
-                                    <Plus size={11} className="stroke-[3]" />
-                                    <span>Plan In</span>
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                        <div className="max-h-48 overflow-y-auto space-y-1 divide-y divide-slate-100">
+                          {unscheduledStaff.map((emp) => (
+                            <div key={emp.id} className="pt-1 flex items-center justify-between">
+                              <span className="font-bold text-slate-700 truncate">{emp.name} ({emp.statuut})</span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAddShift(emp.id, 4)}
+                                className="px-2 py-0.5 bg-orange-500 hover:bg-orange-600 text-white rounded text-[10px] font-black uppercase"
+                              >
+                                + Plan In
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -3311,9 +3017,9 @@ export default function ManagerDashboard({
                   <button
                     type="button"
                     onClick={async () => {
-                      if (confirm('Wil je alle personeelsleden en beschikbaarheden opnieuw synchroniseren uit de Google Cloud backups?')) {
-                        await onRestoreFullCloudArchive();
-                      }
+                      await onRestoreFullCloudArchive();
+                      setSixWeeksSuccessMsg('✅ Alle 46 medewerkers en beschikbaarheden zijn gesynchroniseerd uit de cloud backups!');
+                      setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
                     }}
                     className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-blue-500"
                     title="Herstel alle 46 personeelsleden en alle beschikbaarheden uit het cloud archief"

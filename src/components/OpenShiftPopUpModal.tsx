@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Shift, Employee } from '../types';
 import { getDayDateInfo, getWeekMeta, CURRENT_WEEK_NUMBER } from '../utils/weekUtils';
 import { 
@@ -30,13 +30,25 @@ export default function OpenShiftPopUpModal({
   const [assignedShiftId, setAssignedShiftId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
-  // Filter open shifts that are published and not yet assigned to a specific person
+  // Filter open shifts that are published and not yet assigned to a specific person (or claimed just now in this popup)
   const openShifts = shifts.filter(s => 
-    (s.isOpenShift || s.employeeId === 'open_shift') && 
+    ((s.isOpenShift || s.employeeId === 'open_shift' || s.id === assignedShiftId) && 
     s.status === 'published' &&
-    (s.weekNumber || CURRENT_WEEK_NUMBER) >= CURRENT_WEEK_NUMBER
+    (s.weekNumber || CURRENT_WEEK_NUMBER) >= CURRENT_WEEK_NUMBER)
   ).sort((a, b) => {
     const wA = a.weekNumber || CURRENT_WEEK_NUMBER;
     const wB = b.weekNumber || CURRENT_WEEK_NUMBER;
@@ -50,23 +62,27 @@ export default function OpenShiftPopUpModal({
     setSuccessMessage(`🎉 Geweldig, ${currentEmployee.name}! Je hebt deze openstaande dienst direct aangenomen en bent ingeroosterd in de planning.`);
     setTimeout(() => {
       setAssignedShiftId(null);
-    }, 3000);
+    }, 4000);
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200 cursor-pointer"
+      role="dialog"
+      aria-modal="true"
+    >
       <div 
-        className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl border-2 border-amber-300 overflow-hidden text-left animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col"
-        role="dialog"
-        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl border-2 border-amber-300 overflow-hidden text-left animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col cursor-default"
       >
         {/* Header with vibrant callout */}
         <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-5 sm:p-6 relative shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 text-white rounded-full transition cursor-pointer"
-            title="Sluiten"
+            className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 active:scale-90 text-white rounded-full transition cursor-pointer"
+            title="Sluiten (Escape)"
           >
             <X size={18} />
           </button>
@@ -96,9 +112,18 @@ export default function OpenShiftPopUpModal({
 
         {/* Success toast if shift just claimed */}
         {successMessage && (
-          <div className="bg-emerald-50 border-b border-emerald-200 p-3.5 text-xs text-emerald-900 font-bold flex items-center gap-2 animate-in slide-in-from-top-2">
-            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-            <span>{successMessage}</span>
+          <div className="bg-emerald-50 border-b border-emerald-200 p-3.5 text-xs text-emerald-900 font-bold flex items-center justify-between gap-2 animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+              <span>{successMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase rounded-lg transition cursor-pointer shrink-0"
+            >
+              Bekijk Rooster
+            </button>
           </div>
         )}
 
@@ -132,10 +157,11 @@ export default function OpenShiftPopUpModal({
               return (
                 <div
                   key={sh.id}
+                  onClick={() => !isAssignedJustNow && handleClaimShift(sh)}
                   className={`p-4 sm:p-4.5 rounded-2xl border-2 transition-all shadow-xs flex flex-col justify-between gap-3 text-left ${
                     isAssignedJustNow
                       ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-200'
-                      : 'bg-gradient-to-br from-amber-50/70 via-orange-50/40 to-white border-amber-200 hover:border-amber-400'
+                      : 'bg-gradient-to-br from-amber-50/70 via-orange-50/40 to-white border-amber-200 hover:border-amber-400 hover:shadow-md cursor-pointer'
                   }`}
                 >
                   <div className="space-y-1.5">
@@ -170,14 +196,29 @@ export default function OpenShiftPopUpModal({
 
                   {/* Big Clickable Action Button */}
                   {isAssignedJustNow ? (
-                    <div className="w-full py-2.5 px-4 bg-emerald-600 text-white font-black text-xs uppercase tracking-tight rounded-xl flex items-center justify-center gap-2 shadow-xs">
-                      <CheckCircle2 size={16} />
-                      <span>✓ Succesvol Aangenomen! Je staat nu in het rooster</span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 py-2.5 px-4 bg-emerald-600 text-white font-black text-xs uppercase tracking-tight rounded-xl flex items-center justify-center gap-2 shadow-xs">
+                        <CheckCircle2 size={16} />
+                        <span>✓ Succesvol Aangenomen! Je staat nu in het rooster</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose();
+                        }}
+                        className="py-2.5 px-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
+                      >
+                        Sluiten
+                      </button>
                     </div>
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleClaimShift(sh)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClaimShift(sh);
+                      }}
                       className="w-full py-2.5 sm:py-3 px-4 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer hover:shadow-lg"
                     >
                       <Sparkles size={15} className="animate-pulse" />

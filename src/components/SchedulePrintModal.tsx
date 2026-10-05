@@ -88,24 +88,47 @@ export default function SchedulePrintModal({
     return true;
   });
 
-  // Calculate shift duration in hours
-  const calculateShiftHours = (start: string, end: string): number => {
+  // Calculate shift duration in hours (Hulpsluit stopt om 00u00)
+  const calculateShiftHours = (start: string, end: string, notes?: string, day = 0): number => {
     if (!start || !end) return 0;
-    const [startH, startM] = start.split(':').map(Number);
-    const [endH, endM] = end.split(':').map(Number);
-    let startMin = startH * 60 + (startM || 0);
-    let endMin = endH * 60 + (endM || 0);
-    if (endMin <= startMin) {
-      endMin += 24 * 60; // Crosses midnight
+    const lowerEnd = end.toLowerCase().trim();
+    const lowerNotes = (notes || '').toLowerCase().trim();
+    const lowerStart = start.toLowerCase().trim();
+
+    let startDec = 11.5;
+    if (lowerStart.includes('open')) {
+      startDec = day === 6 ? 10.0 : 11.5;
+    } else {
+      const matchS = lowerStart.match(/^(\d{1,2})[:uh.]?(\d{2})?$/);
+      if (matchS) {
+        startDec = parseInt(matchS[1], 10) + (matchS[2] ? parseInt(matchS[2], 10) / 60 : 0);
+      }
     }
-    return Math.round(((endMin - startMin) / 60) * 10) / 10;
+
+    let endDec = 24.0;
+    if (lowerEnd.includes('hulpsluit') || lowerNotes.includes('hulpsluit') || lowerEnd.startsWith('hulp')) {
+      endDec = 24.0; // Hulpsluit stopt om 00u00 (middernacht)
+    } else if (lowerEnd.includes('sluit') || lowerNotes.includes('sluit')) {
+      endDec = 24.5;
+    } else {
+      const matchE = lowerEnd.match(/^(\d{1,2})[:uh.]?(\d{2})?$/);
+      if (matchE) {
+        const h = parseInt(matchE[1], 10);
+        const m = matchE[2] ? parseInt(matchE[2], 10) : 0;
+        endDec = h + m / 60;
+        if (endDec < 6) endDec += 24;
+      }
+    }
+
+    const diff = Math.max(0, endDec - startDec);
+    return Math.round(diff * 10) / 10;
   };
 
   // Staff summary for the week
   const employeeStats = employees
     .map(emp => {
       const empShifts = weekShifts.filter(s => s.employeeId === emp.id);
-      const totalHours = empShifts.reduce((acc, s) => acc + calculateShiftHours(s.startTime, s.endTime), 0);
+      const totalHours = empShifts.reduce((acc, s) => acc + calculateShiftHours(s.startTime, s.endTime, s.notes, Number(s.day)), 0);
       return {
         employee: emp,
         shiftCount: empShifts.length,
@@ -138,30 +161,17 @@ export default function SchedulePrintModal({
   // Helper to determine role badge for zaal shifts
   const getZaalRoleBadge = (shift: Shift, emp?: Employee) => {
     const notesLower = (shift.notes || '').toLowerCase();
-    if (notesLower.includes('sluit') || shift.endTime >= '23:30') {
-      return { text: 'Sluit', style: 'bg-orange-600 text-white border-orange-700' };
+    const endLower = (shift.endTime || '').toLowerCase();
+    if (endLower.includes('hulpsluit') || notesLower.includes('hulpsluit') || endLower.startsWith('hulp')) {
+      return { text: 'Hulpsluit (tot 00u00)', style: 'bg-amber-600 text-white border-amber-700' };
     }
-    if (notesLower.includes('hulp')) {
-      return { text: 'Hulpsluit', style: 'bg-amber-600 text-white border-amber-700' };
+    if (endLower.includes('sluit') || notesLower.includes('sluit') || shift.endTime >= '23:30') {
+      return { text: 'Sluit', style: 'bg-orange-600 text-white border-orange-700' };
     }
     if (notesLower.includes('bar')) {
       return { text: 'Bar', style: 'bg-indigo-600 text-white border-indigo-700' };
     }
     return { text: 'Zaal', style: 'bg-slate-700 text-white border-slate-800' };
-  };
-
-  // Trigger print dialog
-  const handlePrint = () => {
-    if (activeLayoutTab === 'grid') {
-      handleOpenInNewTab();
-      return;
-    }
-    try {
-      window.print();
-      setPrintSuccessNotice('Printopdracht verstuurd. Kies "Opslaan als PDF" in het dialoogvenster om als PDF op te slaan.');
-    } catch {
-      handleOpenInNewTab();
-    }
   };
 
   // Generate self-contained standalone HTML document with complete CSS styling embedded
@@ -418,16 +428,51 @@ export default function SchedulePrintModal({
 </html>`;
   };
 
-  const handleOpenInNewTab = () => {
-    const html = generateStandaloneHTML();
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (!win) {
-      alert('Pop-up geblokkeerd door browser. Klik a.u.b. op "Download HTML/PDF" of sta pop-ups toe.');
-    } else {
-      setPrintSuccessNotice('Nieuw tabblad geopend! Het printvenster wordt daar direct gestart.');
+  // Safe in-page print handler that avoids browser popup blockers
+  const handlePrintInPage = () => {
+    // 1. Direct PDF download in official In De Molen layout
+    downloadInDeMolenPdf(selectedWeek, employees, weekShifts);
+    setPrintSuccessNotice(`Officiële weekplanning PDF (Week ${selectedWeek}, 7 pagina's) is gedownload!`);
+
+    // 2. Trigger native print dialog safely inside hidden frame (never blocked by popup blocker)
+    try {
+      const existingIframe = document.getElementById('print-virtual-frame');
+      if (existingIframe) {
+        existingIframe.remove();
+      }
+      const iframe = document.createElement('iframe');
+      iframe.id = 'print-virtual-frame';
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.style.visibility = 'hidden';
+      document.body.appendChild(iframe);
+
+      const html = generateStandaloneHTML();
+      const doc = iframe.contentWindow?.document;
+      if (doc) {
+        doc.open();
+        doc.write(html);
+        doc.close();
+        setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+          } catch {
+            // print fallback
+          }
+        }, 350);
+      }
+    } catch {
+      // In case iframe print is not permitted in sandbox, PDF is already downloaded above!
     }
+  };
+
+  const handlePrint = () => {
+    handlePrintInPage();
   };
 
   const handleDownloadHTML = () => {
@@ -442,17 +487,23 @@ export default function SchedulePrintModal({
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setPrintSuccessNotice('Bestand gedownload! Open het met uw browser en druk op Ctrl+P / Cmd+P om op te slaan als PDF.');
+    setPrintSuccessNotice('HTML bestand gedownload! Open het met uw browser en druk op Ctrl+P / Cmd+P om op te slaan als PDF.');
   };
 
   const isKitchenMode = selectedDepartment === 'keuken';
   const isZaalMode = selectedDepartment === 'zaal';
 
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static cursor-pointer"
+    >
       
       {/* Modal Card */}
-      <div className="bg-white rounded-3xl max-w-6xl w-full shadow-2xl border-2 border-orange-200 overflow-hidden my-auto max-h-[96vh] flex flex-col print:border-none print:shadow-none print:max-w-none print:w-full print:rounded-none">
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl max-w-6xl w-full shadow-2xl border-2 border-orange-200 overflow-hidden my-auto max-h-[96vh] flex flex-col print:border-none print:shadow-none print:max-w-none print:w-full print:rounded-none cursor-default"
+      >
         
         {/* Modal Top Bar (Controls - Hidden during print) */}
         <div className="bg-slate-950 text-white p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-800 shrink-0 print:hidden">

@@ -1863,6 +1863,12 @@ export default function App() {
       {/* Floating In-App Real-time Notification Banner for updates & notices */}
       <InAppNotificationBanner
         latestNotice={notices.length > 0 ? notices[0] : null}
+        onViewSchedule={() => {
+          setActiveTab('personeel');
+        }}
+        onViewNotice={(notice) => {
+          setActiveTab('personeel');
+        }}
       />
 
       {/* Automatic WhatsApp Sharing Modal */}

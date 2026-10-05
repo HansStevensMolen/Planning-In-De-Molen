@@ -206,9 +206,12 @@ export default function ExcelEmployeeSyncModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs font-sans animate-[fadeIn_0.15s_ease-out]">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs font-sans animate-[fadeIn_0.15s_ease-out] cursor-pointer"
+    >
       <div 
-        className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-orange-100 flex flex-col max-h-[92vh] overflow-hidden"
+        className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-orange-100 flex flex-col max-h-[92vh] overflow-hidden cursor-default"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

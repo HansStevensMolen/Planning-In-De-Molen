@@ -76,11 +76,14 @@ export function timeStringToDecimal(timeStr?: string, isEnd = false, day = 0): n
   if (lower.includes('open')) {
     return day === 6 ? 10.0 : 11.5;
   }
-  if (lower.includes('sluit')) {
-    return 24.5; // Loopt door tot na middernacht / sluit
-  }
-  if (lower.includes('hulpsluit')) {
+  // BELANGRIJK: Hulpsluit ALTIJD controleren vóór 'sluit', omdat 'hulpsluit' ook 'sluit' bevat!
+  // Wie tot hulpsluit staat ingepland werkt tot 0u00 (24.0 decimaal / middernacht).
+  if (lower.includes('hulpsluit') || lower.startsWith('hulp')) {
     return 24.0;
+  }
+  // Sluitdienst loopt door na middernacht / tot na officiële sluiting
+  if (lower.includes('sluit')) {
+    return 24.5;
   }
 
   const match = lower.match(/^(\d{1,2})[:uh.]?(\d{2})?$/);
@@ -214,10 +217,25 @@ export function buildInDeMolenDayGridData(
       return minStartA - minStartB;
     }
 
-    // Bij gelijke starttijd: de sluitshift of langste shift eerst
-    const aIsSluit = shiftsA.some(s => (s.endTime || '').toLowerCase().includes('sluit'));
-    const bIsSluit = shiftsB.some(s => (s.endTime || '').toLowerCase().includes('sluit'));
-    if (aIsSluit !== bIsSluit) return aIsSluit ? 1 : -1;
+    // Bij gelijke starttijd: kortere diensten eerst, hulpsluit (24.0 / tot 00u00), en sluitdienst (24.5) als laatste
+    const getShiftEffectiveEnd = (s: Shift): number => {
+      const lowerEnd = (s.endTime || '').toLowerCase().trim();
+      const lowerNotes = (s.notes || '').toLowerCase().trim();
+      const lowerRole = (s.role || '').toLowerCase().trim();
+      if (lowerEnd.includes('hulpsluit') || lowerNotes.includes('hulpsluit') || lowerRole.includes('hulpsluit') || lowerEnd.startsWith('hulp')) {
+        return 24.0;
+      }
+      if (lowerEnd.includes('sluit') || lowerNotes.includes('sluit') || lowerRole.includes('sluit')) {
+        return 24.5;
+      }
+      return timeStringToDecimal(s.endTime, true, dayIndex);
+    };
+
+    const maxEndA = Math.max(...shiftsA.map(getShiftEffectiveEnd));
+    const maxEndB = Math.max(...shiftsB.map(getShiftEffectiveEnd));
+    if (Math.abs(maxEndA - maxEndB) > 0.01) {
+      return maxEndA - maxEndB;
+    }
 
     return a.name.localeCompare(b.name);
   });
@@ -248,21 +266,49 @@ export function buildInDeMolenDayGridData(
       let isWorking = false;
 
       if (slot.isSluitRow) {
-        // Alleen tonen als medewerker effectief de sluitdienst heeft
-        isWorking = empShifts.some(
-          s => (s.endTime || '').toLowerCase().includes('sluit') || 
-               (s.notes || '').toLowerCase().includes('sluit') ||
-               timeStringToDecimal(s.endTime, true, dayIndex) >= 24.0
-        );
+        // BELANGRIJK: Wie tot hulpsluit staat ingepland werkt tot 0u00 (middernacht).
+        // Hulpsluit stopt om 00u00 en heeft GEEN sluitdienst op de afsluitende 'sluit' rij!
+        // Alleen medewerkers met een werkelijke sluitdienst (endTime/notes/role bevat 'sluit' maar GEEN 'hulpsluit', of eindtijd na 0u00 zoals 01:00/02:00) tonen we op de sluit-rij.
+        isWorking = empShifts.some(s => {
+          const lowerEnd = (s.endTime || '').toLowerCase().trim();
+          const lowerNotes = (s.notes || '').toLowerCase().trim();
+          const lowerRole = (s.role || '').toLowerCase().trim();
+
+          const isHulpsluit = lowerEnd.includes('hulpsluit') || lowerNotes.includes('hulpsluit') || lowerRole.includes('hulpsluit') || lowerEnd.startsWith('hulp');
+          if (isHulpsluit) {
+            // Werkt tot 0u00, dus NIET op de sluit rij
+            return false;
+          }
+
+          const hasSluit = lowerEnd.includes('sluit') || lowerNotes.includes('sluit') || lowerRole.includes('sluit');
+          if (hasSluit) {
+            return true;
+          }
+
+          // Tijden zoals 01:00, 02:00 (decimaal > 24.0) liggen na 00u00 middernacht en vallen op de sluit-rij
+          const endDec = timeStringToDecimal(s.endTime, true, dayIndex);
+          return endDec > 24.0;
+        });
       } else {
         isWorking = empShifts.some(s => {
           const sStart = timeStringToDecimal(s.startTime, false, dayIndex);
           let sEnd = timeStringToDecimal(s.endTime, true, dayIndex);
-          const isSluit = (s.endTime || '').toLowerCase().includes('sluit') || (s.notes || '').toLowerCase().includes('sluit');
-          const isHulpsluit = (s.endTime || '').toLowerCase().includes('hulpsluit') || (s.notes || '').toLowerCase().includes('hulpsluit');
 
-          if (isSluit) sEnd = 24.5;
-          else if (isHulpsluit) sEnd = 24.0;
+          const lowerEnd = (s.endTime || '').toLowerCase().trim();
+          const lowerNotes = (s.notes || '').toLowerCase().trim();
+          const lowerRole = (s.role || '').toLowerCase().trim();
+
+          const isHulpsluit = lowerEnd.includes('hulpsluit') || lowerNotes.includes('hulpsluit') || lowerRole.includes('hulpsluit') || lowerEnd.startsWith('hulp');
+          const isSluit = !isHulpsluit && (lowerEnd.includes('sluit') || lowerNotes.includes('sluit') || lowerRole.includes('sluit'));
+
+          if (isHulpsluit) {
+            // Wie tot hulpsluit staat ingepland werkt tot 0u00 (24.0).
+            // Dit betekent dat ze actief zijn t/m het tijdsblok 23.30-00.00!
+            sEnd = 24.0;
+          } else if (isSluit) {
+            // Echte sluitdienst loopt door na middernacht (24.5)
+            sEnd = 24.5;
+          }
 
           // Epsilon voor floating point tolerantie (bv. 11.5 tegenover 11.5000001)
           return (sStart - 0.001) <= slot.startDec && (sEnd + 0.001) >= slot.endDec;

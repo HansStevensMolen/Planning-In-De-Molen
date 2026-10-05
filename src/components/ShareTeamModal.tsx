@@ -85,9 +85,12 @@ export default function ShareTeamModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200 cursor-pointer"
+    >
       <div 
-        className="bg-white rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl border-2 border-orange-100 relative max-h-[92vh] overflow-y-auto"
+        className="bg-white rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl border-2 border-orange-100 relative max-h-[92vh] overflow-y-auto cursor-default"
         onClick={e => e.stopPropagation()}
       >
         {/* Close Button */}

@@ -2228,9 +2228,7 @@ export default function StaffPortal({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (window.confirm(`Weet je zeker dat je deze openstaande dienst direct wilt aannemen? Je wordt meteen ingeroosterd in de planning!`)) {
-                                    onSelfAssignOpenShift(req.shiftId, activeEmployeeId);
-                                  }
+                                  onSelfAssignOpenShift(req.shiftId, activeEmployeeId);
                                 }}
                                 className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black uppercase tracking-tight rounded-xl shadow-md transition duration-150 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
                               >

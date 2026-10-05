@@ -77,9 +77,13 @@ export default function SendWeekScheduleModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200 cursor-pointer"
+    >
       <div 
-        className="relative w-full max-w-3xl bg-white rounded-3xl shadow-2xl border-2 border-emerald-300 overflow-hidden text-left animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-3xl bg-white rounded-3xl shadow-2xl border-2 border-emerald-300 overflow-hidden text-left animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col cursor-default"
         role="dialog"
         aria-modal="true"
       >

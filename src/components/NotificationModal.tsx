@@ -138,8 +138,14 @@ export default function NotificationModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 animate-[fadeIn_0.2s_ease-out]">
-      <div className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border-2 border-orange-200 overflow-hidden my-4 text-left">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 animate-[fadeIn_0.2s_ease-out] cursor-pointer"
+    >
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border-2 border-orange-200 overflow-hidden my-4 text-left cursor-default"
+      >
         
         {/* Header */}
         <div className="bg-gradient-to-r from-orange-500 to-amber-500 text-white p-6 relative">

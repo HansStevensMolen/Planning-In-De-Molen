@@ -116,8 +116,14 @@ Heb je vragen? Vraag het gerust aan Hans! Tot snel op de vloer! 🍻`;
   ];
 
   return (
-    <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-[fadeIn_0.15s_ease-out]">
-      <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border-2 border-orange-200 overflow-hidden my-auto">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-[fadeIn_0.15s_ease-out] cursor-pointer"
+    >
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border-2 border-orange-200 overflow-hidden my-auto cursor-default"
+      >
         
         {/* Header */}
         <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 text-white p-6 relative">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   AlertTriangle, 
   Check, 
@@ -43,6 +43,18 @@ export default function StaffShiftAlarmModal({
   const [copied, setCopied] = useState(false);
   const [notifStatus, setNotifStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const displayAlerts = (alerts && alerts.length > 0) ? alerts : (unconfirmedAlerts || []);
   const pendingAlerts = displayAlerts.filter(a => !a.shift.acknowledged);
 
@@ -71,13 +83,15 @@ export default function StaffShiftAlarmModal({
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200 cursor-pointer"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reminder-modal-title"
     >
       <div 
-        className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border-2 border-red-300 overflow-hidden animate-in zoom-in-95 duration-200 relative flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border-2 border-red-300 overflow-hidden animate-in zoom-in-95 duration-200 relative flex flex-col max-h-[90vh] cursor-default"
       >
         {/* Header Bar */}
         <div className={`text-white p-5 sm:p-6 relative overflow-hidden shrink-0 ${

@@ -322,8 +322,6 @@ export const EmployeeAvatarModal: React.FC<EmployeeAvatarModalProps> = ({
   // Remove photo and reset to placeholder
   const handleRemovePhoto = async () => {
     if (!employee) return;
-    const confirm = window.confirm(`Weet je zeker dat je de profielfoto van ${employee.name} wilt verwijderen?`);
-    if (!confirm) return;
 
     setIsSaving(true);
     try {

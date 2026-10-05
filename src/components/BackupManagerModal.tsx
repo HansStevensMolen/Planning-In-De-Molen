@@ -184,8 +184,14 @@ export default function BackupManagerModal({
   });
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 animate-[fadeIn_0.2s_ease-out]">
-      <div className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border-2 border-orange-100 overflow-hidden my-4 max-h-[90vh] flex flex-col text-left">
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 animate-[fadeIn_0.2s_ease-out] cursor-pointer"
+    >
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border-2 border-orange-100 overflow-hidden my-4 max-h-[90vh] flex flex-col text-left cursor-default"
+      >
         
         {/* Top Header */}
         <div className="bg-slate-900 text-white px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-4 border-orange-500 shrink-0">
