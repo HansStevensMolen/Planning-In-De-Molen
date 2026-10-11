@@ -59,7 +59,7 @@ import {
 } from './services/firebase';
 import { AppSettings } from './types';
 import { sortEmployeesByFirstName, deduplicateEmployees } from './utils/employeeSortUtils';
-import { CURRENT_WEEK_NUMBER } from './utils/weekUtils';
+import { CURRENT_WEEK_NUMBER, getWeekMeta } from './utils/weekUtils';
 import ShareTeamModal from './components/ShareTeamModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -123,16 +123,18 @@ export default function App() {
 
   const [shifts, setShifts] = useState<Shift[]>(() => {
     const saved = localStorage.getItem('cafe_shifts');
-    if (saved) {
+    const migratedDraft = localStorage.getItem('cafe_planning_draft_migrated_v3');
+    if (saved && migratedDraft) {
       try {
         const parsed: Shift[] = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed;
         }
       } catch (e) {
         // ignore
       }
     }
+    localStorage.setItem('cafe_planning_draft_migrated_v3', 'true');
     return INITIAL_SHIFTS;
   });
 
@@ -666,16 +668,17 @@ export default function App() {
     }
   };
 
-  // Action: Publish draft shifts (for a specific week or all) & alert team
+  // Action: Publish schedule for a specific week (or all) & alert team
   const handlePublishAllDrafts = (targetWeek?: number) => {
-    const draftsToPublish = shifts.filter(s => 
-      s.status === 'draft' && (targetWeek === undefined || (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek)
-    );
-    const draftCount = draftsToPublish.length;
-    if (draftCount === 0) return;
+    const targetW = targetWeek !== undefined ? targetWeek : CURRENT_WEEK_NUMBER;
+    const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === targetW);
+    
+    if (weekShifts.length === 0 && targetWeek !== undefined) {
+      return;
+    }
 
     const publishedShifts = shifts.map(s => {
-      if (s.status === 'draft' && (targetWeek === undefined || (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek)) {
+      if (targetWeek === undefined || (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek) {
         return { ...s, status: 'published' as const };
       }
       return s;
@@ -684,15 +687,18 @@ export default function App() {
     saveShiftsToCloud(publishedShifts);
     
     const weekLabel = targetWeek ? `Week ${targetWeek}` : 'Alle Weken';
+    const publishedCount = targetWeek !== undefined ? weekShifts.length : shifts.length;
 
     // Add nice system log
-    addLog('Rooster Gepubliceerd', `${draftCount} ontwerp-diensten officieel geactiveerd voor ${weekLabel}`);
+    addLog('Rooster Gepubliceerd', `Planning voor ${weekLabel} (${publishedCount} diensten) officieel geactiveerd en zichtbaar gemaakt voor het personeel`);
 
     // Insert automatic notice to the group notice board
+    const wMeta = targetWeek ? getWeekMeta(targetWeek) : null;
+    const dateRangeStr = wMeta?.dateRange ? ` (${wMeta.dateRange})` : '';
     const newNotice: Notice = {
       id: `notice_${Date.now()}`,
-      title: `📅 Planning ${weekLabel} gepubliceerd!`,
-      content: `Het weekrooster voor ${weekLabel} is officieel herzien en de nieuwste diensten zijn geplaatst. Controleer direct jouw persoonlijke uren in het portaal en vergeet niet op "Bevestigen als Gezien" te klikken!`,
+      title: `📢 Planning ${weekLabel} is gepubliceerd!`,
+      content: `De officiële planning voor ${weekLabel}${dateRangeStr} staat nu live in het personeelsportaal! Bekijk direct jouw ingeplande diensten en bevestig deze als "Gezien".`,
       date: new Date().toISOString().split('T')[0],
       category: 'planning',
       author: 'Hans Stevens (Beheerder)'
@@ -710,27 +716,45 @@ export default function App() {
         subtitle: `Het rooster staat direct live in het personeelsportaal en op het mededelingenbord. Deel dit direct in de WhatsApp teamgroep:`,
         defaultMessage: generateScheduleUpdateWhatsAppText({
           weekNumber: targetWeek || CURRENT_WEEK_NUMBER,
-          shiftsCount: draftCount,
-          notes: `${draftCount} diensten zijn zojuist officieel gepubliceerd.`
+          shiftsCount: publishedCount,
+          notes: `De definitieve planning voor ${weekLabel} staat online in het personeelsportaal. Gelieve je diensten te bekijken en te bevestigen!`
         })
       });
     }
 
     // Automatic Cloud Backup Snapshot of the finalized schedule
     const weekForBackup = targetWeek || CURRENT_WEEK_NUMBER;
-    const weekShifts = publishedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === weekForBackup);
+    const finalizedWeekShifts = publishedShifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === weekForBackup);
     createScheduleBackupInCloud(
       weekForBackup,
-      weekShifts,
+      finalizedWeekShifts,
       'Hans Stevens (Beheerder)',
-      `Definitieve Planning Week ${weekForBackup} (${weekShifts.length} diensten)`,
-      `Automatische cloud snapshot bij publiceren van ${draftCount} diensten`,
+      `Definitieve Planning Week ${weekForBackup} (${finalizedWeekShifts.length} diensten)`,
+      `Automatische cloud snapshot bij publiceren van ${publishedCount} diensten`,
       true
     ).then(() => {
       addLog('Cloud Backup Aangemaakt', `Definitieve planning voor Week ${weekForBackup} veilig gearchiveerd in Google Cloud Firestore`);
     }).catch(err => {
       console.warn('Cloud schedule backup error:', err);
     });
+  };
+
+  // Action: Unpublish / Hide schedule for a specific week (set back to draft / invisible for staff)
+  const handleUnpublishWeek = (targetWeek: number) => {
+    const targetShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek);
+    if (targetShifts.length === 0) return;
+
+    const unpublishedShifts = shifts.map(s => {
+      if ((s.weekNumber || CURRENT_WEEK_NUMBER) === targetWeek) {
+        return { ...s, status: 'draft' as const, acknowledged: false };
+      }
+      return s;
+    });
+
+    setShifts(unpublishedShifts);
+    saveShiftsToCloud(unpublishedShifts);
+
+    addLog('Rooster Ingetrokken', `Planning voor Week ${targetWeek} (${targetShifts.length} diensten) teruggezet naar concept / tijdelijk onzichtbaar gemaakt voor medewerkers`);
   };
 
   // Action: Register new Employee member
@@ -1696,6 +1720,7 @@ export default function App() {
                 onUpdateShift={handleUpdateShift}
                 onDeleteShift={handleDeleteShift}
                 onPublishAllDrafts={handlePublishAllDrafts}
+                onUnpublishWeek={handleUnpublishWeek}
                 onAddEmployee={handleAddEmployee}
                 onUpdateEmployee={handleUpdateEmployee}
                 onDeleteEmployee={handleDeleteEmployee}

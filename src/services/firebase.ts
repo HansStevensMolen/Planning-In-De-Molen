@@ -41,6 +41,7 @@ import {
   AppSettings
 } from '../types';
 import { CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER } from '../utils/weekUtils';
+import { safeStorage } from '../utils/safeStorage';
 
 // 1. Initialize Firebase App
 let app: FirebaseApp;
@@ -197,12 +198,12 @@ export async function saveAvailabilityToCloudAndBackup(
     console.error('[Firebase] Error saving availability backup to Firestore:', error);
   }
 
-  // Also maintain in localStorage as immediate fallback
+  // Also maintain in safeStorage as immediate fallback
   try {
-    const existingBackupsJson = localStorage.getItem('cafe_availability_backups');
+    const existingBackupsJson = safeStorage.getItem('cafe_availability_backups');
     const existingBackups: AvailabilitySubmissionBackup[] = existingBackupsJson ? JSON.parse(existingBackupsJson) : [];
     const updatedBackups = [backupRecord, ...existingBackups];
-    localStorage.setItem('cafe_availability_backups', JSON.stringify(updatedBackups.slice(0, 200)));
+    safeStorage.setItem('cafe_availability_backups', JSON.stringify(updatedBackups.slice(0, 200)));
   } catch (e) {
     // silent storage quota fallback
   }
@@ -225,7 +226,7 @@ export async function fetchAvailabilityBackupsFromCloud(): Promise<AvailabilityS
     });
 
     if (backups.length > 0) {
-      localStorage.setItem('cafe_availability_backups', JSON.stringify(backups));
+      safeStorage.setItem('cafe_availability_backups', JSON.stringify(backups));
       return backups;
     }
   } catch (error) {
@@ -233,7 +234,7 @@ export async function fetchAvailabilityBackupsFromCloud(): Promise<AvailabilityS
   }
 
   // Fallback to local storage
-  const saved = localStorage.getItem('cafe_availability_backups');
+  const saved = safeStorage.getItem('cafe_availability_backups');
   return saved ? JSON.parse(saved) : [];
 }
 
@@ -314,12 +315,12 @@ export async function createScheduleBackupInCloud(
     console.error('[Firebase] Error creating schedule backup in Firestore:', error);
   }
 
-  // Also save to localStorage archive
+  // Also save to safeStorage archive
   try {
-    const existing = localStorage.getItem('cafe_schedule_backups');
+    const existing = safeStorage.getItem('cafe_schedule_backups');
     const list: ScheduleBackup[] = existing ? JSON.parse(existing) : [];
     const updated = [backup, ...list];
-    localStorage.setItem('cafe_schedule_backups', JSON.stringify(updated.slice(0, 50)));
+    safeStorage.setItem('cafe_schedule_backups', JSON.stringify(updated.slice(0, 50)));
   } catch (e) {
     // ignore quota
   }
@@ -342,14 +343,14 @@ export async function fetchScheduleBackupsFromCloud(): Promise<ScheduleBackup[]>
     });
 
     if (list.length > 0) {
-      localStorage.setItem('cafe_schedule_backups', JSON.stringify(list));
+      safeStorage.setItem('cafe_schedule_backups', JSON.stringify(list));
       return list;
     }
   } catch (error) {
     console.warn('[Firebase] Could not load schedule backups from cloud, using local cache:', error);
   }
 
-  const localSaved = localStorage.getItem('cafe_schedule_backups');
+  const localSaved = safeStorage.getItem('cafe_schedule_backups');
   return localSaved ? JSON.parse(localSaved) : [];
 }
 
@@ -923,17 +924,17 @@ export async function saveAppSettingsToCloud(settings: Partial<AppSettings>): Pr
     await setDoc(docRef, payload, { merge: true });
     // Cache locally
     const current = getLocalAppSettings();
-    localStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
+    safeStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
   } catch (error) {
     console.warn('[Firebase] Could not save app settings to Firestore:', error);
     const current = getLocalAppSettings();
-    localStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
+    safeStorage.setItem('cafe_app_settings', JSON.stringify({ ...current, ...settings }));
   }
 }
 
 export function getLocalAppSettings(): AppSettings {
   try {
-    const saved = localStorage.getItem('cafe_app_settings');
+    const saved = safeStorage.getItem('cafe_app_settings');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (!Array.isArray(parsed.lockedWeeks)) {
@@ -955,7 +956,7 @@ export async function fetchAppSettingsFromCloud(): Promise<AppSettings> {
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data() as AppSettings;
-      localStorage.setItem('cafe_app_settings', JSON.stringify(data));
+      safeStorage.setItem('cafe_app_settings', JSON.stringify(data));
       return data;
     }
   } catch (error) {
@@ -970,7 +971,7 @@ export function subscribeToAppSettings(callback: (settings: AppSettings) => void
     return onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data() as AppSettings;
-        localStorage.setItem('cafe_app_settings', JSON.stringify(data));
+        safeStorage.setItem('cafe_app_settings', JSON.stringify(data));
         callback(data);
       }
     }, (err) => {

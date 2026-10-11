@@ -3,6 +3,7 @@ import { Lock, Eye, EyeOff, Check, ShieldCheck, UserCheck, KeyRound, AlertCircle
 import { Employee } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { safeStorage } from '../utils/safeStorage';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface StaffLoginProps {
@@ -22,7 +23,7 @@ export default function StaffLogin({
 
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>(() => {
     // If there's a previously remembered last user hint
-    const lastHint = localStorage.getItem('cafe_last_staff_hint_id');
+    const lastHint = safeStorage.getItem('cafe_last_staff_hint_id');
     if (lastHint && sortedEmployees.some(e => e.id === lastHint)) {
       return lastHint;
     }
@@ -64,7 +65,7 @@ export default function StaffLogin({
     const expectedPin = emp.pin || '1234';
 
     if (pinToTest.trim() === expectedPin.trim()) {
-      localStorage.setItem('cafe_last_staff_hint_id', emp.id);
+      safeStorage.setItem('cafe_last_staff_hint_id', emp.id);
       setErrorMsg(null);
       setTimeout(() => {
         onLoginSuccess(emp, rememberMe);

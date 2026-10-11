@@ -53,8 +53,11 @@ import {
   Info,
   BarChart3,
   Edit,
-  PenLine
+  PenLine,
+  Repeat,
+  RefreshCw
 } from 'lucide-react';
+import { getContinuityInfo, getDayContinuityCandidates, getAllWeekContinuityMatches, ContinuityMatch } from '../utils/continuityUtils';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta, AppSettings } from '../types';
 import NotificationModal from './NotificationModal';
 import SendWeekScheduleModal from './SendWeekScheduleModal';
@@ -67,7 +70,26 @@ import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
 import StaffAvailabilityChart from './StaffAvailabilityChart';
-import { AVAILABLE_WEEKS, HISTORICAL_WEEKS, getWeekMeta, isAvailabilityPastDeadline, isWeekArchived, isWeekAvailabilityLocked, UPCOMING_SIX_WEEKS_FROM_NEXT, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDayDateInfo, getAutoArchivedWeeks, getAutoActiveWeeks, getEffectiveEmployeeAvailability, isRecurringApplicableToWeek, DAYS_FULL_NL } from '../utils/weekUtils';
+import { 
+  AVAILABLE_WEEKS, 
+  HISTORICAL_WEEKS, 
+  getWeekMeta, 
+  isAvailabilityPastDeadline, 
+  isWeekArchived, 
+  isWeekAvailabilityLocked, 
+  UPCOMING_SIX_WEEKS_FROM_NEXT, 
+  CURRENT_WEEK_NUMBER, 
+  NEXT_WEEK_NUMBER, 
+  getDayDateInfo, 
+  getAutoArchivedWeeks, 
+  getAutoActiveWeeks, 
+  getEffectiveEmployeeAvailability, 
+  isRecurringApplicableToWeek, 
+  DAYS_FULL_NL,
+  SPECIAL_DAYS_WEEK_NUMBER,
+  SPECIAL_DAYS_LIST,
+  isSpecialDaysWeek
+} from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
 import { sortEmployeesByFirstName, sortEmployeesByDayAvailability, sortEmployeesByPlanningStatus, normalizeFacebookUrl } from '../utils/employeeSortUtils';
 import {
@@ -99,6 +121,7 @@ interface ManagerDashboardProps {
   onUpdateShift: (shift: Shift) => void;
   onDeleteShift: (id: string) => void;
   onPublishAllDrafts: (targetWeek?: number) => void;
+  onUnpublishWeek?: (targetWeek: number) => void;
   onAddEmployee: (employee: Omit<Employee, 'id'>) => void;
   onUpdateEmployee: (employee: Employee) => void;
   onDeleteEmployee?: (id: string) => void;
@@ -164,6 +187,7 @@ export default function ManagerDashboard({
   onUpdateShift,
   onDeleteShift,
   onPublishAllDrafts,
+  onUnpublishWeek,
   onAddEmployee,
   onUpdateEmployee,
   onDeleteEmployee,
@@ -233,6 +257,7 @@ export default function ManagerDashboard({
   const [showClearWeekModal, setShowClearWeekModal] = useState(false);
   const [showCopyWeekModal, setShowCopyWeekModal] = useState(false);
   const [showPublishSixWeeksConfirmModal, setShowPublishSixWeeksConfirmModal] = useState(false);
+  const [showUnpublishWeekConfirmModal, setShowUnpublishWeekConfirmModal] = useState(false);
 
   // Modals state
   const [showNotificationModal, setShowNotificationModal] = useState(false);
@@ -336,7 +361,7 @@ export default function ManagerDashboard({
 
   // Action: Add Next Week dynamically
   const handleAddNewWeek = () => {
-    const allActiveNums = activeWeeks.map(w => w.weekNumber);
+    const allActiveNums = activeWeeks.map(w => w.weekNumber).filter(n => n !== SPECIAL_DAYS_WEEK_NUMBER);
     const maxWeek = Math.max(...allActiveNums, CURRENT_WEEK_NUMBER + 6);
     const nextW = maxWeek + 1;
     setExtraWeekNumbers(prev => [...prev, nextW]);
@@ -939,7 +964,7 @@ export default function ManagerDashboard({
     setEditEmpPhone(emp.phone || '');
     setEditEmpFacebook(emp.facebookUrl || '');
     setEditEmpPin(emp.pin || '1234');
-    setEditEmpRole(emp.role || 'medewerker');
+    setEditEmpRole(emp.role === 'beheerder' ? 'beheerder' : 'medewerker');
   };
 
   const handleSaveEmployeeEdit = (emp: Employee) => {
@@ -1389,40 +1414,98 @@ export default function ManagerDashboard({
         </div>
       </div>
 
-      {/* Concept-diensten alert banner (alleen zichtbaar indien er concepten zijn) */}
-      {loggedDraftShiftsCount > 0 && (
-        <div className="bg-amber-50 rounded-2xl border border-amber-300 p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-2xs">
-          <div className="flex items-center space-x-2.5 text-amber-950">
-            <CircleAlert size={18} className="shrink-0 text-amber-600" />
-            <div>
-              <span className="font-extrabold uppercase tracking-tight text-amber-900">
-                {loggedDraftShiftsCount} niet-gepubliceerde conceptdiensten in Week {selectedManagerWeek}
-              </span>
-              <span className="hidden md:inline text-amber-800 text-[11px] ml-2 font-medium">
-                — Medewerkers zien deze diensten pas na publicatie.
-              </span>
+      {/* 📢 PUBLICATIESTATUS & COMMUNICATIEBALK VOOR DE GESELECTEERDE WEEK */}
+      {totalShiftsCount > 0 && (
+        loggedDraftShiftsCount > 0 || publishedShiftsCount === 0 ? (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
+            <div className="flex items-start sm:items-center space-x-3 text-amber-950">
+              <div className="w-9 h-9 rounded-xl bg-amber-200/80 text-amber-900 flex items-center justify-center shrink-0 shadow-2xs">
+                <CircleAlert size={20} className="text-amber-700 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-black uppercase tracking-tight text-amber-950 text-xs">
+                    🔒 Planning Week {selectedManagerWeek} staat in CONCEPT ({loggedDraftShiftsCount} van {totalShiftsCount} diensten)
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200 text-amber-950 border border-amber-300">
+                    Onzichtbaar voor personeel
+                  </span>
+                </div>
+                <p className="text-amber-850 text-[11px] font-medium mt-0.5 leading-relaxed">
+                  Medewerkers kunnen dit rooster nog niet inzien in het personeelsportaal. Klik op <strong>"Planning Publiceren"</strong> om het definitieve rooster vrij te geven en medewerkers direct te notificeren.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+              <button 
+                type="button"
+                onClick={() => {
+                  onPublishAllDrafts(selectedManagerWeek);
+                  setSixWeeksSuccessMsg(`✅ Planning Week ${selectedManagerWeek} is definitief gepubliceerd! Alle medewerkers hebben een notificatie ontvangen.`);
+                  setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center gap-2"
+                title="Maak planning zichtbaar voor medewerkers en stuur een notificatie"
+              >
+                <CheckCheck size={16} />
+                <span>Planning Publiceren & Notificeren</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSendTargetWeek(selectedManagerWeek);
+                  setShowSendWeekScheduleModal(true);
+                }}
+                className="px-3 py-2 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
+                title="Deel via WhatsApp of e-mail"
+              >
+                WhatsApp 📤
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button 
-              onClick={() => onPublishAllDrafts(selectedManagerWeek)}
-              className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5"
-            >
-              <CheckCheck size={14} />
-              <span>Publiceer Rooster ({loggedDraftShiftsCount})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSendTargetWeek(selectedManagerWeek);
-                setShowSendWeekScheduleModal(true);
-              }}
-              className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
-            >
-              Verstuur 📤
-            </button>
+        ) : (
+          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl border-2 border-emerald-300 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
+            <div className="flex items-start sm:items-center space-x-3 text-emerald-950">
+              <div className="w-9 h-9 rounded-xl bg-emerald-200/80 text-emerald-900 flex items-center justify-center shrink-0 shadow-2xs">
+                <CheckCheck size={20} className="text-emerald-700" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-black uppercase tracking-tight text-emerald-950 text-xs">
+                    🟢 Planning Week {selectedManagerWeek} is GEPUBLICEERD ({publishedShiftsCount} diensten live)
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-200 text-emerald-950 border border-emerald-300">
+                    Zichtbaar voor personeel
+                  </span>
+                </div>
+                <p className="text-emerald-850 text-[11px] font-medium mt-0.5 leading-relaxed">
+                  Dit weekrooster staat live in het personeelsportaal. {confirmedShiftsCount} van de {publishedShiftsCount} diensten ({confirmationRate}%) zijn al bevestigd door medewerkers.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+              <button
+                type="button"
+                onClick={() => setShowUnpublishWeekConfirmModal(true)}
+                className="px-3 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer"
+                title="Zet dit weekrooster terug op concept (onzichtbaar voor medewerkers)"
+              >
+                🔒 Verberg (Zet op Concept)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSendTargetWeek(selectedManagerWeek);
+                  setShowSendWeekScheduleModal(true);
+                }}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                title="Stuur nogmaals een melding of deel via WhatsApp"
+              >
+                <span>Herinneren / WhatsApp 📤</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )
       )}
 
       {/* 🧭 STRAKKE HOOFDNAVIGATIE TABS */}
@@ -1712,6 +1795,8 @@ export default function ManagerDashboard({
                         const wShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber);
                         const wDrafts = wShifts.filter(s => s.status === 'draft').length;
 
+                        const isSpecial = w.weekNumber === SPECIAL_DAYS_WEEK_NUMBER;
+
                         return (
                           <button
                             key={w.weekNumber}
@@ -1722,16 +1807,34 @@ export default function ManagerDashboard({
                             }}
                             className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase transition-all duration-150 flex items-center gap-1.5 cursor-pointer ${
                               isSelected
-                                ? 'bg-orange-500 text-white shadow-xs scale-[1.02]'
-                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                                ? isSpecial 
+                                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md scale-[1.02] ring-2 ring-amber-300'
+                                  : 'bg-orange-500 text-white shadow-xs scale-[1.02]'
+                                : isSpecial
+                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300'
+                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
                             }`}
                           >
-                            <span>W{w.weekNumber}</span>
-                            {w.isUpcoming && (
+                            {isSpecial ? (
+                              <>
+                                <Sparkles size={11} className={isSelected ? 'text-amber-200' : 'text-amber-600'} />
+                                <span>Speciale dagen</span>
+                              </>
+                            ) : (
+                              <span>W{w.weekNumber}</span>
+                            )}
+                            {w.isUpcoming && !isSpecial && (
                               <span className={`text-[8px] px-1 py-0.2 rounded-full font-black ${
                                 isSelected ? 'bg-white text-orange-600' : 'bg-orange-100 text-orange-800'
                               }`}>
                                 Volgend
+                              </span>
+                            )}
+                            {isSpecial && (
+                              <span className={`text-[8px] px-1.5 py-0.2 rounded-full font-black ${
+                                isSelected ? 'bg-white text-orange-700' : 'bg-amber-200 text-amber-900'
+                              }`}>
+                                Feestdagen
                               </span>
                             )}
                             <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
@@ -2326,6 +2429,190 @@ export default function ManagerDashboard({
             );
           })()}
 
+          {/* 🔁 CONTINUÏTEIT IN DE BEZETTING: Vorige week gewerkt op dezelfde dag én nu beschikbaar */}
+          {(() => {
+            const weekContinuity = getAllWeekContinuityMatches(selectedManagerWeek, employees, shifts, availabilities);
+            const { pendingMatches, scheduledMatches } = weekContinuity;
+            const previousWk = selectedManagerWeek - 1;
+
+            if (pendingMatches.length === 0 && scheduledMatches.length === 0) {
+              return null;
+            }
+
+            const handleBatchPlanAllContinuity = () => {
+              const newShifts: Shift[] = pendingMatches.map(m => ({
+                id: `shift_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                employeeId: m.employeeId,
+                day: m.day,
+                startTime: m.previousShift.startTime,
+                endTime: m.previousShift.endTime,
+                department: m.previousShift.department || (m.employee.department === 'keuken' ? 'keuken' : 'zaal'),
+                role: m.previousShift.role,
+                weekNumber: selectedManagerWeek,
+                status: 'draft' as const,
+                acknowledged: false,
+                notes: m.previousShift.notes ? `${m.previousShift.notes} (Continuïteit W${m.previousWeekNumber})` : `Continuïteit uit Week ${m.previousWeekNumber}`
+              }));
+
+              if (onBatchUpdateShifts) {
+                onBatchUpdateShifts([...shifts, ...newShifts], `${newShifts.length} continuïteits-diensten ingepland voor Week ${selectedManagerWeek}`);
+              } else {
+                newShifts.forEach(s => onAddShift(s));
+              }
+
+              setSixWeeksSuccessMsg(`⚡ Alle ${newShifts.length} continuïteits-shiften succesvol ingepland voor Week ${selectedManagerWeek}!`);
+              setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+            };
+
+            return (
+              <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/80 to-sky-50/90 rounded-3xl border-2 border-indigo-200 p-4 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                      <Repeat size={18} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-xs font-black uppercase tracking-tight text-indigo-950">
+                          Continuïteit in de Bezetting (Week {selectedManagerWeek} vs Week {previousWk})
+                        </h4>
+                        {pendingMatches.length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-600 text-white shadow-2xs animate-pulse">
+                            {pendingMatches.length} kandidaat{pendingMatches.length > 1 ? 'en' : ''} beschikbaar
+                          </span>
+                        )}
+                        {scheduledMatches.length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
+                            ✓ {scheduledMatches.length} reeds ingepland
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-indigo-900/80 font-medium">
+                        Onderstaande medewerkers werkten <strong>vorige week (Week {previousWk})</strong> op deze dag én hebben voor deze week opgegeven dat ze <strong>beschikbaar zijn</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  {pendingMatches.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleBatchPlanAllContinuity}
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer shrink-0 self-start sm:self-auto"
+                      title="Plan alle beschikbare continuïteits-kandidaten in één klik in met de uren van vorige week"
+                    >
+                      <Zap size={14} className="text-amber-300 fill-amber-300" />
+                      <span>Plan alles in (⚡ {pendingMatches.length})</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Lijst van continuïteitsmatches per dag */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
+                  {pendingMatches.map(m => {
+                    const dayName = DAYS_OF_WEEK[m.day];
+                    const dayDateInfo = getDayDateInfo(selectedManagerWeek, m.day);
+
+                    return (
+                      <div
+                        key={`${m.employeeId}_${m.day}`}
+                        className="bg-white/95 rounded-2xl border-2 border-indigo-200 p-2.5 shadow-2xs hover:border-indigo-400 hover:shadow-xs transition flex flex-col justify-between gap-2"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-indigo-900 bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200">
+                              {dayName} ({dayDateInfo.shortDate})
+                            </span>
+                            <span className="text-[9px] font-bold text-slate-500">
+                              W{m.previousWeekNumber} ➔ W{m.currentWeekNumber}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <div 
+                              className="w-7 h-7 rounded-lg text-white font-black text-[11px] flex items-center justify-center shrink-0 shadow-2xs"
+                              style={{ backgroundColor: m.employee.color }}
+                            >
+                              {m.employee.name.slice(0, 2).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-black text-slate-900 truncate">
+                                {m.employee.name}
+                              </div>
+                              <div className="text-[10px] font-bold text-slate-500 truncate">
+                                {m.employee.statuut} • {m.employee.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-50 rounded-xl p-1.5 border border-slate-200 text-[10px] space-y-0.5 mt-1">
+                            <div className="font-bold text-slate-700 flex items-center justify-between">
+                              <span>Vorige week:</span>
+                              <span className="font-black text-indigo-950">{m.previousShift.startTime} - {m.previousShift.endTime}</span>
+                            </div>
+                            <div className="font-bold text-emerald-800 flex items-center justify-between">
+                              <span>Nu beschikbaar:</span>
+                              <span className="font-black">{m.currentAvailabilityHours || 'Gehele dag'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedShift({
+                              isNew: true,
+                              employeeId: m.employeeId,
+                              day: m.day,
+                              startTime: m.previousShift.startTime,
+                              endTime: m.previousShift.endTime,
+                              department: m.previousShift.department || (m.employee.department === 'keuken' ? 'keuken' : 'zaal'),
+                              role: m.previousShift.role,
+                              weekNumber: selectedManagerWeek,
+                              status: 'draft',
+                              acknowledged: false,
+                              notes: m.previousShift.notes ? `${m.previousShift.notes} (Continuïteit W${m.previousWeekNumber})` : `Continuïteit uit Week ${m.previousWeekNumber}`
+                            });
+                            setShowShiftModal(true);
+                          }}
+                          className="w-full py-1.5 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-900 border border-indigo-300 rounded-xl text-[10.5px] font-black uppercase tracking-tight flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer shadow-2xs"
+                          title={`Plan ${m.employee.name} direct in voor ${dayName}`}
+                        >
+                          <Zap size={11} className="text-amber-500 fill-amber-500" />
+                          <span>Plan {m.employee.name} in</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {scheduledMatches.map(m => {
+                    const dayName = DAYS_OF_WEEK[m.day];
+                    return (
+                      <div
+                        key={`scheduled_${m.employeeId}_${m.day}`}
+                        className="bg-emerald-50/70 rounded-2xl border border-emerald-200 p-2.5 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-emerald-700 font-black text-sm">✓</span>
+                          <div className="min-w-0">
+                            <div className="text-[11px] font-black text-slate-800 truncate">
+                              {m.employee.name} ({dayName})
+                            </div>
+                            <div className="text-[9.5px] font-bold text-emerald-850 truncate">
+                              Continuïteit behouden ({m.alreadyScheduledShift?.startTime} - {m.alreadyScheduledShift?.endTime})
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 shrink-0">
+                          Ingepland
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Grid view - Vibrant Palette Style with Sticky Column (Names) and Sticky Row (Days) */}
           <div className="bg-white rounded-3xl shadow-md border-2 border-orange-100 overflow-hidden flex flex-col">
             <div className="overflow-auto max-h-[75vh] relative">
@@ -2342,17 +2629,56 @@ export default function ManagerDashboard({
                     </th>
                     {DAYS_OF_WEEK.map((day, dIdx) => {
                       const dayDateInfo = getDayDateInfo(selectedManagerWeek, dIdx);
+                      const isSpecial = selectedManagerWeek === SPECIAL_DAYS_WEEK_NUMBER;
+                      const specialDay = isSpecial ? SPECIAL_DAYS_LIST[dIdx] : null;
+                      const dayHeaderName = specialDay ? specialDay.title : day;
                       const eveningTarget = dIdx <= 1 ? 4 : dIdx <= 3 ? 5 : 7;
+                      const dayContinuityCandidates = getDayContinuityCandidates(
+                        dIdx,
+                        selectedManagerWeek,
+                        employees,
+                        shifts,
+                        availabilities
+                      ).filter(c => !c.isAlreadyScheduledThisWeek);
+
                       return (
-                        <th key={day} className="px-3 py-3 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 border-orange-200 min-w-[145px] bg-orange-50/90">
+                        <th key={day} className={`px-3 py-3 text-left text-xs font-black text-slate-700 uppercase tracking-wider border-b-2 border-r-2 min-w-[145px] ${
+                          isSpecial ? 'bg-amber-50/95 border-amber-300' : 'bg-orange-50/90 border-orange-200'
+                        }`}>
                           <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-black text-xs text-slate-800 tracking-tight">{day}</span>
-                            <span className="text-[11px] font-black text-orange-950 bg-orange-200/90 border border-orange-300 px-2 py-0.5 rounded-lg shadow-2xs">
+                            <span className="font-black text-xs text-slate-800 tracking-tight">{dayHeaderName}</span>
+                            <span className={`text-[11px] font-black px-2 py-0.5 rounded-lg shadow-2xs border ${
+                              isSpecial 
+                                ? 'bg-amber-200 text-amber-950 border-amber-300' 
+                                : 'bg-orange-200/90 text-orange-950 border-orange-300'
+                            }`}>
                               {dayDateInfo.shortDate}
                             </span>
                           </div>
-                          <div className="text-[9px] font-semibold text-slate-500 normal-case mt-0.5">
-                            2 overdag • {eveningTarget} avond
+                          <div className="text-[9px] font-bold normal-case mt-0.5 flex flex-wrap items-center justify-between gap-1">
+                            {specialDay?.closingNote ? (
+                              <span className="text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded font-black">
+                                ⚠️ {specialDay.closingNote}
+                              </span>
+                            ) : specialDay?.formNotes ? (
+                              <span className="text-amber-800 font-semibold">
+                                {specialDay.formNotes}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500 font-semibold">
+                                2 overdag • {eveningTarget} avond
+                              </span>
+                            )}
+
+                            {dayContinuityCandidates.length > 0 && (
+                              <span 
+                                className="inline-flex items-center gap-1 text-[8.5px] font-black px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-950 border border-indigo-300 shadow-2xs cursor-help"
+                                title={`Continuïteits-kandidaten voor ${day} (stonden vorige week op deze dag en zijn nu beschikbaar):\n${dayContinuityCandidates.map(c => `• ${employees.find(e => e.id === c.employeeId)?.name}: werkte W${c.previousWeekNumber} (${c.previousShift.startTime} - ${c.previousShift.endTime})`).join('\n')}`}
+                              >
+                                <Repeat size={8} className="text-indigo-700" />
+                                <span>{dayContinuityCandidates.length} continuïteit</span>
+                              </span>
+                            )}
                           </div>
                         </th>
                       );
@@ -2593,6 +2919,7 @@ export default function ManagerDashboard({
                           );
                           const empAvailResult = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
                           const empDayAvail = empAvailResult.availability?.days.find(d => d.day === dayIdx);
+                          const continuity = getContinuityInfo(emp, dayIdx, selectedManagerWeek, shifts, availabilities);
                           return (
                             <td key={dayIdx} className="px-2 py-3 border-r border-b border-orange-100 align-top min-h-[96px] min-w-[135px]">
                             <div className="space-y-2 min-h-[64px] flex flex-col justify-start">
@@ -2789,6 +3116,17 @@ export default function ManagerDashboard({
                                         <span>Herinnerd</span>
                                       </span>
                                     )}
+
+                                    {/* Continuïteit Badge als de shift aansluit op vorige week */}
+                                    {continuity && (
+                                      <span 
+                                        className="inline-flex items-center gap-1 text-[8.5px] font-black uppercase tracking-tight px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-950 border border-indigo-300 shadow-2xs"
+                                        title={`🔁 Continuïteit: ${emp.name} stond vorige week (Week ${continuity.previousWeekNumber}) ook op ${day}!`}
+                                      >
+                                        <Repeat size={8} className="text-indigo-700" />
+                                        <span>Continuïteit W{continuity.previousWeekNumber}</span>
+                                      </span>
+                                    )}
                                   </div>
 
                                   {/* Notes summary */}
@@ -2806,6 +3144,46 @@ export default function ManagerDashboard({
                                 </div>
                                 );
                               })}
+
+                              {/* 🔁 CONTINUÏTEIT SUGGESTIE CARD: Vorige week gewerkt op deze dag én nu beschikbaar! */}
+                              {dayShifts.length === 0 && continuity && continuity.isAvailableNow && !continuity.isAlreadyScheduledThisWeek && (
+                                <div 
+                                  onClick={() => {
+                                    setSelectedShift({
+                                      isNew: true,
+                                      employeeId: emp.id,
+                                      day: dayIdx,
+                                      startTime: continuity.previousShift.startTime,
+                                      endTime: continuity.previousShift.endTime,
+                                      department: continuity.previousShift.department || (isZaal ? 'zaal' : 'keuken'),
+                                      role: continuity.previousShift.role,
+                                      weekNumber: selectedManagerWeek,
+                                      status: 'draft',
+                                      acknowledged: false,
+                                      notes: continuity.previousShift.notes ? `${continuity.previousShift.notes} (Continuïteit W${continuity.previousWeekNumber})` : `Continuïteit uit Week ${continuity.previousWeekNumber}`
+                                    });
+                                    setShowShiftModal(true);
+                                  }}
+                                  className="p-2 rounded-xl border-2 border-indigo-400 bg-gradient-to-br from-indigo-50 via-purple-50 to-sky-50 text-indigo-950 hover:from-indigo-100 hover:to-purple-100 shadow-xs transition cursor-pointer mb-1.5 text-left ring-2 ring-indigo-200/60 group/cont"
+                                  title={`🔁 Continuïteit in de bezetting: ${emp.name} stond vorige week (Week ${continuity.previousWeekNumber}) ook op ${day} (${continuity.previousShift.startTime} - ${continuity.previousShift.endTime}) en is deze week beschikbaar! Klik om direct in te plannen.`}
+                                >
+                                  <div className="flex items-center justify-between gap-1 mb-1">
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-tight text-indigo-950 bg-indigo-200/90 px-1.5 py-0.5 rounded-md border border-indigo-300">
+                                      <Repeat size={10} className="text-indigo-800" />
+                                      <span>Continuïteit W{continuity.previousWeekNumber}</span>
+                                    </span>
+                                    <span className="text-[8.5px] font-black text-indigo-800 bg-white px-1.5 py-0.5 rounded border border-indigo-300 shadow-2xs group-hover/cont:bg-indigo-600 group-hover/cont:text-white transition">
+                                      ⚡ Plan in
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] font-extrabold text-slate-800 truncate">
+                                    Vorige week: {continuity.previousShift.startTime} - {continuity.previousShift.endTime}
+                                  </div>
+                                  <div className="text-[9px] font-bold text-emerald-850 flex items-center gap-1 mt-0.5">
+                                    <span>✓ Nu beschikbaar: {continuity.currentAvailabilityHours || 'Gehele dag'}</span>
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Availability & Preference chip if no shift yet */}
                               {dayShifts.length === 0 && empDayAvail && (
@@ -3189,8 +3567,13 @@ export default function ManagerDashboard({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-black text-sm text-slate-900">
-                            Week {wk}
+                            {wk === SPECIAL_DAYS_WEEK_NUMBER ? '⭐ Speciale dagen' : `Week ${wk}`}
                           </span>
+                          {wk === SPECIAL_DAYS_WEEK_NUMBER && (
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 border border-amber-300">
+                              Feestdagen 2026/2027
+                            </span>
+                          )}
                           {isCurrent && (
                             <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300">
                               Huidig
@@ -3323,6 +3706,7 @@ export default function ManagerDashboard({
                     const wk = w.weekNumber;
                     const isLocked = isWeekAvailabilityLocked(wk, CURRENT_WEEK_NUMBER, appSettings);
                     const isSelected = selectedManagerWeek === wk;
+                    const isSpecial = wk === SPECIAL_DAYS_WEEK_NUMBER;
                     return (
                       <button
                         key={wk}
@@ -3333,11 +3717,22 @@ export default function ManagerDashboard({
                         title={`${w.label}: ${w.dateRange} • ${isLocked ? 'Vergrendeld' : 'Open voor personeel'}`}
                         className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                           isSelected
-                            ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
-                            : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
+                            ? isSpecial
+                              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md ring-2 ring-amber-300'
+                              : 'bg-orange-500 text-white shadow-md shadow-orange-100'
+                            : isSpecial
+                              ? 'bg-amber-50 text-amber-950 hover:bg-amber-100 border border-amber-300'
+                              : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
                         }`}
                       >
-                        <span>Week {wk}</span>
+                        {isSpecial ? (
+                          <>
+                            <Sparkles size={11} className={isSelected ? 'text-amber-200' : 'text-amber-600'} />
+                            <span>Speciale dagen</span>
+                          </>
+                        ) : (
+                          <span>Week {wk}</span>
+                        )}
                         {isLocked ? (
                           <span className={`text-[8px] px-1 py-0.2 rounded font-black flex items-center gap-0.5 ${
                             isSelected ? 'bg-rose-200 text-rose-950' : 'bg-rose-100 text-rose-800 border border-rose-300'
@@ -3572,21 +3967,27 @@ export default function ManagerDashboard({
                       {DAYS_OF_WEEK.map((day, idx) => {
                         const dayDateInfo = getDayDateInfo(selectedManagerWeek, idx);
                         const isSortedThisDay = managerAvailSortDay === idx;
+                        const isSpecial = selectedManagerWeek === SPECIAL_DAYS_WEEK_NUMBER;
+                        const specialDay = isSpecial ? SPECIAL_DAYS_LIST[idx] : null;
+                        const dayColTitle = specialDay ? specialDay.title : day;
+
                         return (
                           <th 
                             key={idx} 
                             scope="col" 
                             onClick={() => setManagerAvailSortDay(prev => prev === idx ? 'name' : idx)}
-                            className={`sticky top-0 z-20 px-3 py-3 text-center text-xs font-black uppercase tracking-wider border-b-2 border-r border-orange-200 min-w-[135px] cursor-pointer select-none transition-colors ${
+                            className={`sticky top-0 z-20 px-3 py-3 text-center text-xs font-black uppercase tracking-wider border-b-2 border-r min-w-[135px] cursor-pointer select-none transition-colors ${
                               isSortedThisDay 
                                 ? 'bg-orange-100 text-orange-950 ring-2 ring-orange-400 inset-0 shadow-inner' 
-                                : 'bg-slate-100 text-slate-700 hover:bg-orange-100/60'
+                                : isSpecial
+                                  ? 'bg-amber-50/90 text-amber-950 hover:bg-amber-100 border-amber-200'
+                                  : 'bg-slate-100 text-slate-700 hover:bg-orange-100/60 border-orange-200'
                             }`}
-                            title={`Klik om te sorteren op ${day}: wie beschikbaar is komt bovenaan, beginnende met de vaste werknemers.`}
+                            title={`Klik om te sorteren op ${dayColTitle}: wie beschikbaar is komt bovenaan, beginnende met de vaste werknemers.`}
                           >
                             <div className="flex flex-col items-center justify-center gap-1">
                               <div className="flex items-center gap-1">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-700">{day}</span>
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-700">{dayColTitle}</span>
                                 {isSortedThisDay ? (
                                   <span className="text-[10px] text-orange-600 font-black" title="Sorteert wie beschikbaar is bovenaan, vaste krachten eerst">▲</span>
                                 ) : (
@@ -3596,10 +3997,17 @@ export default function ManagerDashboard({
                               <span className={`px-2.5 py-0.5 rounded-lg font-black text-xs border shadow-2xs ${
                                 isSortedThisDay 
                                   ? 'bg-orange-500 text-white border-orange-600 shadow-xs' 
-                                  : 'bg-orange-100 text-orange-950 border-orange-200'
+                                  : isSpecial
+                                    ? 'bg-amber-200 text-amber-950 border-amber-300'
+                                    : 'bg-orange-100 text-orange-950 border-orange-200'
                               }`}>
                                 {dayDateInfo.shortDate}
                               </span>
+                              {specialDay?.closingNote && (
+                                <span className="text-[8px] bg-rose-100 text-rose-800 border border-rose-300 font-black px-1.5 py-0.2 rounded-md uppercase tracking-tight">
+                                  ⚠️ {specialDay.closingNote}
+                                </span>
+                              )}
                               {isSortedThisDay && (
                                 <span className="text-[8px] bg-orange-600 text-white font-black px-1.5 py-0.2 rounded-full uppercase tracking-tight">
                                   ✓ Beschikbaar eerst
@@ -5209,23 +5617,30 @@ export default function ManagerDashboard({
                 {!managerAvailIsRecurring ? (
                   <div className="flex items-center gap-2 flex-wrap bg-slate-50 p-3 rounded-2xl border border-slate-200">
                     <span className="text-xs font-black uppercase text-slate-600 mr-2">Selecteer Week:</span>
-                    {activeWeeks.map(w => (
-                      <button
-                        key={w.weekNumber}
-                        type="button"
-                        onClick={() => {
-                          setManagerAvailTargetWeek(w.weekNumber);
-                          if (targetEmp) loadAvailForEmployee(targetEmp, w.weekNumber, false);
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                          managerAvailTargetWeek === w.weekNumber
-                            ? 'bg-orange-500 text-white shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        Week {w.weekNumber}
-                      </button>
-                    ))}
+                    {activeWeeks.map(w => {
+                      const isSpecial = w.weekNumber === SPECIAL_DAYS_WEEK_NUMBER;
+                      return (
+                        <button
+                          key={w.weekNumber}
+                          type="button"
+                          onClick={() => {
+                            setManagerAvailTargetWeek(w.weekNumber);
+                            if (targetEmp) loadAvailForEmployee(targetEmp, w.weekNumber, false);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                            managerAvailTargetWeek === w.weekNumber
+                              ? isSpecial 
+                                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs ring-2 ring-amber-300'
+                                : 'bg-orange-500 text-white shadow-xs'
+                              : isSpecial
+                                ? 'bg-amber-50 text-amber-950 border border-amber-300 hover:bg-amber-100'
+                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {isSpecial ? '⭐ Speciale dagen' : `Week ${w.weekNumber}`}
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="bg-indigo-50/70 p-3 rounded-2xl border border-indigo-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -5284,6 +5699,9 @@ export default function ManagerDashboard({
                 {/* Days of the Week configuration */}
                 <div className="space-y-3">
                   {DAYS_OF_WEEK.map((dName, dIdx) => {
+                    const isSpecial = managerAvailTargetWeek === SPECIAL_DAYS_WEEK_NUMBER && !managerAvailIsRecurring;
+                    const specialDay = isSpecial ? SPECIAL_DAYS_LIST[dIdx] : null;
+                    const displayDayName = specialDay ? specialDay.title : dName;
                     const dInfo = getDayDateInfo(managerAvailTargetWeek, dIdx);
                     const dayData = managerAvailDays.find(d => d.day === dIdx) || {
                       day: dIdx,
@@ -5304,10 +5722,17 @@ export default function ManagerDashboard({
                         }`}
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="w-28 shrink-0">
-                            <span className="font-black text-xs uppercase text-slate-800 block">{dName}</span>
+                          <div className="w-36 shrink-0">
+                            <span className="font-black text-xs uppercase text-slate-800 block">{displayDayName}</span>
                             {!managerAvailIsRecurring && (
-                              <span className="text-[11px] font-bold text-orange-700">{dInfo.shortDate}</span>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span className="text-[11px] font-bold text-orange-700">{dInfo.shortDate}</span>
+                                {specialDay?.closingNote && (
+                                  <span className="text-[8px] font-black text-rose-700 bg-rose-100 px-1 py-0.2 rounded">
+                                    ⚠️ {specialDay.closingNote}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
 
@@ -5811,6 +6236,69 @@ export default function ManagerDashboard({
                   </select>
                 </div>
 
+                {/* 🔁 CONTINUÏTEITS-TIP IN DIENSTVENSTER */}
+                {(() => {
+                  const modalContinuityCandidates = getDayContinuityCandidates(
+                    currentDayIndex,
+                    modalWeekNumber,
+                    employees,
+                    shifts,
+                    availabilities
+                  );
+                  if (modalContinuityCandidates.length === 0) return null;
+
+                  return (
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl border-2 border-indigo-300 p-3 text-xs text-indigo-950 space-y-2 shadow-2xs">
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1.5 font-black text-indigo-950 text-[11px] uppercase tracking-tight">
+                          <Repeat size={13} className="text-indigo-700" />
+                          <span>Continuïteit in de bezetting ({DAYS_OF_WEEK[currentDayIndex]}):</span>
+                        </div>
+                        <span className="text-[9.5px] font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded border border-indigo-200">
+                          W{modalWeekNumber - 1} ➔ W{modalWeekNumber}
+                        </span>
+                      </div>
+                      <p className="text-[10.5px] text-indigo-900/80 leading-tight">
+                        Onderstaande medewerkers stonden vorige week op deze dag ingepland én zijn nu beschikbaar:
+                      </p>
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {modalContinuityCandidates.map(c => {
+                          const cEmp = employees.find(e => e.id === c.employeeId);
+                          if (!cEmp) return null;
+                          const isSelected = selectedShift.employeeId === c.employeeId;
+                          return (
+                            <button
+                              key={c.employeeId}
+                              type="button"
+                              onClick={() => {
+                                setSelectedShift({
+                                  ...selectedShift,
+                                  employeeId: c.employeeId,
+                                  department: c.previousShift.department || (cEmp.department === 'keuken' ? 'keuken' : 'zaal'),
+                                  startTime: c.previousShift.startTime,
+                                  endTime: c.previousShift.endTime,
+                                  role: c.previousShift.role || selectedShift.role,
+                                  notes: c.previousShift.notes ? `${c.previousShift.notes} (Continuïteit W${c.previousWeekNumber})` : `Continuïteit uit Week ${c.previousWeekNumber}`
+                                });
+                              }}
+                              className={`px-2.5 py-1.5 rounded-xl text-[10.5px] font-black transition cursor-pointer flex items-center gap-1.5 border shadow-2xs ${
+                                isSelected 
+                                  ? 'bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-300' 
+                                  : 'bg-white hover:bg-indigo-100 text-indigo-950 border-indigo-200'
+                              }`}
+                              title={`Vorige week (W${c.previousWeekNumber}): ${c.previousShift.startTime} - ${c.previousShift.endTime}. Klik om direct ${cEmp.name} te selecteren!`}
+                            >
+                              <Repeat size={11} className={isSelected ? 'text-white' : 'text-indigo-600'} />
+                              <span>{cEmp.name}</span>
+                              <span className="text-[9.5px] font-bold opacity-80">({c.previousShift.startTime}-{c.previousShift.endTime})</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-600">Medewerker</label>
@@ -5842,11 +6330,21 @@ export default function ManagerDashboard({
                       <option value="open_shift" className="font-black text-amber-900 bg-amber-100">
                         📢 OPEN DIENST (Zelf inplannen door medewerkers)
                       </option>
-                      {sortEmployeesByFirstName(employees).map(e => (
-                        <option key={e.id} value={e.id}>
-                          {e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut}{e.birthDate && calculateAge(e.birthDate) ? ` - ${calculateAge(e.birthDate)}j` : ''})
-                        </option>
-                      ))}
+                      {sortEmployeesByFirstName(employees).map(e => {
+                        const isContinuityCandidate = getDayContinuityCandidates(
+                          currentDayIndex,
+                          modalWeekNumber,
+                          [e],
+                          shifts,
+                          availabilities
+                        ).length > 0;
+
+                        return (
+                          <option key={e.id} value={e.id}>
+                            {isContinuityCandidate ? '🔁 ' : ''}{e.name} ({e.department === 'keuken' ? 'Keuken' : 'Zaal'} - {e.statuut}{isContinuityCandidate ? ' • CONTINUÏTEIT ✨' : ''}{e.birthDate && calculateAge(e.birthDate) ? ` - ${calculateAge(e.birthDate)}j` : ''})
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -7213,6 +7711,76 @@ export default function ManagerDashboard({
               >
                 <CheckCheck className="w-4 h-4" />
                 Definitief Publiceren
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Unpublish / Hide Week Roster (Terug naar concept) */}
+      {showUnpublishWeekConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-700">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">
+                    Planning Terugzetten naar Concept
+                  </h3>
+                  <p className="text-xs text-amber-700 font-bold uppercase tracking-wider">
+                    Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUnpublishWeekConfirmModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Weet je zeker dat je de planning voor <strong>Week {selectedManagerWeek}</strong> wilt terugzetten naar concept?
+              </p>
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3 text-xs text-amber-900 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <Lock size={14} className="text-amber-700 shrink-0" />
+                  <span>Onzichtbaar voor medewerkers</span>
+                </p>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  Zodra je bevestigt, wordt dit rooster direct verborgen in het personeelsportaal. Medewerkers zien de melding dat de planning momenteel wordt voorbereid.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowUnpublishWeekConfirmModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Annuleren
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onUnpublishWeek) {
+                    onUnpublishWeek(selectedManagerWeek);
+                  }
+                  setShowUnpublishWeekConfirmModal(false);
+                  setSixWeeksSuccessMsg(`🔒 Planning Week ${selectedManagerWeek} is teruggezet naar concept en nu onzichtbaar voor medewerkers.`);
+                  setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+                }}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md transition cursor-pointer flex items-center gap-2"
+              >
+                <Lock className="w-4 h-4" />
+                <span>Verberg voor Personeel</span>
               </button>
             </div>
           </div>

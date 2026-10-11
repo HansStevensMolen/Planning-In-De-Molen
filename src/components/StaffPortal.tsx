@@ -81,7 +81,22 @@ import {
   getShiftStartAndEndDates,
   parseTimeParts
 } from '../utils/notificationUtils';
-import { AVAILABLE_WEEKS, getWeekMeta, isAvailabilityPastDeadline, getAvailabilityDeadlineInfo, isWeekAvailabilityLocked, CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER, getDateOfISOWeek, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
+import { 
+  AVAILABLE_WEEKS, 
+  getWeekMeta, 
+  isAvailabilityPastDeadline, 
+  getAvailabilityDeadlineInfo, 
+  isWeekAvailabilityLocked, 
+  CURRENT_WEEK_NUMBER, 
+  NEXT_WEEK_NUMBER, 
+  getDateOfISOWeek, 
+  getDayDateInfo, 
+  getAutoActiveWeeks, 
+  getAutoArchivedWeeks,
+  SPECIAL_DAYS_WEEK_NUMBER,
+  SPECIAL_DAYS_LIST,
+  isSpecialDaysWeek
+} from '../utils/weekUtils';
 import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
 import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
@@ -125,6 +140,8 @@ const DAYS_OF_WEEK = [
 import { 
   getBeginTimes as getBeginTimesUtil, 
   getEndTimes as getEndTimesUtil,
+  getSpecialDayBeginTimes,
+  getSpecialDayEndTimes,
   normalizeAvailabilityTime
 } from '../utils/availabilityTimeOptions';
 
@@ -560,6 +577,10 @@ export default function StaffPortal({
 
   // Filters for the selected roster week
   const rosterWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek);
+  const isRosterWeekDraft = React.useMemo(() => {
+    const publishedCount = rosterWeekShifts.filter(s => s.status === 'published').length;
+    return publishedCount === 0;
+  }, [rosterWeekShifts]);
   const personalShifts = rosterWeekShifts
     .filter(s => s.employeeId === activeEmployeeId && s.status === 'published')
     .sort((a, b) => {
@@ -633,6 +654,28 @@ export default function StaffPortal({
       }
     }
   }, [shiftChangeNotices.length, currentEmployee?.id]);
+
+  // Notificatie wanneer de beheerder een nieuw werkrooster heeft gepubliceerd
+  React.useEffect(() => {
+    if (!currentEmployee || notices.length === 0) return;
+    const latestPlanningNotice = notices.find(n => n.category === 'planning');
+    if (!latestPlanningNotice) return;
+    const key = `planning_publish_notif_seen_${latestPlanningNotice.id}`;
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, 'true');
+      playAlertChime();
+      if (getPushNotificationPermission() === 'granted') {
+        try {
+          new Notification(latestPlanningNotice.title, {
+            body: latestPlanningNotice.content,
+            icon: '/favicon.ico'
+          });
+        } catch (e) {
+          console.warn('Push error:', e);
+        }
+      }
+    }
+  }, [notices, currentEmployee?.id]);
 
   // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij diensten die binnen 24 uur of 1 uur beginnen
   React.useEffect(() => {
@@ -1491,7 +1534,9 @@ export default function StaffPortal({
               <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider mr-1">Rooster Week:</span>
               {staffActiveWeeks.map(w => {
                 const wk = w.weekNumber;
+                const isSpecial = wk === SPECIAL_DAYS_WEEK_NUMBER;
                 const isSelected = selectedRosterWeek === wk;
+                const weekHasPublishedShifts = shifts.some(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk && s.status === 'published');
                 return (
                   <button
                     key={wk}
@@ -1501,10 +1546,19 @@ export default function StaffPortal({
                     className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
                       isSelected
                         ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
-                        : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
+                        : isSpecial
+                          ? 'bg-amber-50 text-amber-950 hover:bg-amber-100 border border-amber-300'
+                          : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
                     }`}
                   >
-                    <span>Week {wk}</span>
+                    {isSpecial ? (
+                      <>
+                        <Sparkles size={11} className={isSelected ? 'text-amber-200' : 'text-amber-600'} />
+                        <span>Speciale dagen</span>
+                      </>
+                    ) : (
+                      <span>Week {wk}</span>
+                    )}
                     {wk === CURRENT_WEEK_NUMBER && (
                       <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
                         isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
@@ -1517,6 +1571,15 @@ export default function StaffPortal({
                         isSelected ? 'bg-slate-200 text-slate-900' : 'bg-slate-200 text-slate-700 border border-slate-300'
                       }`}>
                         Volgende
+                      </span>
+                    )}
+                    {!isSpecial && (
+                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
+                        weekHasPublishedShifts
+                          ? isSelected ? 'bg-emerald-300 text-emerald-950' : 'bg-emerald-50 text-emerald-800 border border-emerald-250'
+                          : isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                      }`}>
+                        {weekHasPublishedShifts ? '✓ Live' : '🔒 In opmaak'}
                       </span>
                     )}
                   </button>
@@ -1763,9 +1826,32 @@ export default function StaffPortal({
             })()}
 
             {personalShifts.length === 0 ? (
-              <div className="bg-white p-8 text-center rounded-2xl border border-slate-150 shadow-sm text-slate-400 text-xs">
-                Geen geplande diensten voor jou deze week! Geniet van je vrije tijd.
-              </div>
+              isRosterWeekDraft ? (
+                <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-6 sm:p-8 text-center rounded-3xl border-2 border-amber-300 shadow-xs space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-200/80 text-amber-900 flex items-center justify-center shadow-2xs">
+                    <Lock size={22} className="text-amber-800" />
+                  </div>
+                  <div className="max-w-md mx-auto space-y-1">
+                    <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200 text-amber-950 border border-amber-300 inline-block">
+                      Planning in opmaak (Concept)
+                    </span>
+                    <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight">
+                      Planning Week {selectedRosterWeek} is nog niet gepubliceerd
+                    </h4>
+                    <p className="text-xs text-slate-650 leading-relaxed font-medium">
+                      De beheerder (Hans Stevens) is dit rooster momenteel nog aan het voorbereiden. Diensten zijn tijdelijk onzichtbaar totdat de planning definitief wordt vrijgegeven.
+                    </p>
+                    <div className="p-2.5 bg-white/90 rounded-xl border border-amber-200 text-[11px] text-amber-900 font-bold flex items-center justify-center gap-2 mt-2">
+                      <BellRing size={13} className="text-amber-600 animate-pulse" />
+                      <span>Je ontvangt direct een automatische melding zodra het rooster live staat!</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white p-8 text-center rounded-2xl border border-slate-150 shadow-sm text-slate-400 text-xs">
+                  Geen geplande diensten voor jou deze week! Geniet van je vrije tijd.
+                </div>
+              )
             ) : (
               <div className="space-y-3">
                 {/* Notificatie als de beheerder een shift heeft gewijzigd */}
@@ -1990,7 +2076,29 @@ export default function StaffPortal({
               </div>
             </div>
 
-            <div className="bg-white rounded-3xl border-2 border-orange-100 p-4 shadow-sm overflow-x-auto">
+            {publishedTeamShifts.length === 0 ? (
+              <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-8 sm:p-10 text-center rounded-3xl border-2 border-amber-300 shadow-sm space-y-3">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-200/80 text-amber-900 flex items-center justify-center shadow-2xs">
+                  <Lock size={26} className="text-amber-800" />
+                </div>
+                <div className="max-w-md mx-auto space-y-1.5">
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200 text-amber-950 border border-amber-300 inline-block">
+                    {isRosterWeekDraft ? 'Planning in opmaak (Concept)' : 'Geen gepubliceerde diensten'}
+                  </span>
+                  <h4 className="text-base font-black text-slate-900 uppercase tracking-tight">
+                    Teamrooster Week {selectedRosterWeek} is nog niet gepubliceerd
+                  </h4>
+                  <p className="text-xs text-slate-650 leading-relaxed font-medium">
+                    De beheerder (Hans Stevens) is het weekrooster voor Week {selectedRosterWeek} momenteel nog aan het samenstellen. Diensten zijn onzichtbaar totdat de beheerder de planning definitief publiceert.
+                  </p>
+                  <div className="p-2.5 bg-white/90 rounded-xl border border-amber-200 text-[11px] text-amber-900 font-bold flex items-center justify-center gap-2 mt-2">
+                    <BellRing size={13} className="text-amber-600 animate-pulse" />
+                    <span>Zodra de planning online staat, ontvangt iedereen direct een melding!</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white rounded-3xl border-2 border-orange-100 p-4 shadow-sm overflow-x-auto">
               <div className="grid grid-cols-7 gap-2 min-w-[700px]">
                 {DAYS_OF_WEEK.map((day, dayIdx) => {
                   const dayDateInfo = getDayDateInfo(selectedRosterWeek, dayIdx);
@@ -2104,6 +2212,7 @@ export default function StaffPortal({
                 })}
               </div>
             </div>
+            )}
           </div>
         </div>
       </div>
@@ -3098,9 +3207,45 @@ export default function StaffPortal({
             <div className="flex flex-wrap items-center gap-2">
               {staffActiveWeeks.map((w) => {
                 const weekNum = w.weekNumber;
+                const isSpecial = weekNum === SPECIAL_DAYS_WEEK_NUMBER;
                 const isLockedWeek = isWeekAvailabilityLocked(weekNum, CURRENT_WEEK_NUMBER, appSettings);
                 const hasFilled = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === weekNum);
                 const isSelected = selectedWeek === weekNum;
+
+                if (isSpecial) {
+                  return (
+                    <button
+                      key={weekNum}
+                      onClick={() => {
+                        setSelectedWeek(weekNum);
+                        setSuccessMsg(null);
+                      }}
+                      title="Speciale drukke dagen eind 2026 (Allerheiligen, Kerstmis, Nieuwjaar) - Geef alvast door of je kunt werken!"
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer border ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white border-amber-400 ring-2 ring-amber-300 shadow-md scale-[1.02]'
+                          : 'bg-amber-50 text-amber-950 hover:bg-amber-100 border-amber-300 shadow-2xs'
+                      }`}
+                    >
+                      <Sparkles size={13} className={isSelected ? 'text-amber-200 animate-pulse' : 'text-amber-600'} />
+                      <span>Speciale dagen</span>
+                      {hasFilled ? (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                          isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          ✓ Ingevuld
+                        </span>
+                      ) : (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-black uppercase ${
+                          isSelected ? 'bg-white text-orange-700' : 'bg-orange-500 text-white'
+                        }`}>
+                          ⚡ Invoeren
+                        </span>
+                      )}
+                    </button>
+                  );
+                }
+
                 return (
                   <button
                     key={weekNum}
@@ -3123,20 +3268,18 @@ export default function StaffPortal({
                         <Lock size={8} />
                         <span>Vast</span>
                       </span>
+                    ) : hasFilled ? (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                        isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        ✓ Ingevuld
+                      </span>
                     ) : (
-                      hasFilled ? (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
-                          isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          ✓ Ingevuld
-                        </span>
-                      ) : (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
-                          isSelected ? 'bg-orange-600 text-white' : 'bg-orange-100 text-orange-800'
-                        }`}>
-                          Open
-                        </span>
-                      )
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                        isSelected ? 'bg-orange-600 text-white' : 'bg-orange-100 text-orange-800'
+                      }`}>
+                        Open
+                      </span>
                     )}
                   </button>
                 );
@@ -3294,13 +3437,52 @@ export default function StaffPortal({
             {(() => {
               const isSubmissionDisabledByManager = appSettings?.availabilitySubmissionEnabled === false;
               const isSelectedLocked = isWeekAvailabilityLocked(selectedWeek, CURRENT_WEEK_NUMBER, appSettings);
+              const isSpecialDays = isSpecialDaysWeek(selectedWeek);
+
               return (
                 <>
+                  {/* Dedicated callout banner for Speciale Dagen (Google Form) */}
+                  {isSpecialDays && (
+                    <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-4.5 rounded-2xl shadow-md border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+                      <div className="flex items-start gap-3">
+                        <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 shadow-inner">
+                          ⭐
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-100 bg-white/20 px-2.5 py-0.5 rounded-full">
+                              Feestdagen & Eindejaar 2026/2027
+                            </span>
+                            <span className="bg-white text-orange-700 text-[10px] font-black uppercase px-2 py-0.5 rounded-full shadow-2xs">
+                              In De Molen Formulier
+                            </span>
+                          </div>
+                          <h3 className="text-sm sm:text-base font-black uppercase tracking-tight text-white mt-1">
+                            Speciale drukke dagen eind 2026
+                          </h3>
+                          <p className="text-xs text-amber-100 font-medium mt-0.5 leading-relaxed">
+                            Geef alvast door of je kunt werken op Allerheiligen, Wapenstilstand, Kerstavond, Kerstmis, Oudejaarsavond en Nieuwjaar en <strong>ZET DIT IN JE AGENDA!</strong>
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href="https://forms.gle/gq3jZiGkK8cZsahd7"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3.5 py-2.5 bg-white text-orange-800 hover:bg-orange-50 rounded-xl text-xs font-black uppercase tracking-tight shadow-md transition flex items-center gap-1.5 shrink-0 self-start sm:self-auto cursor-pointer active:scale-95"
+                        title="Bekijk het originele Google Formulier"
+                      >
+                        <ExternalLink size={13} />
+                        <span>Google Formulier</span>
+                      </a>
+                    </div>
+                  )}
+
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b pb-3 border-orange-50">
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="font-extrabold text-xs text-slate-800 uppercase tracking-tight">
-                          Status instellen voor week {selectedWeek}
+                          {isSpecialDays ? 'Status instellen: Speciale dagen (Eindejaar & Feestdagen)' : `Status instellen voor week ${selectedWeek}`}
                         </h4>
                         {isSelectedLocked ? (
                           <span className="text-[10px] font-black uppercase text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
@@ -3317,7 +3499,9 @@ export default function StaffPortal({
                           ? isSubmissionDisabledByManager 
                             ? '🔒 Het doorgeven van beschikbaarheden is momenteel uitgeschakeld door de beheerder.'
                             : '🔒 Beschikbaarheden voor deze week liggen vast en kunnen niet gewijzigd worden.'
-                          : 'Maandag t/m zaterdag zijn we gewoon open • Zon- en feestdagen vanaf 10u00 open.'}
+                          : isSpecialDays
+                            ? 'Duid per feestdag aan of je beschikbaar bent. Kerstavond en Oudejaarsavond sluiten stipt om 17u00!'
+                            : 'Maandag t/m zaterdag zijn we gewoon open • Zon- en feestdagen vanaf 10u00 open.'}
                       </p>
                     </div>
                     {!isSelectedLocked && (
@@ -3332,6 +3516,12 @@ export default function StaffPortal({
                     {DAYS_OF_WEEK.map((dayName, dayIdx) => {
                       const currentVal = tempAvailability[dayIdx] || { status: 'available', notes: '' };
                       const isSunday = dayIdx === 6;
+                      const specialDayInfo = isSpecialDays ? SPECIAL_DAYS_LIST[dayIdx] : null;
+                      const displayName = specialDayInfo ? specialDayInfo.title : dayName;
+                      const dateBadge = specialDayInfo 
+                        ? specialDayInfo.shortDate 
+                        : getDayDateInfo(selectedWeek, dayIdx).shortDate;
+
                       return (
                         <div 
                           key={dayIdx} 
@@ -3347,11 +3537,18 @@ export default function StaffPortal({
                             <div className="flex items-start justify-between mb-1.5">
                               <div>
                                 <div className="flex items-center gap-1">
-                                  <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{dayName}</span>
+                                  <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{displayName}</span>
                                 </div>
-                                <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md mt-0.5 shadow-2xs">
-                                  {getDayDateInfo(selectedWeek, dayIdx).shortDate}
-                                </span>
+                                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                  <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md shadow-2xs">
+                                    {dateBadge}
+                                  </span>
+                                  {specialDayInfo?.closingNote && (
+                                    <span className="inline-block text-[9px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-1.5 py-0.2 rounded-md">
+                                      ⚠️ {specialDayInfo.closingNote}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <div className="flex items-center gap-1">
                                 {isSelectedLocked && (
@@ -3413,61 +3610,98 @@ export default function StaffPortal({
                               <div className="flex items-center justify-between">
                                 <label className="text-[9px] font-black uppercase text-slate-500 tracking-wider">Uren:</label>
                                 <span className="text-[8.5px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-1.5 py-0.5 rounded">
-                                  {currentVal.startTime || 'Open'} - {currentVal.endTime || 'Sluit'}
+                                  {currentVal.startTime || 'Open'} - {currentVal.endTime || (specialDayInfo?.closingNote?.includes('17u') ? '17u00' : 'Sluit')}
                                 </span>
                               </div>
 
                               {/* Snelkeuze knoppen voor Open, Sluit en Hulpsluit */}
-                              <div className="grid grid-cols-2 gap-1 text-[8.5px]">
-                                <button
-                                  type="button"
-                                  disabled={isSelectedLocked}
-                                  onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
-                                    ...prev,
-                                    [dayIdx]: { ...prev[dayIdx], startTime: 'Open', endTime: 'Sluit' }
-                                  }))}
-                                  className={`px-1 py-1 rounded-md font-black transition border text-center ${
-                                    isSelectedLocked ? 'cursor-not-allowed opacity-50 ' : 'cursor-pointer '
-                                  }${
-                                    (currentVal.startTime || 'Open') === 'Open' && (currentVal.endTime || 'Sluit') === 'Sluit'
-                                      ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
-                                      : 'bg-white hover:bg-orange-50 text-slate-700 border-slate-200'
-                                  }`}
-                                  title="Vanaf opening tot sluiting"
-                                >
-                                  Open - Sluit
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isSelectedLocked}
-                                  onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
-                                    ...prev,
-                                    [dayIdx]: { ...prev[dayIdx], startTime: 'Open', endTime: 'Hulpsluit' }
-                                  }))}
-                                  className={`px-1 py-1 rounded-md font-black transition border text-center ${
-                                    isSelectedLocked ? 'cursor-not-allowed opacity-50 ' : 'cursor-pointer '
-                                  }${
-                                    (currentVal.startTime || 'Open') === 'Open' && currentVal.endTime === 'Hulpsluit'
-                                      ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
-                                      : 'bg-white hover:bg-orange-50 text-slate-700 border-slate-200'
-                                  }`}
-                                  title="Vanaf opening tot hulpsluiting"
-                                >
-                                  Open - Hulpsluit
-                                </button>
-                              </div>
+                              {isSpecialDays && (dayIdx === 2 || dayIdx === 4) ? (
+                                <div className="grid grid-cols-1 gap-1 text-[8.5px]">
+                                  <button
+                                    type="button"
+                                    disabled={isSelectedLocked}
+                                    onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
+                                      ...prev,
+                                      [dayIdx]: { ...prev[dayIdx], startTime: 'Open (10u00)', endTime: '17u00' }
+                                    }))}
+                                    className={`px-1 py-1 rounded-md font-black transition border text-center ${
+                                      isSelectedLocked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                                    } ${
+                                      currentVal.endTime === '17u00'
+                                        ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                                        : 'bg-white hover:bg-rose-50 text-rose-800 border-rose-200'
+                                    }`}
+                                    title="Zaak sluit stipt om 17u00"
+                                  >
+                                    ⚡ Open - 17u00 (Dicht om 17u)
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-1 text-[8.5px]">
+                                  <button
+                                    type="button"
+                                    disabled={isSelectedLocked}
+                                    onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
+                                      ...prev,
+                                      [dayIdx]: { 
+                                        ...prev[dayIdx], 
+                                        startTime: isSpecialDays 
+                                          ? (dayIdx === 0 || dayIdx === 1 ? 'Open (10u00)' : 'Open (11u30)')
+                                          : 'Open', 
+                                        endTime: 'Sluit' 
+                                      }
+                                    }))}
+                                    className={`px-1 py-1 rounded-md font-black transition border text-center ${
+                                      isSelectedLocked ? 'cursor-not-allowed opacity-50 ' : 'cursor-pointer '
+                                    }${
+                                      (currentVal.startTime?.includes('Open') || currentVal.startTime === 'Open') && currentVal.endTime === 'Sluit'
+                                        ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
+                                        : 'bg-white hover:bg-orange-50 text-slate-700 border-slate-200'
+                                    }`}
+                                    title="Vanaf opening tot sluiting"
+                                  >
+                                    Open - Sluit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isSelectedLocked}
+                                    onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
+                                      ...prev,
+                                      [dayIdx]: { 
+                                        ...prev[dayIdx], 
+                                        startTime: isSpecialDays 
+                                          ? (dayIdx === 0 || dayIdx === 1 ? 'Open (10u00)' : 'Open (11u30)')
+                                          : 'Open', 
+                                        endTime: 'Hulpsluit' 
+                                      }
+                                    }))}
+                                    className={`px-1 py-1 rounded-md font-black transition border text-center ${
+                                      isSelectedLocked ? 'cursor-not-allowed opacity-50 ' : 'cursor-pointer '
+                                    }${
+                                      (currentVal.startTime?.includes('Open') || currentVal.startTime === 'Open') && currentVal.endTime === 'Hulpsluit'
+                                        ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
+                                        : 'bg-white hover:bg-orange-50 text-slate-700 border-slate-200'
+                                    }`}
+                                    title="Vanaf opening tot hulpsluiting"
+                                  >
+                                    Open - Hulpsluit
+                                  </button>
+                                </div>
+                              )}
 
                               <div className="grid grid-cols-2 gap-1 bg-orange-50/20 p-1.5 rounded-lg border border-orange-100">
                                 <div>
                                   <span className="text-[7.5px] font-black text-slate-400 block uppercase mb-0.5">Van (Begin)</span>
                                   <select
                                     disabled={isSelectedLocked}
-                                    value={currentVal.startTime || 'Open'}
+                                    value={currentVal.startTime || (isSpecialDays ? (dayIdx === 0 || dayIdx === 1 || dayIdx === 2 || dayIdx === 4 ? 'Open (10u00)' : 'Open (11u30)') : 'Open')}
                                     onChange={(e) => {
                                       if (isSelectedLocked) return;
                                       const newStart = e.target.value;
-                                      const validEnds = getEndTimes(dayIdx, newStart);
-                                      let newEnd = currentVal.endTime || 'Sluit';
+                                      const validEnds = isSpecialDays
+                                        ? getSpecialDayEndTimes(dayIdx, newStart)
+                                        : getEndTimes(dayIdx, newStart);
+                                      let newEnd = currentVal.endTime || (isSpecialDays && (dayIdx === 2 || dayIdx === 4) ? '17u00' : 'Sluit');
                                       if (!validEnds.includes(newEnd)) {
                                         newEnd = validEnds[0] || 'Sluit';
                                       }
@@ -3480,7 +3714,7 @@ export default function StaffPortal({
                                       isSelectedLocked ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'cursor-pointer'
                                     }`}
                                   >
-                                    {getBeginTimes(dayIdx).map(time => (
+                                    {(isSpecialDays ? getSpecialDayBeginTimes(dayIdx) : getBeginTimes(dayIdx)).map(time => (
                                       <option key={time} value={time}>{time}</option>
                                     ))}
                                   </select>
@@ -3489,7 +3723,7 @@ export default function StaffPortal({
                                   <span className="text-[7.5px] font-black text-slate-400 block uppercase mb-0.5">Tot (Eind)</span>
                                   <select
                                     disabled={isSelectedLocked}
-                                    value={currentVal.endTime || 'Sluit'}
+                                    value={currentVal.endTime || (isSpecialDays && (dayIdx === 2 || dayIdx === 4) ? '17u00' : 'Sluit')}
                                     onChange={(e) => {
                                       if (isSelectedLocked) return;
                                       setTempAvailability(prev => ({
@@ -3501,7 +3735,7 @@ export default function StaffPortal({
                                       isSelectedLocked ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'cursor-pointer'
                                     }`}
                                   >
-                                    {getEndTimes(dayIdx, currentVal.startTime || 'Open').map(time => (
+                                    {(isSpecialDays ? getSpecialDayEndTimes(dayIdx, currentVal.startTime) : getEndTimes(dayIdx, currentVal.startTime || 'Open')).map(time => (
                                       <option key={time} value={time}>{time}</option>
                                     ))}
                                   </select>
@@ -3516,13 +3750,15 @@ export default function StaffPortal({
                             <input
                               type="text"
                               disabled={isSelectedLocked}
-                              placeholder={isSelectedLocked ? '(Vergrendeld)' : 'bijv. studie, gezin...'}
+                              placeholder={isSelectedLocked ? '(Vergrendeld)' : (isSpecialDays ? 'bijv. kan tot 21u, familiefeest...' : 'bijv. studie, gezin...')}
                               value={currentVal.notes}
                               onChange={(e) => !isSelectedLocked && setTempAvailability(prev => ({
                                 ...prev,
                                 [dayIdx]: { ...prev[dayIdx], notes: e.target.value }
                               }))}
                               className={`w-full bg-white border border-slate-250 hover:border-slate-350 focus:border-orange-400 rounded-lg px-2 py-1 text-[10px] font-medium text-slate-700 focus:outline-none ${
+                                selectedWeek === SPECIAL_DAYS_WEEK_NUMBER ? 'bg-amber-50/20 ' : ''
+                              }${
                                 isSelectedLocked ? 'cursor-not-allowed bg-slate-100 text-slate-400' : ''
                               }`}
                             />

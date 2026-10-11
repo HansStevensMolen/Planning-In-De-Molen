@@ -508,7 +508,7 @@ export default function BackupManagerModal({
                                         {d.startTime || 'Open'} - {d.endTime || 'Sluit'}
                                       </span>
                                     )}
-                                    {d.notes && (
+                                    {'notes' in d && d.notes && (
                                       <span className="text-[9px] italic text-slate-600 block mt-1">"{d.notes}"</span>
                                     )}
                                   </div>

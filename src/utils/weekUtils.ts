@@ -21,12 +21,12 @@ export const CURRENT_WEEK_INFO = getCurrentISOWeek();
 export const CURRENT_WEEK_NUMBER = CURRENT_WEEK_INFO.week; // Week 38
 export const NEXT_WEEK_NUMBER = CURRENT_WEEK_NUMBER + 1; // Week 39
 
-const MONTHS_NL = [
+export const MONTHS_NL = [
   'januari', 'februari', 'maart', 'april', 'mei', 'juni',
   'juli', 'augustus', 'september', 'oktober', 'november', 'december'
 ];
 
-const MONTHS_SHORT_NL = [
+export const MONTHS_SHORT_NL = [
   'jan', 'feb', 'mrt', 'apr', 'mei', 'jun',
   'jul', 'aug', 'sep', 'okt', 'nov', 'dec'
 ];
@@ -48,6 +48,157 @@ export const DAYS_FULL_NL = [
   'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'
 ];
 
+/**
+ * Dedicated week identifier for 'Speciale dagen' (Feestdagen & Eindejaar 2026/2027)
+ * Bron: Google Formulier "Speciale drukke dagen eind 2026" (https://forms.gle/gq3jZiGkK8cZsahd7)
+ */
+export const SPECIAL_DAYS_WEEK_NUMBER = 99;
+
+export interface SpecialDayInfo {
+  dayIndex: number;
+  title: string;
+  dateStr: string;
+  dayNameFull: string;
+  dayNameShort: string;
+  shortDate: string;
+  fullDate: string;
+  slashDate: string;
+  formattedWithDay: string;
+  badge: string;
+  closingNote?: string;
+  formNotes?: string;
+}
+
+export const SPECIAL_DAYS_LIST: SpecialDayInfo[] = [
+  {
+    dayIndex: 0,
+    title: 'Allerheiligen',
+    dateStr: 'zondag 1 november 2026',
+    dayNameFull: 'Zondag 1 november 2026 (Allerheiligen)',
+    dayNameShort: 'Zo 1 nov',
+    shortDate: '1 nov',
+    fullDate: '1 november 2026',
+    slashDate: '01/11',
+    formattedWithDay: 'Zondag 1 nov (Allerheiligen)',
+    badge: 'Allerheiligen',
+    formNotes: 'Open vanaf 10u00'
+  },
+  {
+    dayIndex: 1,
+    title: 'Wapenstilstand',
+    dateStr: 'woensdag 11 november 2026',
+    dayNameFull: 'Woensdag 11 november 2026 (Wapenstilstand)',
+    dayNameShort: 'Wo 11 nov',
+    shortDate: '11 nov',
+    fullDate: '11 november 2026',
+    slashDate: '11/11',
+    formattedWithDay: 'Woensdag 11 nov (Wapenstilstand)',
+    badge: 'Wapenstilstand',
+    formNotes: 'Open vanaf 10u00'
+  },
+  {
+    dayIndex: 2,
+    title: 'Kerstavond',
+    dateStr: 'donderdag 24 december 2026',
+    dayNameFull: 'Donderdag 24 december 2026 (Kerstavond - dicht om 17u00)',
+    dayNameShort: 'Do 24 dec',
+    shortDate: '24 dec',
+    fullDate: '24 december 2026',
+    slashDate: '24/12',
+    formattedWithDay: 'Donderdag 24 dec (Kerstavond)',
+    badge: 'Kerstavond',
+    closingNote: 'Dicht om 17u00',
+    formNotes: 'Zaak sluit stipt om 17u00'
+  },
+  {
+    dayIndex: 3,
+    title: 'Kerstmis',
+    dateStr: 'vrijdag 25 december 2026',
+    dayNameFull: 'Vrijdag 25 december 2026 (Kerstmis)',
+    dayNameShort: 'Vr 25 dec',
+    shortDate: '25 dec',
+    fullDate: '25 december 2026',
+    slashDate: '25/12',
+    formattedWithDay: 'Vrijdag 25 dec (Kerstmis)',
+    badge: 'Kerstmis',
+    formNotes: 'Open vanaf 11u30'
+  },
+  {
+    dayIndex: 4,
+    title: 'Oudejaarsavond',
+    dateStr: 'donderdag 31 december 2026',
+    dayNameFull: 'Donderdag 31 december 2026 (Oudejaarsavond - dicht om 17u00)',
+    dayNameShort: 'Do 31 dec',
+    shortDate: '31 dec',
+    fullDate: '31 december 2026',
+    slashDate: '31/12',
+    formattedWithDay: 'Donderdag 31 dec (Oudejaarsavond)',
+    badge: 'Oudejaarsavond',
+    closingNote: 'Dicht om 17u00',
+    formNotes: 'Zaak sluit stipt om 17u00'
+  },
+  {
+    dayIndex: 5,
+    title: 'Nieuwjaar',
+    dateStr: 'vrijdag 1 januari 2027',
+    dayNameFull: 'Vrijdag 1 januari 2027 (Nieuwjaar)',
+    dayNameShort: 'Vr 1 jan',
+    shortDate: '1 jan',
+    fullDate: '1 januari 2027',
+    slashDate: '01/01',
+    formattedWithDay: 'Vrijdag 1 jan 2027 (Nieuwjaar)',
+    badge: 'Nieuwjaar 2027',
+    formNotes: 'Open vanaf 11u30'
+  },
+  {
+    dayIndex: 6,
+    title: 'Nieuwjaarsweekend',
+    dateStr: 'zaterdag 2 januari 2027',
+    dayNameFull: 'Zaterdag 2 januari 2027 (Nieuwjaarsweekend)',
+    dayNameShort: 'Za 2 jan',
+    shortDate: '2 jan',
+    fullDate: '2 januari 2027',
+    slashDate: '02/01',
+    formattedWithDay: 'Zaterdag 2 jan 2027 (Weekend)',
+    badge: 'Nieuwjaarsweekend',
+    formNotes: 'Open vanaf 11u30'
+  }
+];
+
+export const SPECIAL_DAYS_META: WeekMeta = {
+  weekNumber: SPECIAL_DAYS_WEEK_NUMBER,
+  label: 'Speciale dagen',
+  shortLabel: 'Speciale dagen',
+  isCurrent: false,
+  isNext: false,
+  isUpcoming: true,
+  isArchived: false,
+  dateRange: '1 nov 2026 – 1 jan 2027 (Feestdagen & Eindejaar)',
+  daysFormatted: [
+    'Zo 1 nov: Allerheiligen (open 10u)',
+    'Wo 11 nov: Wapenstilstand (open 10u)',
+    'Do 24 dec: Kerstavond (dicht 17u)',
+    'Vr 25 dec: Kerstmis (open 11u30)',
+    'Do 31 dec: Oudejaarsavond (dicht 17u)',
+    'Vr 1 jan: Nieuwjaar 2027 (open 11u30)',
+    'Za 2 jan: Nieuwjaarsweekend'
+  ],
+  dayDates: ['1 nov', '11 nov', '24 dec', '25 dec', '31 dec', '1 jan', '2 jan'],
+  dayDatesFull: [
+    '1 november 2026',
+    '11 november 2026',
+    '24 december 2026',
+    '25 december 2026',
+    '31 december 2026',
+    '1 januari 2027',
+    '2 januari 2027'
+  ]
+};
+
+export function isSpecialDaysWeek(weekNumber?: number): boolean {
+  return weekNumber === SPECIAL_DAYS_WEEK_NUMBER;
+}
+
 export interface DayDateInfo {
   dayIndex: number;
   dayNameFull: string;
@@ -63,6 +214,19 @@ export function getDayDateInfo(
   dayIndex: number,
   year: number = CURRENT_WEEK_INFO.year
 ): DayDateInfo {
+  if (weekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    const specialDay = SPECIAL_DAYS_LIST[dayIndex] || SPECIAL_DAYS_LIST[0];
+    return {
+      dayIndex,
+      dayNameFull: specialDay.dayNameFull,
+      dayNameShort: specialDay.dayNameShort,
+      shortDate: specialDay.shortDate,
+      fullDate: specialDay.fullDate,
+      slashDate: specialDay.slashDate,
+      formattedWithDay: specialDay.formattedWithDay
+    };
+  }
+
   const mon = getDateOfISOWeek(weekNumber, year);
   const d = new Date(mon.getTime() + dayIndex * 86400000);
   const dayOfMonth = d.getUTCDate();
@@ -229,18 +393,23 @@ export function getAutoActiveWeeks(
 
   // Extra future weeks
   extraWeeks.forEach(w => {
-    if (w >= currentWeek) activeWeekSet.add(w);
+    if (w >= currentWeek && w !== SPECIAL_DAYS_WEEK_NUMBER) activeWeekSet.add(w);
   });
 
   // Shifts in future weeks
   shifts.forEach(s => {
-    if (typeof s.weekNumber === 'number' && s.weekNumber >= currentWeek) {
+    if (typeof s.weekNumber === 'number' && s.weekNumber >= currentWeek && s.weekNumber !== SPECIAL_DAYS_WEEK_NUMBER) {
       activeWeekSet.add(s.weekNumber);
     }
   });
 
   const sorted = Array.from(activeWeekSet).sort((a, b) => a - b);
-  return sorted.map(w => generateWeekMeta(w, currentWeek));
+  const result = sorted.map(w => generateWeekMeta(w, currentWeek));
+
+  // Voeg altijd 'Speciale dagen' toe aan de actieve wekenlijst
+  result.push(SPECIAL_DAYS_META);
+
+  return result;
 }
 
 /**
@@ -261,6 +430,10 @@ export const UPCOMING_SIX_WEEKS_FROM_CURRENT: number[] = Array.from(
 );
 
 export function getWeekMeta(weekNumber: number): WeekMeta {
+  if (weekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    return SPECIAL_DAYS_META;
+  }
+
   const found =
     AVAILABLE_WEEKS.find((w) => w.weekNumber === weekNumber) ||
     HISTORICAL_WEEKS.find((w) => w.weekNumber === weekNumber);
@@ -274,6 +447,9 @@ export function getWeekMeta(weekNumber: number): WeekMeta {
  * Checks if a week is archived (i.e. strictly prior to current active week)
  */
 export function isWeekArchived(weekNumber: number, currentWeek: number = CURRENT_WEEK_NUMBER): boolean {
+  if (weekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    return false; // Speciale feestdagen liggen in de toekomst / actief
+  }
   return weekNumber < currentWeek;
 }
 
@@ -289,6 +465,14 @@ export function isWeekAvailabilityLocked(
   // 1. Indien het doorgeven globaal is uitgeschakeld door de beheerder: ALLES vergrendeld
   if (settings && settings.availabilitySubmissionEnabled === false) {
     return true;
+  }
+
+  // Speciale dagen: standaard OPEN zodat personeel direct kan invullen (tenzij beheerder specifiek vergrendelt)
+  if (targetWeekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    if (settings && Array.isArray(settings.lockedWeeks)) {
+      return settings.lockedWeeks.includes(SPECIAL_DAYS_WEEK_NUMBER);
+    }
+    return false;
   }
 
   // 2. Gearchiveerde weken uit het verleden zijn altijd vergrendeld
@@ -414,7 +598,16 @@ export function getEffectiveEmployeeAvailability(
     return {
       availability: explicit,
       source: 'weekly',
-      label: `Week ${weekNumber} specifiek ingediend`
+      label: weekNumber === SPECIAL_DAYS_WEEK_NUMBER ? 'Speciale dagen specifiek ingediend' : `Week ${weekNumber} specifiek ingediend`
+    };
+  }
+
+  // Voor Speciale dagen (feestdagen) geldt uitsluitend een expliciete opgave, geen automatische wekelijkse herhaling
+  if (weekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    return {
+      availability: null,
+      source: 'none',
+      label: 'Nog niet ingediend voor Speciale dagen'
     };
   }
 

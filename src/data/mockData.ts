@@ -2727,8 +2727,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2739,8 +2739,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2751,8 +2751,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2763,8 +2763,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2775,8 +2775,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2787,8 +2787,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2799,8 +2799,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2811,8 +2811,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2823,8 +2823,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2835,8 +2835,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2847,8 +2847,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2859,8 +2859,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2871,8 +2871,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2883,8 +2883,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "22:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2895,8 +2895,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2907,8 +2907,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2919,8 +2919,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2931,8 +2931,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2943,8 +2943,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2955,8 +2955,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2967,8 +2967,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "16:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2979,8 +2979,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -2991,8 +2991,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3003,8 +3003,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3015,8 +3015,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3027,8 +3027,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3039,8 +3039,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3051,8 +3051,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3063,8 +3063,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3075,8 +3075,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3087,8 +3087,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3099,8 +3099,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3111,8 +3111,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3123,8 +3123,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3135,8 +3135,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3147,8 +3147,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3159,8 +3159,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3171,8 +3171,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "20:30",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3183,8 +3183,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "21:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3195,8 +3195,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3207,8 +3207,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "18:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3219,8 +3219,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "00:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3231,8 +3231,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "Sluit",
     "role": "Sluit",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3243,8 +3243,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3255,8 +3255,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   },
   {
@@ -3267,8 +3267,8 @@ export const INITIAL_SHIFTS: Shift[] = [
     "endTime": "23:00",
     "role": "Medewerker",
     "department": "zaal",
-    "status": "published",
-    "acknowledged": true,
+    "status": "draft",
+    "acknowledged": false,
     "weekNumber": 41
   }
 ];

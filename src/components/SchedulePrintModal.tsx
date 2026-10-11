@@ -20,7 +20,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Employee, Shift, Department } from '../types';
-import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks } from '../utils/weekUtils';
+import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks, SPECIAL_DAYS_WEEK_NUMBER } from '../utils/weekUtils';
 import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
 import { downloadInDeMolenPdf, buildInDeMolenDayGridData } from '../utils/inDeMolenPdfGenerator';
 
@@ -473,6 +473,25 @@ export default function SchedulePrintModal({
 
   const handlePrint = () => {
     handlePrintInPage();
+  };
+
+  const handleOpenInNewTab = () => {
+    try {
+      const html = generateStandaloneHTML();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setPrintSuccessNotice('Printversie geopend in nieuw tabblad.');
+    } catch {
+      handlePrintInPage();
+    }
   };
 
   const handleDownloadHTML = () => {
