@@ -677,6 +677,31 @@ export default function StaffPortal({
     }
   }, [notices, currentEmployee?.id]);
 
+  // Notificatie wanneer er een herinnering binnenkomt over ontbrekende beschikbaarheid
+  React.useEffect(() => {
+    if (!currentEmployee || notices.length === 0) return;
+    const availNotice = notices.find(n => 
+      (n.targetEmployeeId === currentEmployee.id || n.category === 'planning') &&
+      n.title.toLowerCase().includes('beschikbaarheid')
+    );
+    if (!availNotice) return;
+    const key = `avail_reminder_seen_${availNotice.id}`;
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, 'true');
+      playAlertChime();
+      if (getPushNotificationPermission() === 'granted') {
+        try {
+          new Notification(availNotice.title, {
+            body: availNotice.content,
+            icon: '/favicon.ico'
+          });
+        } catch (e) {
+          console.warn('Push error:', e);
+        }
+      }
+    }
+  }, [notices, currentEmployee?.id]);
+
   // Automatische Push-Notificatie & Automatisch Herinneringsbericht bij diensten die binnen 24 uur of 1 uur beginnen
   React.useEffect(() => {
     if (!currentEmployee) return;
@@ -1227,6 +1252,107 @@ export default function StaffPortal({
             </div>
           </div>
 
+          {/* 🌟 PROMINENTE HOOFDACTIES BIJ INLOGGEN: PLANNING & BESCHIKBAARHEDEN */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Knop 1: Planning */}
+            <button
+              type="button"
+              id="staff-hero-btn-planning"
+              onClick={() => {
+                setActiveSubTab('rooster');
+                setSuccessMsg(null);
+              }}
+              className={`p-4 sm:p-5 rounded-3xl text-left transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 border-2 shadow-xs group ${
+                activeSubTab === 'rooster'
+                  ? 'bg-gradient-to-br from-orange-600 via-orange-500 to-amber-600 text-white border-orange-400 shadow-md ring-2 ring-orange-300'
+                  : 'bg-white hover:bg-orange-50/70 text-slate-800 border-slate-200 hover:border-orange-300'
+              }`}
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
+                  activeSubTab === 'rooster' ? 'bg-white/20 text-white' : 'bg-orange-100 text-orange-600'
+                }`}>
+                  <CalendarIcon size={24} className="stroke-[2.5]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base sm:text-lg font-black tracking-tight uppercase">
+                      Planning
+                    </span>
+                    {activeSubTab === 'rooster' && (
+                      <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full border border-white/30 text-white">
+                        Actief
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs font-medium truncate mt-0.5 ${
+                    activeSubTab === 'rooster' ? 'text-white/90' : 'text-slate-500'
+                  }`}>
+                    Mijn diensten &amp; weekrooster bekijken
+                  </p>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <span className={`inline-flex items-center px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight ${
+                  activeSubTab === 'rooster'
+                    ? 'bg-white text-orange-700 shadow-xs'
+                    : 'bg-orange-100 text-orange-950 border border-orange-200 group-hover:bg-orange-500 group-hover:text-white transition'
+                }`}>
+                  {personalShifts.length > 0 ? `${personalShifts.length} dienst${personalShifts.length > 1 ? 'en' : ''}` : 'Rooster 📅'}
+                </span>
+              </div>
+            </button>
+
+            {/* Knop 2: Beschikbaarheden */}
+            <button
+              type="button"
+              id="staff-hero-btn-beschikbaarheden"
+              onClick={() => {
+                setActiveSubTab('beschikbaarheid');
+                setSuccessMsg(null);
+              }}
+              className={`p-4 sm:p-5 rounded-3xl text-left transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 border-2 shadow-xs group ${
+                activeSubTab === 'beschikbaarheid'
+                  ? 'bg-gradient-to-br from-amber-600 via-amber-500 to-orange-600 text-white border-amber-400 shadow-md ring-2 ring-amber-300'
+                  : 'bg-white hover:bg-amber-50/70 text-slate-800 border-slate-200 hover:border-amber-300'
+              }`}
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
+                  activeSubTab === 'beschikbaarheid' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  <Sparkles size={24} className="stroke-[2.5]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base sm:text-lg font-black tracking-tight uppercase">
+                      Beschikbaarheden
+                    </span>
+                    {activeSubTab === 'beschikbaarheid' && (
+                      <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full border border-white/30 text-white">
+                        Actief
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs font-medium truncate mt-0.5 ${
+                    activeSubTab === 'beschikbaarheid' ? 'text-white/90' : 'text-slate-500'
+                  }`}>
+                    Vrije dagen &amp; uren doorgeven aan Hans
+                  </p>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <span className={`inline-flex items-center px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight ${
+                  activeSubTab === 'beschikbaarheid'
+                    ? 'bg-white text-amber-900 shadow-xs'
+                    : 'bg-amber-100 text-amber-950 border border-amber-200 group-hover:bg-amber-500 group-hover:text-white transition'
+                }`}>
+                  Invullen ✍️
+                </span>
+              </div>
+            </button>
+          </div>
+
           {/* ONBEVESTIGDE DIENST BINNEN 24 UUR */}
           {hasUnconfirmedShifts24h ? (
             <div 
@@ -1397,35 +1523,66 @@ export default function StaffPortal({
             </div>
           ) : null}
 
-          {/* Beschikbaarheid herinnering (compact) */}
-          {!availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === NEXT_WEEK_NUMBER) && (
-            <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-950">
-              <div className="flex items-center gap-2">
-                <span className="text-base">🔔</span>
-                <span className="font-semibold">Beschikbaarheid voor <strong>Week {NEXT_WEEK_NUMBER}</strong> nog niet doorgegeven.</span>
-              </div>
-              <button
-                onClick={() => {
-                  setSelectedWeek(NEXT_WEEK_NUMBER);
-                  setActiveSubTab('beschikbaarheid');
-                }}
-                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold rounded-xl transition cursor-pointer text-xs shrink-0 self-end sm:self-auto"
-              >
-                Nu invullen →
-              </button>
-            </div>
-          )}
+          {/* Beschikbaarheid herinnering (compact voor volgende week én doelweek 2 weken vooraf) */}
+          {(() => {
+            const hasNextWeek = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === NEXT_WEEK_NUMBER);
+            const TWO_WEEKS_AHEAD = CURRENT_WEEK_NUMBER + 2;
+            const hasTwoWeeksAhead = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === TWO_WEEKS_AHEAD);
 
-      {/* Staff Tab menu - Vereenvoudigd */}
+            if (hasNextWeek && hasTwoWeeksAhead) return null;
+
+            const targetWeekToRemind = !hasNextWeek ? NEXT_WEEK_NUMBER : TWO_WEEKS_AHEAD;
+            const isTwoWeeksAhead = targetWeekToRemind === TWO_WEEKS_AHEAD;
+
+            return (
+              <div className={`p-3.5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs ${
+                isTwoWeeksAhead
+                  ? 'bg-gradient-to-r from-amber-50 to-orange-50 border-orange-300 text-orange-950 shadow-xs'
+                  : 'bg-amber-50 border-amber-200 text-amber-950'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">⏰</span>
+                  <div>
+                    <div className="font-extrabold flex items-center gap-1.5 flex-wrap">
+                      <span>Beschikbaarheid voor <strong>Week {targetWeekToRemind}</strong> nog niet doorgegeven!</span>
+                      {isTwoWeeksAhead && (
+                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-orange-200 text-orange-900 border border-orange-300">
+                          Woensdag planningsdag (2 weken vooraf)
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-600 font-medium mt-0.5">
+                      {isTwoWeeksAhead
+                        ? 'De planning voor deze week wordt 2 weken vooraf op woensdag opgesteld. Geef tijdig je vrije dagen en uren door!'
+                        : 'Geef je uren en voorkeuren door via het personeelsportaal zodat de beheerder je correct kan inplannen.'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedWeek(targetWeekToRemind);
+                    setActiveSubTab('beschikbaarheid');
+                  }}
+                  className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 active:scale-95 text-white font-black uppercase tracking-tight rounded-xl transition cursor-pointer text-xs shrink-0 self-end sm:self-auto shadow-xs"
+                >
+                  Nu invullen →
+                </button>
+              </div>
+            );
+          })()}
+
+      {/* Staff Tab menu - Vereenvoudigd: Eerst Planning en Beschikbaarheden */}
       <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-1 flex flex-wrap gap-1">
+        {/* 1. Planning */}
         <button
+          id="staff-tab-planning-btn"
           onClick={() => { setActiveSubTab('rooster'); setSuccessMsg(null); }}
           className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[100px] relative ${
             activeSubTab === 'rooster' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
           }`}
         >
           <CalendarIcon size={14} />
-          <span>Mijn Rooster</span>
+          <span>Planning</span>
           {hasUnconfirmedShifts24h ? (
             <span 
               className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight animate-bounce shadow-md ml-1 ring-2 ring-white"
@@ -1444,6 +1601,20 @@ export default function StaffPortal({
             </span>
           ) : null}
         </button>
+
+        {/* 2. Beschikbaarheden */}
+        <button
+          id="staff-tab-beschikbaarheid-btn"
+          onClick={() => { setActiveSubTab('beschikbaarheid'); setSuccessMsg(null); }}
+          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
+            activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
+          }`}
+        >
+          <Sparkles size={14} className={activeSubTab === 'beschikbaarheid' ? 'text-amber-200 fill-amber-200' : 'text-amber-500 fill-amber-300'} />
+          <span>Beschikbaarheden</span>
+        </button>
+
+        {/* 3. Uren-tracker */}
         <button
           id="staff-tab-uren-btn"
           onClick={() => { setActiveSubTab('uren'); setSuccessMsg(null); }}
@@ -1454,16 +1625,10 @@ export default function StaffPortal({
           <Clock size={14} />
           <span>Uren-tracker ⏱️</span>
         </button>
+
+        {/* 4. Ruilen */}
         <button
-          onClick={() => { setActiveSubTab('beschikbaarheid'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
-            activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Sparkles size={14} className="text-amber-500 fill-amber-300" />
-          <span>Beschikbaarheid</span>
-        </button>
-        <button
+          id="staff-tab-ruilen-btn"
           onClick={() => { setActiveSubTab('ruilen'); setSuccessMsg(null); }}
           className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[90px] ${
             activeSubTab === 'ruilen' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
@@ -1472,7 +1637,10 @@ export default function StaffPortal({
           <ArrowLeftRight size={14} />
           <span>Ruilen</span>
         </button>
+
+        {/* 5. Berichten */}
         <button
+          id="staff-tab-berichten-btn"
           onClick={() => { setActiveSubTab('berichten'); setSuccessMsg(null); }}
           className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[100px] ${
             activeSubTab === 'berichten' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
@@ -1481,7 +1649,10 @@ export default function StaffPortal({
           <Megaphone size={14} />
           <span>Berichten ({notices.length})</span>
         </button>
+
+        {/* 6. Collega's */}
         <button
+          id="staff-tab-collegas-btn"
           onClick={() => { setActiveSubTab('collegas'); setSuccessMsg(null); }}
           className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[90px] ${
             activeSubTab === 'collegas' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'

@@ -177,6 +177,13 @@ export interface AppSettings {
   availabilitySubmissionEnabled: boolean; // Manager can turn on/off availability submission by staff globally
   lockedWeeks?: number[]; // Explicit list of locked week numbers (e.g. [38, 39, 40]) configurable week-by-week
   availabilityLockMessage?: string; // Custom message when locked
+  // Automatische herinneringen voor medewerkers die beschikbaarheid nog niet hebben ingevuld:
+  autoAvailabilityRemindersEnabled?: boolean; // Default true: herinnering op de dag dat planning wordt opgesteld (woensdag, 2 weken vooraf)
+  reminderDayOfWeek?: number; // 0=zo, 1=ma, 2=di, 3=woensdag (standaard 3 = woensdag)
+  reminderWeeksAhead?: number; // 2 weken vooraf (standaard 2)
+  lastAutoReminderRunDate?: string; // bijv. "2026-10-14" (YYYY-MM-DD) om dubbele verzending op dezelfde woensdag te voorkomen
+  lastAutoReminderSentCount?: number;
+  lastAutoReminderTimestamp?: number;
   updatedAt?: number;
   updatedBy?: string;
 }

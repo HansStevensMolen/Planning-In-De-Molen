@@ -58,6 +58,12 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { getContinuityInfo, getDayContinuityCandidates, getAllWeekContinuityMatches, ContinuityMatch } from '../utils/continuityUtils';
+import { 
+  checkUpcomingAvailabilityReminders, 
+  createAvailabilityReminderNotice, 
+  createGroupAvailabilityReminderNotice,
+  generateAvailabilityReminderWhatsAppUrl
+} from '../utils/availabilityReminderUtils';
 import { Employee, Shift, Notice, SwapRequest, ChangeLog, EmployeeStatuut, ExperienceLevel, EmployeeAvailability, DayAvailability, Department, WeekMeta, AppSettings } from '../types';
 import NotificationModal from './NotificationModal';
 import SendWeekScheduleModal from './SendWeekScheduleModal';
@@ -235,7 +241,7 @@ export default function ManagerDashboard({
 
   // Planning overview & filter state for managers (Zaal & Keuken)
   const [planningSearch, setPlanningSearch] = useState<string>('');
-  const [planningScheduledFilter, setPlanningScheduledFilter] = useState<'all' | 'scheduled' | 'unscheduled'>('all');
+  const [planningScheduledFilter, setPlanningScheduledFilter] = useState<'all' | 'scheduled' | 'unscheduled' | 'available'>('all');
   const [planningSort, setPlanningSort] = useState<number | 'name' | 'scheduled_first' | 'unscheduled_first'>('name');
   const [showPlanningScheduledDrawer, setShowPlanningScheduledDrawer] = useState<boolean>(false);
 
@@ -1187,6 +1193,19 @@ export default function ManagerDashboard({
             <span>Nieuwe Dienst</span>
           </button>
 
+          {/* 1b. Print Planning (Geoptimaliseerde Print-Versie) */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowSchedulePrintModal(true);
+            }}
+            className="px-3.5 py-2.5 bg-orange-700 hover:bg-orange-800 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+            title={`Print Planning: Geoptimaliseerde print-versie van het huidige weekrooster (Week ${selectedManagerWeek})`}
+          >
+            <Printer size={15} />
+            <span>Print Planning</span>
+          </button>
+
           {/* 2. Download PDF (Originele Layout) */}
           <button
             type="button"
@@ -1601,11 +1620,20 @@ export default function ManagerDashboard({
           const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
           const matchExperience = selectedExperienceFilter === 'all' || emp.experience === selectedExperienceFilter;
           const isScheduled = scheduledEmpIdsInWeek.has(emp.id);
-          const matchScheduled = planningScheduledFilter === 'all'
-            ? true
-            : planningScheduledFilter === 'scheduled'
-              ? isScheduled
-              : !isScheduled;
+          const hasOpenAvailability = (() => {
+            const eff = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
+            return !!(eff.availability?.days?.some(d => d.status === 'available' || d.status === 'preferred'));
+          })();
+
+          let matchScheduled = true;
+          if (planningScheduledFilter === 'scheduled') {
+            matchScheduled = isScheduled;
+          } else if (planningScheduledFilter === 'unscheduled') {
+            matchScheduled = !isScheduled;
+          } else if (planningScheduledFilter === 'available') {
+            // Met één klik alle openstaande beschikbaarheden tonen voor de geselecteerde week
+            matchScheduled = hasOpenAvailability;
+          }
           return matchSearch && matchStatuut && matchExperience && matchScheduled && emp.id !== 'emp1';
         });
 
@@ -2177,6 +2205,11 @@ export default function ManagerDashboard({
             const overtimeList = empComplianceList.filter(c => c.isOvertime);
             const underhoursVastList = empComplianceList.filter(c => c.isVastUnderhours);
 
+            const availableStaff = teamStaff.filter(emp => {
+              const eff = getEffectiveEmployeeAvailability(emp, selectedManagerWeek, availabilities);
+              return !!(eff.availability?.days?.some(d => d.status === 'available' || d.status === 'preferred'));
+            });
+
             return (
               <div className="space-y-2">
                 <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2.5">
@@ -2202,7 +2235,7 @@ export default function ManagerDashboard({
                       )}
                     </div>
 
-                    {/* Status filter: Alle / Ingepland / Niet ingepland */}
+                    {/* Status filter: Alle / Ingepland / Niet ingepland / Open Beschikbaarheden */}
                     <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl">
                       <button
                         type="button"
@@ -2236,6 +2269,20 @@ export default function ManagerDashboard({
                         }`}
                       >
                         Niet Ingepland ({unscheduledStaff.length})
+                      </button>
+                      <button
+                        type="button"
+                        id="manager-filter-open-availabilities"
+                        onClick={() => setPlanningScheduledFilter("available")}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-tight transition cursor-pointer flex items-center gap-1 ${
+                          planningScheduledFilter === "available"
+                            ? "bg-orange-600 text-white shadow-2xs ring-1 ring-orange-400"
+                            : "text-orange-850 hover:text-orange-950 hover:bg-orange-100/60 font-black"
+                        }`}
+                        title={`Toon met één klik alle personeelsleden die openstaande beschikbaarheid hebben opgegeven voor Week ${selectedManagerWeek}`}
+                      >
+                        <Sparkles size={12} className={planningScheduledFilter === 'available' ? 'text-amber-200 fill-amber-200' : 'text-amber-600 fill-amber-500'} />
+                        <span>Open Beschikbaar ({availableStaff.length})</span>
                       </button>
                     </div>
 
@@ -2311,6 +2358,16 @@ export default function ManagerDashboard({
                     >
                       <Users size={13} className="text-slate-500" />
                       <span>{showPlanningScheduledDrawer ? 'Verberg' : 'Lijst'} ({scheduledStaff.length}/{teamStaff.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowSchedulePrintModal(true)}
+                      className="px-2.5 py-1 bg-white hover:bg-orange-50 text-slate-800 hover:text-orange-700 border border-slate-300 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      title={`Geoptimaliseerde printversie genereren voor Week ${selectedManagerWeek}`}
+                    >
+                      <Printer size={13} className="text-orange-600" />
+                      <span>Print Planning</span>
                     </button>
                   </div>
                 </div>
@@ -2792,8 +2849,23 @@ export default function ManagerDashboard({
 
                   {deptEmployees.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-xs font-bold text-slate-400 uppercase border-b border-orange-100">
-                        Geen medewerkers gevonden in afdeling {isZaal ? 'Zaal' : 'Keuken'} met de geselecteerde filters.
+                      <td colSpan={8} className="px-4 py-8 text-center text-xs font-bold text-slate-500 uppercase border-b border-orange-100">
+                        <div className="space-y-1.5">
+                          <p>
+                            {planningScheduledFilter === 'available'
+                              ? `Geen personeelsleden gevonden met openstaande beschikbaarheid voor Week ${selectedManagerWeek} in afdeling ${isZaal ? 'Zaal' : 'Keuken'}.`
+                              : `Geen medewerkers gevonden in afdeling ${isZaal ? 'Zaal' : 'Keuken'} met de geselecteerde filters.`}
+                          </p>
+                          {planningScheduledFilter !== 'all' && (
+                            <button
+                              type="button"
+                              onClick={() => setPlanningScheduledFilter('all')}
+                              className="px-3 py-1 bg-orange-100 hover:bg-orange-200 text-orange-900 rounded-lg text-xs font-black uppercase tracking-tight cursor-pointer transition"
+                            >
+                              Toon Alle Medewerkers
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ) : (
@@ -3624,6 +3696,137 @@ export default function ManagerDashboard({
                 })}
               </div>
             </div>
+
+            {/* ⏰ AUTOMATISCHE HERINNERINGSFUNCTIE VOOR ONVOLLEDIGE BESCHIKBAARHEID (2 WEKEN VOORAF OP WOENSDAG) */}
+            {(() => {
+              const reminderResult = checkUpcomingAvailabilityReminders(employees, availabilities, appSettings);
+              const {
+                targetWeekNumber,
+                targetWeekMeta,
+                isReminderDay,
+                reminderDayName,
+                missingEmployees,
+                submittedEmployees,
+                alreadyRunToday,
+                lastRunDate
+              } = reminderResult;
+
+              const handleSendBatchAvailabilityReminders = () => {
+                if (missingEmployees.length === 0) return;
+
+                if (onAddNotice) {
+                  // 1. Algemene mededeling op het prikbord
+                  const groupNotice = createGroupAvailabilityReminderNotice(missingEmployees.length, targetWeekNumber);
+                  onAddNotice(groupNotice);
+
+                  // 2. Gerichte persoonlijke notificatie naar elke ontbrekende medewerker
+                  missingEmployees.forEach(emp => {
+                    const singleNotice = createAvailabilityReminderNotice(emp, targetWeekNumber);
+                    onAddNotice(singleNotice);
+                  });
+                }
+
+                // 3. Update AppSettings timestamp
+                const todayStr = new Date().toISOString().split('T')[0];
+                if (onUpdateAppSettings) {
+                  onUpdateAppSettings({
+                    lastAutoReminderRunDate: todayStr,
+                    lastAutoReminderSentCount: missingEmployees.length,
+                    lastAutoReminderTimestamp: Date.now()
+                  });
+                }
+
+                setSixWeeksSuccessMsg(`🔔 Herinneringsnotificaties succesvol verzonden naar alle ${missingEmployees.length} medewerkers voor Week ${targetWeekNumber}!`);
+                setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
+              };
+
+              return (
+                <div className={`p-4 sm:p-5 rounded-3xl border-2 transition-all shadow-sm ${
+                  isReminderDay 
+                    ? 'bg-gradient-to-r from-amber-500/10 via-orange-500/15 to-amber-500/10 border-amber-400 ring-2 ring-amber-300' 
+                    : 'bg-white border-orange-200'
+                }`}>
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center font-bold text-xl shadow-xs shrink-0">
+                        ⏰
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-black uppercase tracking-tight text-amber-950">
+                            Automatische Herinnering Beschikbaarheid
+                          </span>
+                          <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                            Planning wordt 2 weken vooraf op woensdag opgesteld
+                          </span>
+                          {isReminderDay && (
+                            <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-600 text-white animate-pulse">
+                              🎯 Vandaag is {reminderDayName} (Opsteldag)!
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="text-base font-black text-slate-900 mt-1">
+                          Doelweek voor inplanning: <span className="text-orange-600">Week {targetWeekNumber} ({targetWeekMeta.dateRange})</span>
+                        </h4>
+                        <p className="text-xs text-slate-600 font-medium mt-0.5">
+                          {missingEmployees.length > 0 ? (
+                            <>
+                              Er zijn momenteel <strong className="text-rose-600 font-extrabold">{missingEmployees.length} medewerkers</strong> die hun beschikbaarheid voor Week {targetWeekNumber} nog niet hebben ingevuld.
+                            </>
+                          ) : (
+                            <>
+                              <strong className="text-emerald-700">Alle {submittedEmployees.length} medewerkers</strong> hebben hun beschikbaarheid voor Week {targetWeekNumber} reeds ingevuld of hebben een vaste regeling!
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {missingEmployees.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleSendBatchAvailabilityReminders}
+                          className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                          title={`Stuur direct herinneringsnotificaties naar alle ${missingEmployees.length} medewerkers voor Week ${targetWeekNumber}`}
+                        >
+                          <Bell size={14} className="stroke-[2.5]" />
+                          <span>Verstuur Herinnering ({missingEmployees.length})</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setShowNotificationModal(true)}
+                        className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                        title="Open het notificatie-overzicht om individueel per WhatsApp of portaal te herinneren"
+                      >
+                        <Share2 size={14} className="text-amber-400" />
+                        <span>Herinneringen Hub 📲</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Badges / Quick chips of missing employees */}
+                  {missingEmployees.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-amber-200/80 flex flex-wrap items-center gap-1.5 text-xs">
+                      <span className="text-[11px] font-black uppercase text-slate-500 mr-1">Nog in te vullen:</span>
+                      {missingEmployees.slice(0, 10).map(emp => (
+                        <span key={emp.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-rose-50 text-rose-900 border border-rose-200 text-[11px] font-bold">
+                          <span>{emp.name}</span>
+                          <span className="text-[9px] text-rose-500 font-semibold">({emp.statuut})</span>
+                        </span>
+                      ))}
+                      {missingEmployees.length > 10 && (
+                        <span className="text-[11px] font-extrabold text-slate-500">
+                          +{missingEmployees.length - 10} anderen
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Stats Dashboard */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -7133,11 +7336,19 @@ export default function ManagerDashboard({
         shifts={shifts}
         weekNumber={selectedManagerWeek}
         availableWeeks={activeWeeks.map(w => w.weekNumber)}
+        availabilities={availabilities}
+        appSettings={appSettings}
         onMarkNotified={(ids, type) => {
           if (onMarkNotified) {
             onMarkNotified(ids, type);
           }
         }}
+        onPostNotice={(notice) => {
+          if (onAddNotice) {
+            onAddNotice(notice);
+          }
+        }}
+        onUpdateAppSettings={onUpdateAppSettings}
       />
 
       {/* Modal: Kies van welke week je de shiften naar het personeel stuurt */}

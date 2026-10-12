@@ -70,6 +70,11 @@ import {
   generateNoticeWhatsAppText,
   isAutoWhatsAppPromptEnabled 
 } from './utils/whatsappNotificationUtils';
+import { 
+  checkUpcomingAvailabilityReminders, 
+  createAvailabilityReminderNotice, 
+  createGroupAvailabilityReminderNotice 
+} from './utils/availabilityReminderUtils';
 
 const DAYS_OF_WEEK = [
   'Maandag',
@@ -336,6 +341,58 @@ export default function App() {
       );
     }
   };
+
+  // ⏰ Automatische Herinneringsfunctie voor medewerkers die beschikbaarheid nog niet hebben ingevuld:
+  // Wordt automatisch uitgevoerd op de dag dat de planning wordt opgesteld (woensdag, 2 weken vooraf).
+  useEffect(() => {
+    // Controleren of automatische herinneringen ingeschakeld zijn (standaard true)
+    if (appSettings.autoAvailabilityRemindersEnabled === false) return;
+    if (employees.length <= 1 || availabilities.length === 0) return;
+
+    const checkResult = checkUpcomingAvailabilityReminders(employees, availabilities, appSettings);
+    const { isReminderDay, alreadyRunToday, missingEmployees, targetWeekNumber } = checkResult;
+
+    // Alleen uitvoeren als het vandaag de opsteldag is (woensdag) en nog niet eerder vandaag is gedraaid
+    if (isReminderDay && !alreadyRunToday && missingEmployees.length > 0) {
+      console.log(`[AutoReminder] Woensdag planningsdag gedetecteerd voor Week ${targetWeekNumber}. Versturen van herinneringen naar ${missingEmployees.length} medewerkers...`);
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const now = Date.now();
+
+      // 1. Groepsoproep op het prikbord
+      const groupNotice: Notice = {
+        ...createGroupAvailabilityReminderNotice(missingEmployees.length, targetWeekNumber, 'Hans Stevens'),
+        id: `notice_auto_avail_group_${targetWeekNumber}_${now}`,
+        date: todayStr
+      };
+
+      // 2. Persoonlijke notificaties voor elke medewerker
+      const individualNotices: Notice[] = missingEmployees.map((emp, idx) => ({
+        ...createAvailabilityReminderNotice(emp, targetWeekNumber, 'Hans Stevens'),
+        id: `notice_auto_avail_${emp.id}_${targetWeekNumber}_${now + idx + 1}`,
+        date: todayStr
+      }));
+
+      const newNotices = [groupNotice, ...individualNotices, ...notices];
+      setNotices(newNotices);
+      saveNoticesToCloud(newNotices);
+
+      // 3. Update settings timestamp zodat het maar 1x per woensdag draait
+      const updatedSettings: AppSettings = {
+        ...appSettings,
+        lastAutoReminderRunDate: todayStr,
+        lastAutoReminderSentCount: missingEmployees.length,
+        lastAutoReminderTimestamp: now
+      };
+      setAppSettings(updatedSettings);
+      saveAppSettingsToCloud(updatedSettings);
+
+      addLog(
+        'Automatische Beschikbaarheids-Herinnering Verzonden',
+        `Woensdag-planningsdag: herinneringsnotificaties automatisch klaargezet voor ${missingEmployees.length} medewerkers voor Week ${targetWeekNumber}`
+      );
+    }
+  }, [appSettings.autoAvailabilityRemindersEnabled, appSettings.lastAutoReminderRunDate, employees.length, availabilities.length]);
 
   // Sync to localStorage
   useEffect(() => {

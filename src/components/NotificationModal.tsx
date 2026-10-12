@@ -33,10 +33,20 @@ import {
   Users,
   Filter,
   CheckCheck,
-  CheckSquare
+  CheckSquare,
+  Bell,
+  AlertTriangle,
+  RotateCcw
 } from 'lucide-react';
 import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
 import { CURRENT_WEEK_NUMBER, getWeekMeta, getAutoActiveWeeks } from '../utils/weekUtils';
+import { EmployeeAvailability, Notice, AppSettings } from '../types';
+import { 
+  checkUpcomingAvailabilityReminders, 
+  generateAvailabilityReminderWhatsAppUrl,
+  createAvailabilityReminderNotice,
+  createGroupAvailabilityReminderNotice
+} from '../utils/availabilityReminderUtils';
 
 interface NotificationModalProps {
   isOpen: boolean;
@@ -45,7 +55,11 @@ interface NotificationModalProps {
   shifts: Shift[];
   weekNumber: number;
   availableWeeks?: number[];
+  availabilities?: EmployeeAvailability[];
+  appSettings?: AppSettings;
   onMarkNotified: (employeeIds: string[], type: 'email' | 'whatsapp' | 'both') => void;
+  onPostNotice?: (notice: Omit<Notice, 'id' | 'date'>) => void;
+  onUpdateAppSettings?: (settings: Partial<AppSettings>) => void;
 }
 
 export default function NotificationModal({
@@ -55,10 +69,14 @@ export default function NotificationModal({
   shifts,
   weekNumber,
   availableWeeks,
-  onMarkNotified
+  availabilities = [],
+  appSettings,
+  onMarkNotified,
+  onPostNotice,
+  onUpdateAppSettings
 }: NotificationModalProps) {
   const [selectedWeek, setSelectedWeek] = useState<number>(weekNumber);
-  const [activeTab, setActiveTab] = useState<'individual' | 'team_whatsapp' | 'outlook_calendar'>('individual');
+  const [activeTab, setActiveTab] = useState<'individual' | 'team_whatsapp' | 'outlook_calendar' | 'availability_reminders'>('individual');
   const [deptFilter, setDeptFilter] = useState<'all' | Department>('all');
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [batchSuccessMessage, setBatchSuccessMessage] = useState<string | null>(null);
@@ -253,6 +271,17 @@ export default function NotificationModal({
             >
               <CalendarIcon size={14} />
               <span>Agenda (Google, Apple & Outlook)</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('availability_reminders')}
+              className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-tight transition flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'availability_reminders'
+                  ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-400'
+                  : 'bg-amber-50 text-amber-950 border border-amber-300 hover:bg-amber-100 font-black'
+              }`}
+            >
+              <Bell size={14} className={activeTab === 'availability_reminders' ? 'text-white' : 'text-amber-600'} />
+              <span>Beschikbaarheid Herinneringen (Woensdag)</span>
             </button>
           </div>
 
@@ -703,6 +732,224 @@ export default function NotificationModal({
 
           </div>
         )}
+
+        {/* 4. BESCHIKBAARHEID HERINNERINGEN (WOENSDAG - 2 WEKEN VOORAF) */}
+        {activeTab === 'availability_reminders' && (() => {
+          const reminderCheck = checkUpcomingAvailabilityReminders(employees, availabilities, appSettings);
+          const {
+            targetWeekNumber,
+            targetWeekMeta,
+            isReminderDay,
+            reminderDayName,
+            missingEmployees,
+            submittedEmployees,
+            alreadyRunToday,
+            lastRunDate
+          } = reminderCheck;
+
+          const handleSendSingleReminder = (emp: Employee) => {
+            if (onPostNotice) {
+              const notice = createAvailabilityReminderNotice(emp, targetWeekNumber);
+              onPostNotice(notice);
+            }
+            setBatchSuccessMessage(`🔔 Notificatie geplaatst voor ${emp.name} voor Week ${targetWeekNumber}!`);
+            setTimeout(() => setBatchSuccessMessage(null), 3500);
+          };
+
+          const handleSendAllMissingReminders = () => {
+            if (missingEmployees.length === 0) return;
+
+            // 1. Post group notice
+            if (onPostNotice) {
+              const groupNotice = createGroupAvailabilityReminderNotice(missingEmployees.length, targetWeekNumber);
+              onPostNotice(groupNotice);
+
+              // 2. Post personal notices to each missing employee
+              missingEmployees.forEach(emp => {
+                const singleNotice = createAvailabilityReminderNotice(emp, targetWeekNumber);
+                onPostNotice(singleNotice);
+              });
+            }
+
+            // 3. Mark in AppSettings that it has run today
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (onUpdateAppSettings) {
+              onUpdateAppSettings({
+                lastAutoReminderRunDate: todayStr,
+                lastAutoReminderSentCount: missingEmployees.length,
+                lastAutoReminderTimestamp: Date.now()
+              });
+            }
+
+            setBatchSuccessMessage(`✅ Herinneringsnotificaties succesvol verzonden naar alle ${missingEmployees.length} medewerkers voor Week ${targetWeekNumber}!`);
+            setTimeout(() => setBatchSuccessMessage(null), 4000);
+          };
+
+          return (
+            <div className="p-6 space-y-5 text-left max-h-[68vh] overflow-y-auto">
+              
+              {/* Info banner explaining the 2-week Wednesday schedule rule */}
+              <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-100/70 border-2 border-amber-300 rounded-3xl p-5 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-600 text-white flex items-center justify-center font-bold text-xl shadow-xs shrink-0">
+                      📅
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-black uppercase tracking-tight text-amber-950">
+                          Automatische Beschikbaarheids-Herinnering
+                        </span>
+                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                          2 Weken Vooraf (Elke {reminderDayName})
+                        </span>
+                      </div>
+                      <h4 className="text-base font-black text-slate-900 mt-0.5">
+                        Planning wordt 2 weken vooraf op woensdag opgesteld: <span className="text-orange-600">Week {targetWeekNumber} ({targetWeekMeta.dateRange})</span>
+                      </h4>
+                      <p className="text-xs text-slate-600 font-medium mt-1">
+                        Medewerkers die hun beschikbaarheid voor Week {targetWeekNumber} nog niet hebben ingevuld ontvangen automatisch een melding op het personeelsportaal en WhatsApp-koppeling.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex sm:flex-col items-end gap-1.5 shrink-0">
+                    <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-xl border ${
+                      isReminderDay 
+                        ? 'bg-emerald-100 text-emerald-900 border-emerald-300' 
+                        : 'bg-slate-100 text-slate-700 border-slate-300'
+                    }`}>
+                      {isReminderDay ? `🎯 Vandaag is ${reminderDayName}! (Planningsdag)` : `Vandaag: ${new Date().toLocaleDateString('nl-BE', { weekday: 'long' })}`}
+                    </span>
+                    {alreadyRunToday && (
+                      <span className="text-[10px] text-emerald-700 font-bold bg-white px-2 py-0.5 rounded-lg border border-emerald-200">
+                        ✓ Vandaag al uitgevoerd ({lastRunDate})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Statistics & Quick Actions */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white p-4 rounded-2xl border-2 border-slate-200 shadow-2xs">
+                  <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">Doelweek planning</div>
+                  <div className="text-2xl font-black text-slate-800 mt-1">Week {targetWeekNumber}</div>
+                  <div className="text-[11px] font-bold text-slate-600 truncate mt-0.5">{targetWeekMeta.dateRange}</div>
+                </div>
+
+                <div className="bg-rose-50/70 p-4 rounded-2xl border-2 border-rose-200 shadow-2xs">
+                  <div className="text-[10px] font-black uppercase tracking-wide text-rose-700">Nog Niet Ingevuld</div>
+                  <div className="text-2xl font-black text-rose-900 mt-1">{missingEmployees.length} <span className="text-xs font-semibold">collega's</span></div>
+                  <div className="text-[11px] font-bold text-rose-700 truncate mt-0.5">Vereisen herinneringsnotificatie</div>
+                </div>
+
+                <div className="bg-emerald-50/70 p-4 rounded-2xl border-2 border-emerald-200 shadow-2xs">
+                  <div className="text-[10px] font-black uppercase tracking-wide text-emerald-700">Al Ingevuld</div>
+                  <div className="text-2xl font-black text-emerald-900 mt-1">{submittedEmployees.length} <span className="text-xs font-semibold">collega's</span></div>
+                  <div className="text-[11px] font-bold text-emerald-700 truncate mt-0.5">Klaar voor inplanning</div>
+                </div>
+              </div>
+
+              {/* Batch reminder action button */}
+              {missingEmployees.length > 0 && (
+                <div className="bg-white p-4 rounded-2xl border-2 border-orange-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h5 className="text-xs font-black uppercase text-slate-800 tracking-tight">
+                      Herinner alle {missingEmployees.length} openstaande collega's tegelijk
+                    </h5>
+                    <p className="text-xs text-slate-500">
+                      Plaatst direct een officiële oproep op het medewerkersprikbord én een gerichte notificatie naar elke medewerker.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSendAllMissingReminders}
+                    className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                  >
+                    <Bell size={14} className="stroke-[2.5]" />
+                    <span>Verstuur Herinnering naar Allen ({missingEmployees.length})</span>
+                  </button>
+                </div>
+              )}
+
+              {/* List of missing employees */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h5 className="text-xs font-black uppercase tracking-wide text-slate-700 flex items-center gap-1.5">
+                    <AlertTriangle size={13} className="text-amber-500" />
+                    <span>Medewerkers die nog moeten invullen voor Week {targetWeekNumber} ({missingEmployees.length})</span>
+                  </h5>
+                </div>
+
+                {missingEmployees.length === 0 ? (
+                  <div className="bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-6 text-center text-emerald-900">
+                    <p className="text-base font-black">🎉 Geweldig nieuws!</p>
+                    <p className="text-xs font-medium mt-1">
+                      Alle medewerkers hebben hun beschikbaarheid voor Week {targetWeekNumber} reeds ingevuld of hebben een vaste wekelijkse herhaling.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border-2 border-slate-200 overflow-hidden divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                    {missingEmployees.map(emp => {
+                      const waUrl = generateAvailabilityReminderWhatsAppUrl(emp, targetWeekNumber);
+                      return (
+                        <div key={emp.id} className="p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-slate-50 transition">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div 
+                              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-2xs"
+                              style={{ backgroundColor: emp.color }}
+                            >
+                              {emp.name.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-xs text-slate-900 truncate">{emp.name}</span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-700">
+                                  {emp.statuut}
+                                </span>
+                                <span className="text-[10px] font-bold text-slate-400 capitalize">
+                                  {emp.department}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-rose-600 font-semibold mt-0.5">
+                                Nog geen opgave ontvangen voor Week {targetWeekNumber}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                            <button
+                              type="button"
+                              onClick={() => handleSendSingleReminder(emp)}
+                              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                              title="Plaats notificatie op personeelsportaal"
+                            >
+                              <Bell size={12} className="text-amber-600" />
+                              <span>Portaal Notificatie</span>
+                            </button>
+
+                            <a
+                              href={waUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1 transition active:scale-95 shadow-2xs"
+                              title="Stuur directe WhatsApp herinnering"
+                            >
+                              <MessageSquare size={12} />
+                              <span>WhatsApp</span>
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          );
+        })()}
 
         {/* Footer */}
         <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">

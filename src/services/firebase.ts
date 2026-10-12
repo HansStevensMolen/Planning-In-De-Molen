@@ -946,7 +946,10 @@ export function getLocalAppSettings(): AppSettings {
   return {
     availabilitySubmissionEnabled: true,
     lockedWeeks: [CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER],
-    availabilityLockMessage: 'Het doorgeven van beschikbaarheden voor deze week is afgesloten door de beheerder.'
+    availabilityLockMessage: 'Het doorgeven van beschikbaarheden voor deze week is afgesloten door de beheerder.',
+    autoAvailabilityRemindersEnabled: true,
+    reminderDayOfWeek: 3, // Woensdag
+    reminderWeeksAhead: 2 // 2 weken vooraf
   };
 }
 

@@ -61,7 +61,7 @@ export default function SchedulePrintModal({
     'Dienst ruilen? Gelieve tijdig door te geven via het personeelsportaal of aan Hans (016/46.13.00).'
   );
   const [printSuccessNotice, setPrintSuccessNotice] = useState<string | null>(null);
-  const [activeLayoutTab, setActiveLayoutTab] = useState<'grid' | 'classic'>('grid');
+  const [activeLayoutTab, setActiveLayoutTab] = useState<'grid' | 'classic'>('classic');
   const [gridDayIndex, setGridDayIndex] = useState<number>(0);
 
   const printAreaRef = useRef<HTMLDivElement>(null);
@@ -472,7 +472,11 @@ export default function SchedulePrintModal({
   };
 
   const handlePrint = () => {
-    handlePrintInPage();
+    try {
+      window.print();
+    } catch {
+      handlePrintInPage();
+    }
   };
 
   const handleOpenInNewTab = () => {
@@ -847,7 +851,10 @@ export default function SchedulePrintModal({
               {(() => {
                 const currentGrid = buildInDeMolenDayGridData(selectedWeek, gridDayIndex, employees, weekShifts);
                 return (
-                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-300 overflow-x-auto">
+                  <div 
+                    id={activeLayoutTab === 'grid' ? 'canteen-print-area' : undefined}
+                    className="bg-white p-5 rounded-2xl shadow-sm border border-slate-300 overflow-x-auto print:border-none print:shadow-none print:p-0"
+                  >
                     <div className="mb-2.5 flex items-center justify-between text-xs text-slate-500 font-medium">
                       <span>📄 Pagina {gridDayIndex + 1} van 7 • <strong>{currentGrid.headerTitle}</strong></span>
                       <span>A4 Liggend (Landscape) • {currentGrid.employees.length} medewerkers • 30-minuten tijdsblokken</span>
@@ -898,7 +905,7 @@ export default function SchedulePrintModal({
           ) : (
             <div 
               ref={printAreaRef}
-              id="canteen-print-area"
+              id={activeLayoutTab === 'classic' ? 'canteen-print-area' : undefined}
             className={`bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-slate-300 max-w-5xl mx-auto print:max-w-none print:w-full print:border-none print:shadow-none print:p-0 text-slate-900 font-sans ${
               fontSize === 'large' ? 'text-[12.5px]' : 'text-[11px]'
             }`}
