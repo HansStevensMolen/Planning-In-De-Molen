@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Employee, Shift, Department } from '../types';
 import { AVAILABLE_WEEKS, getWeekMeta, CURRENT_WEEK_NUMBER, getDayDateInfo, getAutoActiveWeeks, getAutoArchivedWeeks, SPECIAL_DAYS_WEEK_NUMBER } from '../utils/weekUtils';
-import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, parseStartTimeToMinutes, deduplicateEmployees } from '../utils/employeeSortUtils';
 import { downloadInDeMolenPdf, buildInDeMolenDayGridData } from '../utils/inDeMolenPdfGenerator';
 
 interface SchedulePrintModalProps {
@@ -46,11 +46,12 @@ const DAYS_OF_WEEK = [
 export default function SchedulePrintModal({
   isOpen,
   onClose,
-  employees,
+  employees: rawEmployees,
   shifts,
   initialWeek = CURRENT_WEEK_NUMBER,
   initialDepartment = 'all'
 }: SchedulePrintModalProps) {
+  const employees = React.useMemo(() => deduplicateEmployees(rawEmployees), [rawEmployees]);
   const [selectedWeek, setSelectedWeek] = useState<number>(initialWeek);
   const [selectedDepartment, setSelectedDepartment] = useState<Department | 'all'>(initialDepartment);
   const [includeDrafts, setIncludeDrafts] = useState<boolean>(true);

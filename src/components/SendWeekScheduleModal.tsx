@@ -20,6 +20,7 @@ import {
 import { Shift, Employee, Notice } from '../types';
 import { CURRENT_WEEK_NUMBER, getWeekMeta } from '../utils/weekUtils';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
+import { deduplicateEmployees } from '../utils/employeeSortUtils';
 
 interface SendWeekScheduleModalProps {
   isOpen: boolean;
@@ -64,7 +65,7 @@ export default function SendWeekScheduleModal({
 
   // Scheduled employees for this week
   const scheduledEmpIds = Array.from(new Set(publishedShifts.map(s => s.employeeId)));
-  const scheduledEmployees = employees.filter(e => scheduledEmpIds.includes(e.id));
+  const scheduledEmployees = deduplicateEmployees(employees.filter(e => scheduledEmpIds.includes(e.id)));
 
   const handleBroadcastNotice = () => {
     if (onPostNotice) {

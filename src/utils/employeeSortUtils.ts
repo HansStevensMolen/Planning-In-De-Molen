@@ -72,20 +72,213 @@ export function sortEmployeesByPlanningStatus(
 }
 
 /**
- * Garandeert dat elke medewerker in de lijst een uniek ID heeft.
- * Bij dubbele ID's (zoals per ongeluk meervoudige emp1) blijft alleen het eerste/hoofd-item bewaard.
+ * Normaliseert een personeelsnaam voor 100% betrouwbare vergelijking:
+ * verwijdert overtollige spaties, zet om naar kleine letters en negeert diakrieten (accenten).
  */
-export function deduplicateEmployees<T extends { id: string }>(employees: T[]): T[] {
-  if (!Array.isArray(employees)) return [];
-  const seen = new Set<string>();
-  const result: T[] = [];
-  for (const emp of employees) {
-    if (emp && emp.id && !seen.has(emp.id)) {
-      seen.add(emp.id);
-      result.push(emp);
+export function normalizeEmployeeName(name?: string): string {
+  if (!name) return '';
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/**
+ * Voegt twee personeelsrecords van dezelfde persoon intelligent samen zodat er nooit
+ * gegevens verloren gaan (zoals telefoon, geboortedatum, email, avatar, etc.).
+ */
+function mergeEmployeeRecords<T extends { id: string; name?: string }>(canonical: T, duplicate: T): T {
+  const c = canonical as any;
+  const d = duplicate as any;
+
+  // Kies de beste weergave van de naam (bij voorkeur niet ALL CAPS als er een gemengde variant is)
+  let bestName = c.name || d.name || '';
+  if (c.name && d.name) {
+    const cIsAllUpper = c.name === c.name.toUpperCase() && c.name !== c.name.toLowerCase();
+    const dIsAllUpper = d.name === d.name.toUpperCase() && d.name !== d.name.toLowerCase();
+    if (cIsAllUpper && !dIsAllUpper) {
+      bestName = d.name;
     }
   }
-  return result;
+
+  const merged: any = {
+    ...d,
+    ...c,
+    id: c.id,
+    name: bestName,
+    department: c.department || d.department || 'zaal',
+    statuut: c.statuut || d.statuut || 'Student',
+    experience: c.experience || d.experience || 'Gemiddeld',
+    contractDaysPerWeek: c.contractDaysPerWeek ?? d.contractDaysPerWeek,
+    phone: (c.phone && String(c.phone).trim()) || (d.phone && String(d.phone).trim()) || '',
+    email: (c.email && String(c.email).trim()) || (d.email && String(d.email).trim()) || '',
+    birthDate: (c.birthDate && String(c.birthDate).trim()) || (d.birthDate && String(d.birthDate).trim()) || undefined,
+    facebookUrl: (c.facebookUrl && String(c.facebookUrl).trim()) || (d.facebookUrl && String(d.facebookUrl).trim()) || undefined,
+    avatarUrl: c.avatarUrl || d.avatarUrl || undefined,
+    color: c.color || d.color,
+    textBgColor: c.textBgColor || d.textBgColor,
+    textColor: c.textColor || d.textColor,
+    pin: (c.pin && c.pin !== '1234') ? c.pin : (d.pin || c.pin || '1234'),
+    role: (c.role === 'beheerder' || d.role === 'beheerder') ? 'beheerder' : (c.role || d.role || 'personeel'),
+    active: c.active !== false && d.active !== false,
+    firstLoginComplete: c.firstLoginComplete || d.firstLoginComplete || false
+  };
+
+  return merged as T;
+}
+
+/**
+ * Garandeert dat elke medewerker in de lijst uniek is, zowel op ID als op (genormaliseerde) volledige naam.
+ * Bij dubbele vermeldingen (zoals medewerkers die door een update twee keer geregistreerd raakten)
+ * worden de gegevens intelligent samengevoegd en blijft alleen de hoofd-/canonieke medewerker bewaard.
+ * Retourneert tevens een `idRemap` mapping (oude dubbele ID -> canonieke ID) zodat gekoppelde shifts en
+ * beschikbaarheden automatisch hersteld kunnen worden.
+ */
+export function deduplicateEmployeesWithRemap<T extends { id: string; name?: string }>(
+  employees: T[],
+  preferredIds?: Set<string>
+): { cleanEmployees: T[]; idRemap: Map<string, string> } {
+  if (!Array.isArray(employees)) return { cleanEmployees: [], idRemap: new Map() };
+
+  const idRemap = new Map<string, string>();
+  const idMap = new Map<string, T>();
+  const nameMap = new Map<string, string>(); // normalizedName -> canonicalId
+
+  for (const emp of employees) {
+    if (!emp || !emp.id) continue;
+
+    const normName = emp.name ? normalizeEmployeeName(emp.name) : '';
+    const isHans = emp.id === 'emp1' || normName === 'hans stevens';
+
+    // Vind of deze medewerker al bestaat op ID of op naam
+    let canonicalId: string | null = null;
+    if (isHans) {
+      canonicalId = 'emp1';
+    } else if (idMap.has(emp.id)) {
+      canonicalId = emp.id;
+    } else if (normName && nameMap.has(normName)) {
+      canonicalId = nameMap.get(normName)!;
+    }
+
+    if (canonicalId && idMap.has(canonicalId)) {
+      const currentCanonical = idMap.get(canonicalId)!;
+      const incomingIsPreferred = preferredIds && preferredIds.has(emp.id);
+      const currentIsPreferred = preferredIds && preferredIds.has(currentCanonical.id);
+
+      if (!isHans && incomingIsPreferred && !currentIsPreferred) {
+        idRemap.set(currentCanonical.id, emp.id);
+        const merged = mergeEmployeeRecords(emp, currentCanonical);
+        idMap.delete(currentCanonical.id);
+        idMap.set(emp.id, merged);
+        if (normName) nameMap.set(normName, emp.id);
+      } else {
+        if (emp.id !== canonicalId) {
+          idRemap.set(emp.id, canonicalId);
+        }
+        const merged = mergeEmployeeRecords(currentCanonical, emp);
+        idMap.set(canonicalId, merged);
+      }
+    } else {
+      const targetId = isHans ? 'emp1' : emp.id;
+      if (isHans && emp.id !== 'emp1') {
+        idRemap.set(emp.id, 'emp1');
+      }
+      const finalEmp = isHans && emp.id !== 'emp1' ? { ...emp, id: 'emp1' } : emp;
+      idMap.set(targetId, finalEmp);
+      if (normName) {
+        nameMap.set(normName, targetId);
+      }
+    }
+  }
+
+  return {
+    cleanEmployees: Array.from(idMap.values()),
+    idRemap
+  };
+}
+
+/**
+ * Garandeert dat elke medewerker in de lijst 100% uniek is.
+ * Verwijdert dubbele vermeldingen op basis van zowel ID als volledige naam.
+ */
+export function deduplicateEmployees<T extends { id: string; name?: string }>(employees: T[]): T[] {
+  return deduplicateEmployeesWithRemap(employees).cleanEmployees;
+}
+
+/**
+ * Werkt shiften bij waarvan het personeels-ID naar een nieuw samengevoegd/canoniek ID verwijst.
+ */
+export function remapShiftsEmployeeIds(shifts: Shift[], idRemap: Map<string, string>): Shift[] {
+  if (!Array.isArray(shifts) || idRemap.size === 0) return shifts;
+  return shifts.map(s => {
+    if (s.employeeId && idRemap.has(s.employeeId)) {
+      return { ...s, employeeId: idRemap.get(s.employeeId)! };
+    }
+    return s;
+  });
+}
+
+/**
+ * Werkt beschikbaarheden bij waarvan het personeels-ID naar een nieuw samengevoegd/canoniek ID verwijst,
+ * en combineert dagen intelligent als er al een beschikbaarheid voor dezelfde week bestond.
+ */
+export function remapAvailabilitiesEmployeeIds(
+  availabilities: EmployeeAvailability[],
+  idRemap: Map<string, string>
+): EmployeeAvailability[] {
+  if (!Array.isArray(availabilities)) return [];
+  if (idRemap.size === 0) return availabilities;
+
+  const keyMap = new Map<string, EmployeeAvailability>();
+  for (const a of availabilities) {
+    if (!a || !a.employeeId) continue;
+    const cleanEmpId = idRemap.get(a.employeeId) || a.employeeId;
+    const week = a.weekNumber || 1;
+    const key = `${cleanEmpId}_${week}`;
+
+    const updatedAvail: EmployeeAvailability = {
+      ...a,
+      employeeId: cleanEmpId
+    };
+
+    if (keyMap.has(key)) {
+      const existing = keyMap.get(key)!;
+      const existingDays = existing.days || [];
+      const incomingDays = updatedAvail.days || [];
+      const dayMap = new Map<number, any>();
+      existingDays.forEach(d => dayMap.set(d.day, d));
+      incomingDays.forEach(d => {
+        const prev = dayMap.get(d.day);
+        if (!prev || (d.status && d.status !== 'unavailable')) {
+          dayMap.set(d.day, d);
+        }
+      });
+      keyMap.set(key, {
+        ...existing,
+        days: Array.from(dayMap.values()),
+        lastUpdated: Math.max(existing.lastUpdated || 0, updatedAvail.lastUpdated || 0)
+      });
+    } else {
+      keyMap.set(key, updatedAvail);
+    }
+  }
+
+  return Array.from(keyMap.values());
+}
+
+/**
+ * Voegt een basislijst en een bijgewerkte lijst van medewerkers samen zonder dubbelen te creëren.
+ * Matcht zowel op ID als op genormaliseerde naam.
+ */
+export function mergeAndDeduplicateTeam(
+  baseEmployees: Employee[],
+  incomingEmployees: Employee[]
+): { cleanEmployees: Employee[]; idRemap: Map<string, string> } {
+  const preferredIds = new Set(baseEmployees.map(e => e.id));
+  const combined = [...baseEmployees, ...incomingEmployees];
+  return deduplicateEmployeesWithRemap(combined, preferredIds);
 }
 
 /**

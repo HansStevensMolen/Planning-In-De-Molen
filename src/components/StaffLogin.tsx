@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, Check, ShieldCheck, UserCheck, KeyRound, AlertCircle, Delete, ArrowRight, UserPlus, Plus } from 'lucide-react';
 import { Employee } from '../types';
 import InDeMolenLogo from './InDeMolenLogo';
-import { sortEmployeesByFirstName } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, deduplicateEmployees } from '../utils/employeeSortUtils';
 import { safeStorage } from '../utils/safeStorage';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -19,7 +19,7 @@ export default function StaffLogin({
   onSwitchToManager,
   onRegisterNewEmployee
 }: StaffLoginProps) {
-  const sortedEmployees = sortEmployeesByFirstName(employees.filter(e => e.active !== false));
+  const sortedEmployees = sortEmployeesByFirstName(deduplicateEmployees(employees.filter(e => e.active !== false)));
 
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>(() => {
     // If there's a previously remembered last user hint

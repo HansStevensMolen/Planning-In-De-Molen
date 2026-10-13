@@ -58,8 +58,15 @@ import {
   restoreFullTeamAndAvailabilitiesFromCloudArchive
 } from './services/firebase';
 import { AppSettings } from './types';
-import { sortEmployeesByFirstName, deduplicateEmployees } from './utils/employeeSortUtils';
 import { CURRENT_WEEK_NUMBER, getWeekMeta } from './utils/weekUtils';
+import { 
+  sortEmployeesByFirstName, 
+  deduplicateEmployees, 
+  deduplicateEmployeesWithRemap,
+  mergeAndDeduplicateTeam, 
+  remapShiftsEmployeeIds, 
+  remapAvailabilitiesEmployeeIds 
+} from './utils/employeeSortUtils';
 import ShareTeamModal from './components/ShareTeamModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -93,31 +100,15 @@ const SHARED_APP_URL = typeof window !== 'undefined'
   : 'https://ais-pre-m2somphks3peywsj3udb6b-287536891405.europe-west3.run.app';
 
 export default function App() {
-  // Load state from localStorage or fallback to defaults (with intelligent field merging)
+  // Load state from localStorage or fallback to defaults (with intelligent field merging and strict deduplication)
   const [employees, setEmployees] = useState<Employee[]>(() => {
     const saved = localStorage.getItem('cafe_employees');
     if (saved) {
       try {
         const parsed: Employee[] = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const parsedMap = new Map(parsed.map(e => [e.id, e]));
-          const merged = INITIAL_EMPLOYEES.map(initEmp => {
-            const p = parsedMap.get(initEmp.id);
-            if (!p) return initEmp;
-            return {
-              ...initEmp,
-              ...p,
-              birthDate: p.birthDate || initEmp.birthDate,
-              phone: p.phone || initEmp.phone,
-              facebookUrl: p.facebookUrl || initEmp.facebookUrl
-            };
-          });
-          parsed.forEach(p => {
-            if (!merged.some(m => m.id === p.id)) {
-              merged.push(p);
-            }
-          });
-          return sortEmployeesByFirstName(deduplicateEmployees(merged));
+          const { cleanEmployees } = mergeAndDeduplicateTeam(INITIAL_EMPLOYEES, parsed);
+          return sortEmployeesByFirstName(cleanEmployees);
         }
       } catch (e) {
         // ignore
@@ -295,10 +286,12 @@ export default function App() {
     setRestoreNoticeMessage('⏳ Bezig met herstellen van personeel en beschikbaarheden uit Google Cloud...');
     try {
       const res = await restoreFullTeamAndAvailabilitiesFromCloudArchive();
-      const sorted = sortEmployeesByFirstName(deduplicateEmployees(res.employees));
+      const { cleanEmployees, idRemap } = deduplicateEmployeesWithRemap(res.employees);
+      const sorted = sortEmployeesByFirstName(cleanEmployees);
+      const cleanAvails = remapAvailabilitiesEmployeeIds(res.availabilities, idRemap);
       setEmployees(sorted);
-      setAvailabilities(res.availabilities);
-      setRestoreNoticeMessage(`✅ Succesvol hersteld: alle ${res.employeeCount} personeelsleden en ${res.availabilityCount} beschikbaarheden staan weer live!`);
+      setAvailabilities(cleanAvails);
+      setRestoreNoticeMessage(`✅ Succesvol hersteld: alle ${sorted.length} personeelsleden en ${cleanAvails.length} beschikbaarheden staan weer live!`);
       addLog('Cloud Archief Hersteld', `${res.employeeCount} medewerkers en ${res.availabilityCount} ingevulde beschikbaarheden hersteld uit het archief`);
       setTimeout(() => setRestoreNoticeMessage(null), 8000);
     } catch (err) {
@@ -341,6 +334,33 @@ export default function App() {
       );
     }
   };
+
+  // 🛡️ Automatische Personeelsontdubbeling & Zelfherstel:
+  // Detecteert en verwijdert eventuele dubbele personeelsrecords (op ID of naam) en koppelt shiften/beschikbaarheden direct opnieuw aan.
+  useEffect(() => {
+    const { cleanEmployees, idRemap } = deduplicateEmployeesWithRemap(employees);
+    if (idRemap.size > 0 || cleanEmployees.length !== employees.length) {
+      console.log(`[Auto-Heal Team] ${employees.length - cleanEmployees.length} dubbele personeelslid/leden succesvol samengevoegd.`);
+      const sorted = sortEmployeesByFirstName(cleanEmployees);
+      setEmployees(sorted);
+      saveEmployeesToCloud(sorted);
+      localStorage.setItem('cafe_employees', JSON.stringify(sorted));
+
+      setShifts(prevShifts => {
+        const updated = remapShiftsEmployeeIds(prevShifts, idRemap);
+        saveShiftsToCloud(updated);
+        return updated;
+      });
+
+      setAvailabilities(prevAvails => {
+        const updated = remapAvailabilitiesEmployeeIds(prevAvails, idRemap);
+        saveAllAvailabilitiesToCloud(updated);
+        return updated;
+      });
+
+      addLog('Personeelslijst Opgeschoond', `${idRemap.size} dubbele medewerker(s) automatisch hersteld en samengevoegd`);
+    }
+  }, []);
 
   // ⏰ Automatische Herinneringsfunctie voor medewerkers die beschikbaarheid nog niet hebben ingevuld:
   // Wordt automatisch uitgevoerd op de dag dat de planning wordt opgesteld (woensdag, 2 weken vooraf).
@@ -446,26 +466,28 @@ export default function App() {
 
         let hasDataInCloud = false;
 
+        let currentShifts = cloudShifts || shifts;
+        let currentAvails = cloudAvailabilities || availabilities;
+
         if (cloudEmployees && cloudEmployees.length > 1) {
-          const cloudMap = new Map(cloudEmployees.map(e => [e.id, e]));
-          const merged = INITIAL_EMPLOYEES.map(initEmp => {
-            const ce = cloudMap.get(initEmp.id);
-            if (!ce) return initEmp;
-            return {
-              ...initEmp,
-              ...ce,
-              birthDate: ce.birthDate || initEmp.birthDate,
-              phone: ce.phone || initEmp.phone,
-              facebookUrl: ce.facebookUrl || initEmp.facebookUrl
-            };
-          });
-          cloudEmployees.forEach(ce => {
-            if (!merged.some(m => m.id === ce.id)) {
-              merged.push(ce);
+          const { cleanEmployees, idRemap } = mergeAndDeduplicateTeam(INITIAL_EMPLOYEES, cloudEmployees);
+
+          if (idRemap.size > 0) {
+            console.log(`[Firestore Boot] Succesvol ${idRemap.size} dubbele personeelsrecords opgeschoond en samengevoegd.`);
+            if (currentShifts && currentShifts.length > 0) {
+              currentShifts = remapShiftsEmployeeIds(currentShifts, idRemap);
+              saveShiftsToCloud(currentShifts);
             }
-          });
-          const sorted = sortEmployeesByFirstName(deduplicateEmployees(merged));
+            if (currentAvails && currentAvails.length > 0) {
+              currentAvails = remapAvailabilitiesEmployeeIds(currentAvails, idRemap);
+              saveAllAvailabilitiesToCloud(currentAvails);
+            }
+          }
+
+          const sorted = sortEmployeesByFirstName(cleanEmployees);
           setEmployees(sorted);
+          saveEmployeesToCloud(sorted);
+          localStorage.setItem('cafe_employees', JSON.stringify(sorted));
           hasDataInCloud = true;
         } else if (INITIAL_EMPLOYEES.length > 1) {
           // If cloud has <= 1 employee, restore our complete team with full data immediately
@@ -475,13 +497,13 @@ export default function App() {
           hasDataInCloud = true;
         }
 
-        if (cloudShifts && cloudShifts.length > 0) {
-          setShifts(cloudShifts);
+        if (currentShifts && currentShifts.length > 0) {
+          setShifts(currentShifts);
           hasDataInCloud = true;
         }
 
-        if (cloudAvailabilities && cloudAvailabilities.length > 0) {
-          setAvailabilities(cloudAvailabilities);
+        if (currentAvails && currentAvails.length > 0) {
+          setAvailabilities(currentAvails);
           hasDataInCloud = true;
         } else if (INITIAL_AVAILABILITIES.length > 0) {
           setAvailabilities(INITIAL_AVAILABILITIES);

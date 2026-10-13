@@ -97,7 +97,7 @@ import {
   SPECIAL_DAYS_LIST,
   isSpecialDaysWeek
 } from '../utils/weekUtils';
-import { sortEmployeesByFirstName, parseStartTimeToMinutes } from '../utils/employeeSortUtils';
+import { sortEmployeesByFirstName, parseStartTimeToMinutes, deduplicateEmployees } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
 import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
 import { buildMessengerUrl } from '../utils/whatsappNotificationUtils';
@@ -593,7 +593,7 @@ export default function StaffPortal({
     return Math.round(personalShifts.reduce((acc, sh) => acc + calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes), 0) * 10) / 10;
   }, [personalShifts]);
   const unconfirmedShifts = personalShifts.filter(s => !s.acknowledged);
-  const otherEmployees = sortEmployeesByFirstName(employees.filter(e => e.id !== activeEmployeeId));
+  const otherEmployees = sortEmployeesByFirstName(deduplicateEmployees(employees.filter(e => e.id !== activeEmployeeId)));
 
   // Live timer to update countdown for shifts within 24 hours
   const [currentTime, setCurrentTime] = useState<Date>(() => new Date());
@@ -4066,7 +4066,7 @@ export default function StaffPortal({
 
           {/* Colleague Cards Grid - ONLY shows Name & Department (No Level/Niveau/Statuut!) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-left">
-            {sortEmployeesByFirstName(employees
+            {sortEmployeesByFirstName(deduplicateEmployees(employees)
               .filter(emp => {
                 const matchesSearch = emp.name.toLowerCase().includes(colleagueSearchQuery.toLowerCase());
                 const matchesDept = colleagueDeptFilter === 'all' || emp.department === colleagueDeptFilter;

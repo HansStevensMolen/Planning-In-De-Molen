@@ -97,7 +97,13 @@ import {
   isSpecialDaysWeek
 } from '../utils/weekUtils';
 import { generateShiftsForWeek, generateSixUpcomingWeeksShifts, generateSmartAutoPlan } from '../utils/roosterGenerator';
-import { sortEmployeesByFirstName, sortEmployeesByDayAvailability, sortEmployeesByPlanningStatus, normalizeFacebookUrl } from '../utils/employeeSortUtils';
+import { 
+  sortEmployeesByFirstName, 
+  sortEmployeesByDayAvailability, 
+  sortEmployeesByPlanningStatus, 
+  normalizeFacebookUrl,
+  deduplicateEmployees 
+} from '../utils/employeeSortUtils';
 import {
   calculateAge,
   formatBirthDate,
@@ -1610,11 +1616,11 @@ export default function ManagerDashboard({
         const scheduledEmpIdsInWeek = new Set(
           weekShifts.filter(s => s.employeeId && s.employeeId !== 'open_shift').map(s => s.employeeId)
         );
-        const allTeamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+        const allTeamStaff = deduplicateEmployees(employees).filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
         const scheduledTeamStaff = allTeamStaff.filter(e => scheduledEmpIdsInWeek.has(e.id));
         const unscheduledTeamStaff = allTeamStaff.filter(e => !scheduledEmpIdsInWeek.has(e.id));
 
-        const baseFiltered = employees.filter(emp => {
+        const baseFiltered = deduplicateEmployees(employees).filter(emp => {
           if (emp.id === 'open_shift') return false;
           const matchSearch = planningSearch.trim() === '' || emp.name.toLowerCase().includes(planningSearch.toLowerCase());
           const matchStatuut = selectedStatuutFilter === 'all' || emp.statuut === selectedStatuutFilter;
@@ -2192,7 +2198,7 @@ export default function ManagerDashboard({
           {(() => {
             const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
             const scheduledStaffIds = new Set(currentWeekShifts.filter(s => s.employeeId && s.employeeId !== 'open_shift').map(s => s.employeeId));
-            const teamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+            const teamStaff = deduplicateEmployees(employees).filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
             const scheduledStaff = teamStaff.filter(e => scheduledStaffIds.has(e.id));
             const unscheduledStaff = teamStaff.filter(e => !scheduledStaffIds.has(e.id));
 
@@ -3373,11 +3379,11 @@ export default function ManagerDashboard({
       {activeSubTab === 'beschikbaarheid' && (() => {
         const weekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
         const scheduledEmpIdsInWeek = new Set(weekShifts.map(s => s.employeeId));
-        const allTeamStaff = employees.filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
+        const allTeamStaff = deduplicateEmployees(employees).filter(e => e.id !== 'emp1' && e.id !== 'open_shift');
         const scheduledTeamCount = allTeamStaff.filter(e => scheduledEmpIdsInWeek.has(e.id)).length;
         const unscheduledTeamCount = allTeamStaff.filter(e => !scheduledEmpIdsInWeek.has(e.id)).length;
 
-        const baseFiltered = employees.filter(emp => {
+        const baseFiltered = deduplicateEmployees(employees).filter(emp => {
           const matchSearch = emp.name.toLowerCase().includes(managerAvailSearch.toLowerCase());
           const matchStatuut = managerAvailStatuutFilter === 'all' || emp.statuut === managerAvailStatuutFilter;
           const matchExperience = managerAvailExperienceFilter === 'all' || emp.experience === managerAvailExperienceFilter;
@@ -5142,7 +5148,7 @@ export default function ManagerDashboard({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {employees.filter(e => e.role === 'beheerder').map(admin => (
+                {deduplicateEmployees(employees).filter(e => e.role === 'beheerder').map(admin => (
                   <span 
                     key={admin.id}
                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black bg-white border border-amber-300 text-amber-950 shadow-2xs"
@@ -5157,7 +5163,7 @@ export default function ManagerDashboard({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {sortEmployeesByFirstName(employees).map((emp) => {
+            {sortEmployeesByFirstName(deduplicateEmployees(employees)).map((emp) => {
               const empShifts = shifts.filter(s => s.employeeId === emp.id);
               const publishedShifts = empShifts.filter(s => s.status === 'published');
               const publishedCount = publishedShifts.length;
@@ -5771,7 +5777,7 @@ export default function ManagerDashboard({
                       }}
                       className="w-full bg-white border-2 border-orange-300 text-slate-800 font-black rounded-xl px-3 py-2 text-xs uppercase tracking-tight focus:outline-none focus:ring-2 focus:ring-orange-400 cursor-pointer shadow-xs"
                     >
-                      {sortEmployeesByFirstName(employees.filter(e => e.id !== 'emp1')).map(emp => (
+                      {sortEmployeesByFirstName(deduplicateEmployees(employees.filter(e => e.id !== 'emp1'))).map(emp => (
                         <option key={emp.id} value={emp.id}>
                           {emp.name} ({emp.statuut} • {emp.department === 'keuken' ? 'Keuken' : 'Zaal'})
                         </option>

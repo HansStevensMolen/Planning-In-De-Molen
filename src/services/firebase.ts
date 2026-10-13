@@ -42,6 +42,11 @@ import {
 } from '../types';
 import { CURRENT_WEEK_NUMBER, NEXT_WEEK_NUMBER } from '../utils/weekUtils';
 import { safeStorage } from '../utils/safeStorage';
+import { 
+  deduplicateEmployees, 
+  deduplicateEmployeesWithRemap, 
+  remapAvailabilitiesEmployeeIds 
+} from '../utils/employeeSortUtils';
 
 // 1. Initialize Firebase App
 let app: FirebaseApp;
@@ -419,19 +424,20 @@ export function subscribeToCloudShifts(callback: (shifts: Shift[]) => void): () 
 
 export async function saveEmployeesToCloud(employees: Employee[]): Promise<void> {
   try {
+    const cleanEmployees = deduplicateEmployees(employees);
     const docRef = doc(db, 'team', 'employees_list');
     const sanitizedPayload = sanitizeForFirestore({
-      employees,
+      employees: cleanEmployees,
       updatedAt: Date.now(),
       updatedAtFormatted: formatDutchDateTime()
     });
     await setDoc(docRef, sanitizedPayload);
-    console.log(`[Firebase] Saved ${employees.length} employees to team/employees_list.`);
+    console.log(`[Firebase] Saved ${cleanEmployees.length} employees to team/employees_list.`);
 
     // Also sync individual documents in background batches of 25
     try {
-      for (let i = 0; i < employees.length; i += 25) {
-        const chunk = employees.slice(i, i + 25);
+      for (let i = 0; i < cleanEmployees.length; i += 25) {
+        const chunk = cleanEmployees.slice(i, i + 25);
         const batch = writeBatch(db);
         chunk.forEach(e => {
           const empDocRef = doc(db, 'employees', e.id);
@@ -827,10 +833,13 @@ export async function restoreFullTeamAndAvailabilitiesFromCloudArchive(): Promis
     }
   });
 
-  const restoredAvailabilities = Array.from(availMap.values());
+  // Deduplicate and resolve any duplicate IDs
+  const { cleanEmployees: finalEmployees, idRemap } = deduplicateEmployeesWithRemap(restoredEmployees);
+  const rawAvailabilities = Array.from(availMap.values());
+  const restoredAvailabilities = remapAvailabilitiesEmployeeIds(rawAvailabilities, idRemap);
 
   // Save to Firestore collections
-  await saveEmployeesToCloud(restoredEmployees);
+  await saveEmployeesToCloud(finalEmployees);
   await saveAllAvailabilitiesToCloud(restoredAvailabilities);
 
   // Sync to individual docs in batch
