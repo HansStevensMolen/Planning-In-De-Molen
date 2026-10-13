@@ -72,6 +72,7 @@ import ExcelEmployeeSyncModal from './ExcelEmployeeSyncModal';
 import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
+import PreliminarySchedulePreviewModal from './PreliminarySchedulePreviewModal';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
@@ -351,6 +352,7 @@ export default function ManagerDashboard({
   const [showNoTeamModal, setShowNoTeamModal] = useState(false);
   const [showGeminiModal, setShowGeminiModal] = useState(false);
   const [showSchedulePrintModal, setShowSchedulePrintModal] = useState(false);
+  const [showPreliminaryPreviewModal, setShowPreliminaryPreviewModal] = useState(false);
 
   // Active weeks dynamically generated: strictly >= CURRENT_WEEK_NUMBER
   const activeWeeks = getAutoActiveWeeks(CURRENT_WEEK_NUMBER, extraWeekNumbers, shifts);
@@ -1199,6 +1201,22 @@ export default function ManagerDashboard({
             <span>Nieuwe Dienst</span>
           </button>
 
+          {/* 1a. Voorlopige Planning Preview (Concept bekijken vóór publicatie) */}
+          <button
+            type="button"
+            onClick={() => setShowPreliminaryPreviewModal(true)}
+            className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+            title={`Bekijk hoe de voorlopige planning van Week ${selectedManagerWeek} (inclusief concept-diensten) eruitziet vóórdat deze gepubliceerd wordt`}
+          >
+            <Eye size={15} />
+            <span>Voorlopige Planning</span>
+            {loggedDraftShiftsCount > 0 && (
+              <span className="bg-amber-300 text-amber-950 text-[10px] px-1.5 py-0.2 rounded-full font-black ml-0.5">
+                {loggedDraftShiftsCount}
+              </span>
+            )}
+          </button>
+
           {/* 1b. Print Planning (Geoptimaliseerde Print-Versie) */}
           <button
             type="button"
@@ -1258,6 +1276,15 @@ export default function ManagerDashboard({
                 className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in slide-in-from-top-2 text-xs"
                 onClick={() => setShowMoreActionsMenu(false)}
               >
+                <button
+                  type="button"
+                  onClick={() => setShowPreliminaryPreviewModal(true)}
+                  className="w-full text-left px-3 py-2 rounded-xl text-purple-700 hover:bg-purple-50 flex items-center gap-2 font-bold cursor-pointer"
+                >
+                  <Eye size={15} className="text-purple-600" />
+                  <span>Voorlopige Planning Bekijken</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setShowSchedulePrintModal(true)}
@@ -1439,6 +1466,291 @@ export default function ManagerDashboard({
         </div>
       </div>
 
+      {/* Active Global Toast Notifications */}
+      {sixWeeksSuccessMsg && (
+        <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-2xl p-3.5 flex items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-2 font-sans">
+          <div className="flex items-center space-x-3">
+            <div className="p-1.5 bg-emerald-500 text-white rounded-xl shrink-0 shadow-xs">
+              <CheckCheck size={16} />
+            </div>
+            <p className="text-xs font-bold leading-relaxed">{sixWeeksSuccessMsg}</p>
+          </div>
+          <button 
+            type="button" 
+            onClick={() => setSixWeeksSuccessMsg(null)}
+            className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {pdfDownloadToast && (
+        <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-2xl p-3 flex items-center justify-between gap-4 shadow-2xs animate-in fade-in slide-in-from-top-2 font-sans">
+          <div className="flex items-center space-x-3">
+            <div className="p-1.5 bg-emerald-600 text-white rounded-xl shrink-0">
+              <Download size={16} />
+            </div>
+            <div>
+              <h4 className="text-xs font-black uppercase text-emerald-900 tracking-tight">PDF Weekplanning Gedownload</h4>
+              <p className="text-xs font-bold text-emerald-800">{pdfDownloadToast}</p>
+            </div>
+          </div>
+          <button 
+            type="button" 
+            onClick={() => setPdfDownloadToast(null)}
+            className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ⚡ QUICK ACTIONS (SNELLE ACTIES) SECTIE */}
+      <section aria-label="Quick Actions" className="bg-white rounded-3xl border border-slate-200 p-4 shadow-sm space-y-3 font-sans">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs shrink-0">
+              <Zap size={16} className="fill-current" />
+            </div>
+            <div>
+              <h2 className="text-xs font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                <span>Quick Actions</span>
+                <span className="text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                  Snelle Taken
+                </span>
+              </h2>
+              <p className="text-[11px] text-slate-500 font-medium">
+                Voer veelvoorkomende beheerstaken direct met één klik uit.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+            <span className="inline-flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-xl text-[11px] font-black text-slate-700 uppercase">
+              <CalendarIcon size={12} className="text-orange-600" />
+              <span>Geselecteerd: Week {selectedManagerWeek}</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Action Buttons Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2.5">
+          {/* 1. Publiceer alle diensten */}
+          <button
+            type="button"
+            onClick={() => {
+              const currentDrafts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'draft');
+              const totalDrafts = shifts.filter(s => s.status === 'draft');
+              if (currentDrafts.length > 0) {
+                onPublishAllDrafts(selectedManagerWeek);
+                setSixWeeksSuccessMsg(`✅ Alle ${currentDrafts.length} concept-diensten van Week ${selectedManagerWeek} zijn nu officieel gepubliceerd en direct zichtbaar voor het personeel!`);
+              } else if (totalDrafts.length > 0) {
+                onPublishAllDrafts();
+                setSixWeeksSuccessMsg(`✅ Alle ${totalDrafts.length} concept-diensten over alle weken zijn succesvol gepubliceerd!`);
+              } else {
+                setSixWeeksSuccessMsg(`🟢 Alle diensten voor Week ${selectedManagerWeek} zijn reeds gepubliceerd en actief.`);
+              }
+              setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+            }}
+            className="group p-3 bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-emerald-400/30"
+            title="Publiceer alle openstaande diensten zodat ze direct zichtbaar zijn voor het personeel"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <CheckCheck size={17} className="stroke-[2.5]" />
+              </div>
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                loggedDraftShiftsCount > 0 
+                  ? 'bg-amber-300 text-amber-950 animate-pulse' 
+                  : 'bg-white/25 text-white'
+              }`}>
+                {loggedDraftShiftsCount > 0 ? `${loggedDraftShiftsCount} concept` : 'Live 🟢'}
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Publiceer alle diensten
+              </div>
+              <div className="text-[10.5px] text-emerald-100 font-medium leading-tight mt-0.5">
+                Week {selectedManagerWeek} activeren
+              </div>
+            </div>
+          </button>
+
+          {/* 2. Voorlopige Planning Bekijken */}
+          <button
+            type="button"
+            onClick={() => setShowPreliminaryPreviewModal(true)}
+            className="group p-3 bg-gradient-to-br from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-purple-400/30"
+            title="Bekijk hoe de voorlopige planning (inclusief concept-diensten en personeelsportaal-weergave) eruitziet vóórdat deze gepubliceerd wordt"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <Eye size={17} className="stroke-[2.5]" />
+              </div>
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                loggedDraftShiftsCount > 0 
+                  ? 'bg-amber-300 text-amber-950 font-black' 
+                  : 'bg-white/25 text-white'
+              }`}>
+                {loggedDraftShiftsCount > 0 ? `${loggedDraftShiftsCount} concept` : 'Voorbeeld'}
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Voorlopige Planning
+              </div>
+              <div className="text-[10.5px] text-purple-200 font-medium leading-tight mt-0.5">
+                Concept bekijken vóór publicatie
+              </div>
+            </div>
+          </button>
+
+          {/* 2. Archief aanmaken */}
+          <button
+            type="button"
+            onClick={() => setShowBackupModal(true)}
+            className="group p-3 bg-gradient-to-br from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-indigo-400/30"
+            title="Maak direct een back-up snapshot of bekijk het cloud archief"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <Archive size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Cloud
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Archief aanmaken
+              </div>
+              <div className="text-[10.5px] text-indigo-100 font-medium leading-tight mt-0.5">
+                Back-up snapshot opslaan
+              </div>
+            </div>
+          </button>
+
+          {/* 3. Nieuwe mededeling */}
+          <button
+            type="button"
+            onClick={() => setShowQuickNoticeModal(true)}
+            className="group p-3 bg-gradient-to-br from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-amber-400/30"
+            title="Plaats direct een nieuwe mededeling of update op het prikbord"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <Megaphone size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Prikbord
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Nieuwe mededeling
+              </div>
+              <div className="text-[10.5px] text-amber-100 font-medium leading-tight mt-0.5">
+                Bericht naar personeel
+              </div>
+            </div>
+          </button>
+
+          {/* 4. Print Planning */}
+          <button
+            type="button"
+            onClick={() => setShowSchedulePrintModal(true)}
+            className="group p-3 bg-slate-800 hover:bg-slate-900 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-slate-700"
+            title="Open de geoptimaliseerde print-versie en PDF export"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center text-white">
+                <Printer size={17} />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/20 text-slate-200">
+                A4 PDF
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Print Planning
+              </div>
+              <div className="text-[10.5px] text-slate-300 font-medium leading-tight mt-0.5">
+                Prikbord & dagrooster
+              </div>
+            </div>
+          </button>
+
+          {/* 5. Verstuur Week */}
+          <button
+            type="button"
+            onClick={() => {
+              setSendTargetWeek(selectedManagerWeek);
+              setShowSendWeekScheduleModal(true);
+            }}
+            className="group p-3 bg-gradient-to-br from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-blue-400/30"
+            title="Verstuur weekrooster notificatie of deel via WhatsApp"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <Send size={16} />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                WhatsApp
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Verstuur Week
+              </div>
+              <div className="text-[10.5px] text-blue-100 font-medium leading-tight mt-0.5">
+                Notificaties & delen
+              </div>
+            </div>
+          </button>
+
+          {/* 6. Nieuw Teamlid */}
+          <button
+            type="button"
+            onClick={() => {
+              setNewEmp({
+                name: '',
+                department: 'zaal',
+                statuut: 'Student',
+                experience: 'Beginner',
+                role: 'medewerker',
+                email: '',
+                phone: '',
+                facebookUrl: '',
+                birthDate: '',
+                pin: '1234'
+              });
+              setShowEmployeeModal(true);
+            }}
+            className="group p-3 bg-white hover:bg-orange-50/50 active:scale-98 text-slate-800 rounded-2xl shadow-2xs hover:shadow-sm transition text-left flex flex-col justify-between cursor-pointer border border-slate-200 hover:border-orange-300"
+            title="Voeg snel een nieuw personeelslid toe aan het team"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
+                <UserPlus size={17} />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                Team
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform text-slate-900">
+                Nieuw Teamlid
+              </div>
+              <div className="text-[10.5px] text-slate-500 font-medium leading-tight mt-0.5">
+                Personeel toevoegen
+              </div>
+            </div>
+          </button>
+        </div>
+      </section>
+
       {/* 📢 PUBLICATIESTATUS & COMMUNICATIEBALK VOOR DE GESELECTEERDE WEEK */}
       {totalShiftsCount > 0 && (
         loggedDraftShiftsCount > 0 || publishedShiftsCount === 0 ? (
@@ -1461,7 +1773,16 @@ export default function ManagerDashboard({
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end flex-wrap">
+              <button 
+                type="button"
+                onClick={() => setShowPreliminaryPreviewModal(true)}
+                className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                title="Bekijk hoe de voorlopige planning (inclusief alle concept-diensten) eruitziet voor personeel vóórdat je deze publiceert"
+              >
+                <Eye size={16} />
+                <span>Voorlopige Planning Bekijken</span>
+              </button>
               <button 
                 type="button"
                 onClick={() => {
@@ -1702,45 +2023,6 @@ export default function ManagerDashboard({
                   ✕
                 </button>
               </div>
-            </div>
-          )}
-
-          {sixWeeksSuccessMsg && (
-            <div className="bg-emerald-50 border-2 border-emerald-400 text-emerald-900 rounded-2xl p-3 flex items-center justify-between gap-4 shadow-2xs">
-              <div className="flex items-center space-x-3">
-                <div className="p-1.5 bg-emerald-500 text-white rounded-xl shrink-0">
-                  <CheckCheck size={16} />
-                </div>
-                <p className="text-xs font-bold leading-relaxed">{sixWeeksSuccessMsg}</p>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setSixWeeksSuccessMsg(null)}
-                className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-
-          {pdfDownloadToast && (
-            <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-950 rounded-2xl p-3 flex items-center justify-between gap-4 shadow-2xs animate-in fade-in slide-in-from-top-2">
-              <div className="flex items-center space-x-3">
-                <div className="p-1.5 bg-emerald-600 text-white rounded-xl shrink-0">
-                  <Download size={16} />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black uppercase text-emerald-900 tracking-tight">PDF Weekplanning Gedownload</h4>
-                  <p className="text-xs font-bold text-emerald-800">{pdfDownloadToast}</p>
-                </div>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setPdfDownloadToast(null)}
-                className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-800 text-xs font-bold cursor-pointer"
-              >
-                ✕
-              </button>
             </div>
           )}
 
@@ -2364,6 +2646,16 @@ export default function ManagerDashboard({
                     >
                       <Users size={13} className="text-slate-500" />
                       <span>{showPlanningScheduledDrawer ? 'Verberg' : 'Lijst'} ({scheduledStaff.length}/{teamStaff.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowPreliminaryPreviewModal(true)}
+                      className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      title={`Bekijk hoe de voorlopige planning van Week ${selectedManagerWeek} (inclusief concept-diensten) eruitziet vóórdat deze gepubliceerd wordt`}
+                    >
+                      <Eye size={13} className="text-purple-600" />
+                      <span>Voorlopige Planning</span>
                     </button>
 
                     <button
@@ -7776,6 +8068,21 @@ export default function ManagerDashboard({
         shifts={shifts}
         initialWeek={selectedManagerWeek}
         initialDepartment={activeSubTab === 'keuken' ? 'keuken' : activeSubTab === 'zaal' ? 'zaal' : 'all'}
+      />
+
+      {/* Voorlopige Planning Preview Modal (Concept bekijken vóór publicatie) */}
+      <PreliminarySchedulePreviewModal
+        isOpen={showPreliminaryPreviewModal}
+        onClose={() => setShowPreliminaryPreviewModal(false)}
+        weekNumber={selectedManagerWeek}
+        shifts={shifts}
+        employees={employees}
+        onPublishWeek={(week) => {
+          onPublishAllDrafts(week);
+          setSixWeeksSuccessMsg(`✅ Planning Week ${week} is definitief gepubliceerd! Alle medewerkers kunnen hun rooster nu direct inzien.`);
+          setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+        }}
+        onOpenPrintModal={() => setShowSchedulePrintModal(true)}
       />
 
       {/* Confirmation Modal: Clear Week Roster (Wis Knop) */}
