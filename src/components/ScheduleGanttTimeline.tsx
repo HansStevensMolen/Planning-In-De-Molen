@@ -52,6 +52,7 @@ export interface ScheduleGanttTimelineProps {
   onOpenShiftModal?: (shiftOrNew?: Partial<Shift>) => void;
   onDeleteShift?: (shiftId: string) => void;
   availabilities?: EmployeeAvailability[];
+  onSwitchToAvailabilityView?: () => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -89,7 +90,8 @@ export default function ScheduleGanttTimeline({
   onSelectWeek,
   onOpenShiftModal,
   onDeleteShift,
-  availabilities = []
+  availabilities = [],
+  onSwitchToAvailabilityView
 }: ScheduleGanttTimelineProps) {
   const employees = useMemo(() => deduplicateEmployees(rawEmployees), [rawEmployees]);
   const [selectedDay, setSelectedDay] = useState<number | 'week'>(() => {
@@ -300,6 +302,18 @@ export default function ScheduleGanttTimeline({
                 <ChevronRight size={16} />
               </button>
             </div>
+          )}
+
+          {onSwitchToAvailabilityView && (
+            <button
+              type="button"
+              onClick={onSwitchToAvailabilityView}
+              className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-950 font-black text-xs uppercase tracking-tight rounded-xl border border-amber-300 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Bekijk alle ingevoerde beschikbaarheden en plan direct diensten in"
+            >
+              <Sparkles size={14} className="text-amber-600 fill-amber-500" />
+              <span>Beschikbaarheden & Inplannen</span>
+            </button>
           )}
 
           {onOpenShiftModal && (

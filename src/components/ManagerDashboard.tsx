@@ -74,6 +74,7 @@ import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import PreliminarySchedulePreviewModal from './PreliminarySchedulePreviewModal';
 import ScheduleGanttTimeline from './ScheduleGanttTimeline';
+import AvailabilityGanttTimeline from './AvailabilityGanttTimeline';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
@@ -270,6 +271,8 @@ export default function ManagerDashboard({
   // In-app confirmation dialog states (no window.confirm or alert)
   const [showClearWeekModal, setShowClearWeekModal] = useState(false);
   const [clearModalMode, setClearModalMode] = useState<'drafts_only' | 'all'>('drafts_only');
+  // Sub-mode for Gantt Timeline tab: 'beschikbaarheid' (plan from availability) vs 'rooster' (view scheduled shifts)
+  const [ganttViewMode, setGanttViewMode] = useState<'rooster' | 'beschikbaarheid'>('beschikbaarheid');
   const [showCopyWeekModal, setShowCopyWeekModal] = useState(false);
   const [showPublishSixWeeksConfirmModal, setShowPublishSixWeeksConfirmModal] = useState(false);
   const [showUnpublishWeekConfirmModal, setShowUnpublishWeekConfirmModal] = useState(false);
@@ -588,20 +591,24 @@ export default function ManagerDashboard({
     setTimeout(() => setSixWeeksSuccessMsg(null), 8000);
   };
 
-  // Handle open shift modal for adding
-  const handleOpenAddShift = (employeeId: string, day: number) => {
+  // Handle open shift modal for adding (supports pre-filled times from availability)
+  const handleOpenAddShift = (
+    employeeId: string, 
+    day: number,
+    customTimes?: { startTime?: string; endTime?: string; department?: Department; notes?: string }
+  ) => {
     setIsConfirmingDeleteShift(false);
     const emp = employees.find(e => e.id === employeeId);
-    const defaultDept = emp?.department || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
+    const defaultDept = customTimes?.department || emp?.department || (activeSubTab === 'keuken' ? 'keuken' : 'zaal');
     setSelectedShift({
       isNew: true,
       employeeId,
       department: defaultDept,
       weekNumber: selectedManagerWeek,
       day,
-      startTime: '16:00',
-      endTime: '23:00',
-      notes: '',
+      startTime: customTimes?.startTime || '16:00',
+      endTime: customTimes?.endTime || '23:00',
+      notes: customTimes?.notes || '',
       status: 'draft',
       acknowledged: false
     });
@@ -3797,27 +3804,127 @@ export default function ManagerDashboard({
 
       {/* 1c. VISUELE TIJDLIJN & BEZETTING PER UUR (GANTT) TAB */}
       {activeSubTab === 'tijdlijn' && (
-        <ScheduleGanttTimeline
-          shifts={shifts}
-          employees={employees}
-          selectedWeek={selectedManagerWeek}
-          onSelectWeek={(wk) => setSelectedManagerWeek(wk)}
-          onOpenShiftModal={(shiftOrNew) => {
-            if (shiftOrNew && 'id' in shiftOrNew && shiftOrNew.id) {
-              handleOpenEditShift(shiftOrNew as Shift);
-            } else if (shiftOrNew?.employeeId && shiftOrNew?.day !== undefined) {
-              handleOpenAddShift(shiftOrNew.employeeId, shiftOrNew.day);
-            } else {
-              handleOpenCreateShiftQuickAction();
-            }
-          }}
-          onDeleteShift={(shiftId) => {
-            onDeleteShift(shiftId);
-            setSixWeeksSuccessMsg('Dienst succesvol verwijderd uit het rooster');
-            setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
-          }}
-          availabilities={availabilities}
-        />
+        <div className="space-y-4">
+          {/* Dual Mode Switcher: Beschikbaarheden (Roosterplanner) vs Rooster (Diensten) */}
+          <div className="bg-slate-100 p-1 rounded-2xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-1 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setGanttViewMode('beschikbaarheid')}
+                className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+                  ganttViewMode === 'beschikbaarheid'
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                <Sparkles size={15} className={ganttViewMode === 'beschikbaarheid' ? 'text-white' : 'text-amber-500'} />
+                <span>Beschikbaarheden & Inplannen</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[9.5px] font-black uppercase ${
+                  ganttViewMode === 'beschikbaarheid' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+                }`}>
+                  Planner
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGanttViewMode('rooster')}
+                className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+                  ganttViewMode === 'rooster'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                <BarChart3 size={15} className={ganttViewMode === 'rooster' ? 'text-white' : 'text-indigo-600'} />
+                <span>Rooster Tijdlijn (Diensten)</span>
+              </button>
+            </div>
+
+            <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-bold px-3">
+              <CalendarIcon size={13} className="text-orange-600" />
+              <span>Geselecteerd: Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})</span>
+            </div>
+          </div>
+
+          {ganttViewMode === 'beschikbaarheid' ? (
+            <AvailabilityGanttTimeline
+              shifts={shifts}
+              employees={employees}
+              selectedWeek={selectedManagerWeek}
+              availabilities={availabilities}
+              onSelectWeek={(wk) => setSelectedManagerWeek(wk)}
+              onOpenShiftModal={(shiftOrNew) => {
+                if (shiftOrNew && 'id' in shiftOrNew && shiftOrNew.id) {
+                  handleOpenEditShift(shiftOrNew as Shift);
+                } else if (shiftOrNew?.employeeId && shiftOrNew?.day !== undefined) {
+                  handleOpenAddShift(shiftOrNew.employeeId, shiftOrNew.day, {
+                    startTime: shiftOrNew.startTime,
+                    endTime: shiftOrNew.endTime,
+                    department: shiftOrNew.department,
+                    notes: shiftOrNew.notes
+                  });
+                } else {
+                  handleOpenCreateShiftQuickAction();
+                }
+              }}
+              onQuickCreateShift={(shiftData) => {
+                if (shiftData.employeeId && shiftData.day !== undefined) {
+                  const emp = employees.find(e => e.id === shiftData.employeeId);
+                  const newShift: Shift = {
+                    id: `shift_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                    employeeId: shiftData.employeeId,
+                    department: shiftData.department || emp?.department || 'zaal',
+                    weekNumber: selectedManagerWeek,
+                    day: shiftData.day,
+                    startTime: shiftData.startTime || '16:00',
+                    endTime: shiftData.endTime || '23:00',
+                    notes: shiftData.notes || '',
+                    status: 'draft',
+                    acknowledged: false,
+                    role: shiftData.role || (shiftData.department === 'keuken' ? 'Keuken' : 'Zaal')
+                  };
+                  onAddShift(newShift);
+                  setSixWeeksSuccessMsg(`✅ Concept-dienst (${newShift.startTime} - ${newShift.endTime}) ingepland voor ${emp?.name}!`);
+                  setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+                }
+              }}
+              onDeleteShift={(shiftId) => {
+                onDeleteShift(shiftId);
+                setSixWeeksSuccessMsg('Dienst succesvol verwijderd');
+                setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+              }}
+              onSwitchToScheduleView={() => setGanttViewMode('rooster')}
+            />
+          ) : (
+            <ScheduleGanttTimeline
+              shifts={shifts}
+              employees={employees}
+              selectedWeek={selectedManagerWeek}
+              onSelectWeek={(wk) => setSelectedManagerWeek(wk)}
+              onOpenShiftModal={(shiftOrNew) => {
+                if (shiftOrNew && 'id' in shiftOrNew && shiftOrNew.id) {
+                  handleOpenEditShift(shiftOrNew as Shift);
+                } else if (shiftOrNew?.employeeId && shiftOrNew?.day !== undefined) {
+                  handleOpenAddShift(shiftOrNew.employeeId, shiftOrNew.day, {
+                    startTime: shiftOrNew.startTime,
+                    endTime: shiftOrNew.endTime,
+                    department: shiftOrNew.department,
+                    notes: shiftOrNew.notes
+                  });
+                } else {
+                  handleOpenCreateShiftQuickAction();
+                }
+              }}
+              onDeleteShift={(shiftId) => {
+                onDeleteShift(shiftId);
+                setSixWeeksSuccessMsg('Dienst succesvol verwijderd uit het rooster');
+                setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+              }}
+              availabilities={availabilities}
+              onSwitchToAvailabilityView={() => setGanttViewMode('beschikbaarheid')}
+            />
+          )}
+        </div>
       )}
 
       {/* 1b. BESCHIKBAARHEID TAB - STRICTLY ADMIN ONLY */}
@@ -3874,6 +3981,19 @@ export default function ManagerDashboard({
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveSubTab('tijdlijn');
+                    setGanttViewMode('beschikbaarheid');
+                  }}
+                  className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-black uppercase rounded-xl flex items-center space-x-2 shadow-md transition-transform active:scale-95 cursor-pointer border border-amber-400"
+                  title="Open de interactieve tijdlijn-grafiek (Gantt-stijl) met alle ingevoerde beschikbaarheden en plan direct shiften in"
+                >
+                  <Sparkles size={15} className="fill-white" />
+                  <span>Tijdlijn & Inplannen (Gantt) ⚡</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => handleOpenEnterAvailabilityModal()}
