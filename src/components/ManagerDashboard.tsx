@@ -73,6 +73,7 @@ import ExcelAvailabilityBulkModal from './ExcelAvailabilityBulkModal';
 import { GeminiRoosterModal } from './GeminiRoosterModal';
 import SchedulePrintModal from './SchedulePrintModal';
 import PreliminarySchedulePreviewModal from './PreliminarySchedulePreviewModal';
+import ScheduleGanttTimeline from './ScheduleGanttTimeline';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
@@ -234,7 +235,7 @@ export default function ManagerDashboard({
   const [managerNoticeReplyText, setManagerNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
 
   // Tabs within manager dashboard: Zaal (IDM zaal), Keuken (IDM keuken), Beschikbaarheden (alleen beheerder!), etc.
-  const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team'>('zaal');
+  const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team' | 'tijdlijn'>('zaal');
 
   // Availability overview state for managers
   const [selectedManagerWeek, setSelectedManagerWeek] = useState<number>(NEXT_WEEK_NUMBER);
@@ -268,6 +269,7 @@ export default function ManagerDashboard({
 
   // In-app confirmation dialog states (no window.confirm or alert)
   const [showClearWeekModal, setShowClearWeekModal] = useState(false);
+  const [clearModalMode, setClearModalMode] = useState<'drafts_only' | 'all'>('drafts_only');
   const [showCopyWeekModal, setShowCopyWeekModal] = useState(false);
   const [showPublishSixWeeksConfirmModal, setShowPublishSixWeeksConfirmModal] = useState(false);
   const [showUnpublishWeekConfirmModal, setShowUnpublishWeekConfirmModal] = useState(false);
@@ -452,28 +454,58 @@ export default function ManagerDashboard({
     setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
   };
 
-  // Action: Clear active week's schedule (Wis knop)
-  const handleClearWeekRoster = () => {
+  // Action: Clear active week's schedule (Wis knop / Ontwerp wissen)
+  const handleClearWeekRoster = (preferredMode?: 'drafts_only' | 'all') => {
     const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
     if (currentWeekShifts.length === 0) {
       setSixWeeksSuccessMsg(`Er zijn momenteel geen ingevulde diensten in Week ${selectedManagerWeek} om te wissen.`);
       setTimeout(() => setSixWeeksSuccessMsg(null), 5000);
       return;
     }
+    const drafts = currentWeekShifts.filter(s => s.status === 'draft');
+    if (preferredMode) {
+      setClearModalMode(preferredMode);
+    } else {
+      setClearModalMode(drafts.length > 0 ? 'drafts_only' : 'all');
+    }
     setShowClearWeekModal(true);
   };
 
-  const confirmClearWeekRoster = () => {
+  const confirmClearWeekRoster = (modeToUse: 'drafts_only' | 'all' = clearModalMode) => {
     const currentWeekShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek);
-    const count = currentWeekShifts.length;
-    if (onBatchUpdateShifts) {
-      const remainingShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== selectedManagerWeek);
-      onBatchUpdateShifts(remainingShifts, `Alle ${count} diensten voor Week ${selectedManagerWeek} gewist`);
+    const draftsInWeek = currentWeekShifts.filter(s => s.status === 'draft');
+
+    let remainingShifts: Shift[] = [];
+    let count = 0;
+    let logMsg = '';
+
+    if (modeToUse === 'drafts_only') {
+      remainingShifts = shifts.filter(s => !((s.weekNumber || CURRENT_WEEK_NUMBER) === selectedManagerWeek && s.status === 'draft'));
+      count = draftsInWeek.length;
+      logMsg = `Alle ${count} ontwerp/concept-diensten voor Week ${selectedManagerWeek} gewist`;
     } else {
-      currentWeekShifts.forEach(s => onDeleteShift(s.id));
+      remainingShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) !== selectedManagerWeek);
+      count = currentWeekShifts.length;
+      logMsg = `Alle ${count} diensten voor Week ${selectedManagerWeek} gewist`;
+    }
+
+    if (count === 0) {
+      setShowClearWeekModal(false);
+      return;
+    }
+
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(remainingShifts, logMsg);
+    } else {
+      const toDelete = modeToUse === 'drafts_only' ? draftsInWeek : currentWeekShifts;
+      toDelete.forEach(s => onDeleteShift(s.id));
     }
     setShowClearWeekModal(false);
-    setSixWeeksSuccessMsg(`Succes! Alle ${count} diensten voor Week ${selectedManagerWeek} zijn gewist.`);
+    setSixWeeksSuccessMsg(
+      modeToUse === 'drafts_only'
+        ? `🗑️ Alle ${count} ontwerp/concept-shiften voor Week ${selectedManagerWeek} zijn succesvol gewist.`
+        : `🗑️ Alle ${count} diensten voor Week ${selectedManagerWeek} zijn succesvol gewist.`
+    );
     setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
   };
 
@@ -1535,7 +1567,7 @@ export default function ManagerDashboard({
         </div>
 
         {/* Action Buttons Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-2.5">
           {/* 1. Publiceer alle diensten */}
           <button
             type="button"
@@ -1607,7 +1639,32 @@ export default function ManagerDashboard({
             </div>
           </button>
 
-          {/* 2. Archief aanmaken */}
+          {/* 3. Tijdlijn & Gantt Grafiek (Bezetting per Uur) */}
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('tijdlijn')}
+            className="group p-3 bg-gradient-to-br from-indigo-600 to-purple-800 hover:from-indigo-700 hover:to-purple-900 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-indigo-400/30"
+            title="Bekijk het wekelijkse rooster in een tijdlijn-grafiek (Gantt-stijl) met Recharts bezetting per uur"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <BarChart3 size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Gantt
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Tijdlijn & Uren
+              </div>
+              <div className="text-[10.5px] text-indigo-100 font-medium leading-tight mt-0.5">
+                Gantt & bezetting per uur
+              </div>
+            </div>
+          </button>
+
+          {/* 4. Archief aanmaken */}
           <button
             type="button"
             onClick={() => setShowBackupModal(true)}
@@ -1783,6 +1840,17 @@ export default function ManagerDashboard({
                 <Eye size={16} />
                 <span>Voorlopige Planning Bekijken</span>
               </button>
+              {loggedDraftShiftsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleClearWeekRoster('drafts_only')}
+                  className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                  title={`Verwijder alle ${loggedDraftShiftsCount} ontwerp/concept-shiften van Week ${selectedManagerWeek}`}
+                >
+                  <Trash2 size={15} className="text-rose-600" />
+                  <span>Wis Ontwerp ({loggedDraftShiftsCount})</span>
+                </button>
+              )}
               <button 
                 type="button"
                 onClick={() => {
@@ -1866,6 +1934,22 @@ export default function ManagerDashboard({
         >
           <CalendarIcon size={15} className={activeSubTab === 'zaal' || activeSubTab === 'keuken' ? 'text-orange-600' : 'text-slate-400'} />
           <span>Weekplanning</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('tijdlijn')}
+          className={`flex-1 min-w-[130px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'tijdlijn' 
+              ? 'bg-white text-orange-950 shadow-xs ring-1 ring-orange-500/20' 
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <BarChart3 size={15} className={activeSubTab === 'tijdlijn' ? 'text-indigo-600' : 'text-slate-400'} />
+          <span>Tijdlijn & Bezetting</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase tracking-wider bg-purple-100 text-purple-900 border border-purple-200">
+            Gantt
+          </span>
         </button>
 
         <button
@@ -2347,11 +2431,12 @@ export default function ManagerDashboard({
 
                     <button
                       type="button"
-                      onClick={handleClearWeekRoster}
-                      className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl transition cursor-pointer text-xs font-bold"
-                      title={`Wis alle diensten in Week ${selectedManagerWeek}`}
+                      onClick={() => handleClearWeekRoster(loggedDraftShiftsCount > 0 ? 'drafts_only' : 'all')}
+                      className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 border border-rose-200 rounded-xl transition cursor-pointer text-xs font-black uppercase flex items-center gap-1.5 shadow-2xs"
+                      title={loggedDraftShiftsCount > 0 ? `Wis alle ${loggedDraftShiftsCount} ontwerp/concept-shiften in Week ${selectedManagerWeek}` : `Wis alle diensten in Week ${selectedManagerWeek}`}
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} className="text-rose-600" />
+                      <span>{loggedDraftShiftsCount > 0 ? `Wis Ontwerp (${loggedDraftShiftsCount})` : 'Wis Week'}</span>
                     </button>
                   </div>
                 </div>
@@ -2592,7 +2677,7 @@ export default function ManagerDashboard({
                       <option value="unscheduled_first">⏳ Niet ingepland eerst</option>
                       {DAYS_OF_WEEK.map((d, dIdx) => (
                         <option key={dIdx} value={dIdx.toString()}>
-                          📅 {d} beschikbaarheid
+                          📅 {d} (Vast ➔ Sluit/Hulpsluit ➔ Flexi ➔ Student)
                         </option>
                       ))}
                     </select>
@@ -2650,6 +2735,16 @@ export default function ManagerDashboard({
 
                     <button
                       type="button"
+                      onClick={() => setActiveSubTab('tijdlijn')}
+                      className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      title="Toon de planning als tijdlijn-grafiek (Gantt-stijl) met Recharts bezetting per uur"
+                    >
+                      <BarChart3 size={13} className="text-indigo-600" />
+                      <span>Tijdlijn (Gantt)</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setShowPreliminaryPreviewModal(true)}
                       className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                       title={`Bekijk hoe de voorlopige planning van Week ${selectedManagerWeek} (inclusief concept-diensten) eruitziet vóórdat deze gepubliceerd wordt`}
@@ -2667,6 +2762,18 @@ export default function ManagerDashboard({
                       <Printer size={13} className="text-orange-600" />
                       <span>Print Planning</span>
                     </button>
+
+                    {activeWeekShifts.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleClearWeekRoster(loggedDraftShiftsCount > 0 ? 'drafts_only' : 'all')}
+                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-800 border border-rose-200 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                        title={loggedDraftShiftsCount > 0 ? `Wis alle ${loggedDraftShiftsCount} ontwerp/concept-diensten van Week ${selectedManagerWeek}` : `Wis alle diensten van Week ${selectedManagerWeek}`}
+                      >
+                        <Trash2 size={13} className="text-rose-600" />
+                        <span>{loggedDraftShiftsCount > 0 ? `Wis Ontwerp (${loggedDraftShiftsCount})` : 'Wis Planning'}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -3001,7 +3108,23 @@ export default function ManagerDashboard({
                           isSpecial ? 'bg-amber-50/95 border-amber-300' : 'bg-orange-50/90 border-orange-200'
                         }`}>
                           <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-black text-xs text-slate-800 tracking-tight">{dayHeaderName}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlanningSort(prev => prev === dIdx ? 'name' : dIdx);
+                              }}
+                              className={`font-black text-xs tracking-tight transition cursor-pointer flex items-center gap-1 text-left ${
+                                planningSort === dIdx ? 'text-orange-700 font-black underline decoration-2' : 'text-slate-800 hover:text-orange-600'
+                              }`}
+                              title={`Sorteer personeel op ${day}: Vaste medewerkers bovenaan, dan tot sluit/hulpsluit, dan flexi's en studenten`}
+                            >
+                              <span>{dayHeaderName}</span>
+                              {planningSort === dIdx && (
+                                <span className="text-[8.5px] bg-orange-600 text-white px-1 py-0.2 rounded font-black no-underline">
+                                  Sorteer ▼
+                                </span>
+                              )}
+                            </button>
                             <span className={`text-[11px] font-black px-2 py-0.5 rounded-lg shadow-2xs border ${
                               isSpecial 
                                 ? 'bg-amber-200 text-amber-950 border-amber-300' 
@@ -3010,6 +3133,11 @@ export default function ManagerDashboard({
                               {dayDateInfo.shortDate}
                             </span>
                           </div>
+                          {planningSort === dIdx && (
+                            <div className="text-[8px] font-black text-orange-800 uppercase tracking-tight bg-orange-100/90 border border-orange-200 px-1.5 py-0.5 rounded mb-1">
+                              Vast ➔ Sluit/Hulp ➔ Flexi ➔ Student
+                            </div>
+                          )}
                           <div className="text-[9px] font-bold normal-case mt-0.5 flex flex-wrap items-center justify-between gap-1">
                             {specialDay?.closingNote ? (
                               <span className="text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded font-black">
@@ -3666,6 +3794,31 @@ export default function ManagerDashboard({
         </div>
         );
       })()}
+
+      {/* 1c. VISUELE TIJDLIJN & BEZETTING PER UUR (GANTT) TAB */}
+      {activeSubTab === 'tijdlijn' && (
+        <ScheduleGanttTimeline
+          shifts={shifts}
+          employees={employees}
+          selectedWeek={selectedManagerWeek}
+          onSelectWeek={(wk) => setSelectedManagerWeek(wk)}
+          onOpenShiftModal={(shiftOrNew) => {
+            if (shiftOrNew && 'id' in shiftOrNew && shiftOrNew.id) {
+              handleOpenEditShift(shiftOrNew as Shift);
+            } else if (shiftOrNew?.employeeId && shiftOrNew?.day !== undefined) {
+              handleOpenAddShift(shiftOrNew.employeeId, shiftOrNew.day);
+            } else {
+              handleOpenCreateShiftQuickAction();
+            }
+          }}
+          onDeleteShift={(shiftId) => {
+            onDeleteShift(shiftId);
+            setSixWeeksSuccessMsg('Dienst succesvol verwijderd uit het rooster');
+            setTimeout(() => setSixWeeksSuccessMsg(null), 4000);
+          }}
+          availabilities={availabilities}
+        />
+      )}
 
       {/* 1b. BESCHIKBAARHEID TAB - STRICTLY ADMIN ONLY */}
       {activeSubTab === 'beschikbaarheid' && (() => {
@@ -8096,7 +8249,7 @@ export default function ManagerDashboard({
                 </div>
                 <div>
                   <h3 className="text-lg font-black text-slate-900">
-                    Weekrooster Wissen
+                    {clearModalMode === 'drafts_only' ? 'Ontwerp / Concept Shiften Wissen' : 'Weekrooster Wissen'}
                   </h3>
                   <p className="text-xs text-rose-600 font-bold uppercase tracking-wider">
                     Week {selectedManagerWeek} ({getWeekMeta(selectedManagerWeek).dateRange})
@@ -8112,9 +8265,85 @@ export default function ManagerDashboard({
               </button>
             </div>
 
-            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
-              Weet je zeker dat je alle <strong>{activeWeekShifts.length} ingevulde diensten</strong> voor <strong>Week {selectedManagerWeek}</strong> wilt wissen? Deze actie verwijdert alle geplande uren voor deze week.
-            </p>
+            {/* Selection between drafts only vs all shifts when both exist */}
+            {loggedDraftShiftsCount > 0 && publishedShiftsCount > 0 ? (
+              <div className="space-y-3 mb-6">
+                <p className="text-xs font-bold text-slate-600">
+                  Selecteer wat je wilt wissen voor <strong>Week {selectedManagerWeek}</strong>:
+                </p>
+                <div className="space-y-2">
+                  <div 
+                    onClick={() => setClearModalMode('drafts_only')}
+                    className={`flex items-start gap-3 p-3 rounded-2xl border-2 transition cursor-pointer ${
+                      clearModalMode === 'drafts_only'
+                        ? 'border-amber-500 bg-amber-50/80 text-amber-950'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="clearModeSelection"
+                      checked={clearModalMode === 'drafts_only'}
+                      onChange={() => setClearModalMode('drafts_only')}
+                      className="mt-1 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="font-black text-xs uppercase tracking-tight flex items-center gap-1.5">
+                        <span>Alleen shiften in ontwerp wissen</span>
+                        <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 rounded font-black text-[10px]">
+                          {loggedDraftShiftsCount} concept-shiften
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                        Verwijdert alle voorlopige shiften die nog niet gepubliceerd zijn. De {publishedShiftsCount} reeds gepubliceerde diensten blijven actief.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div 
+                    onClick={() => setClearModalMode('all')}
+                    className={`flex items-start gap-3 p-3 rounded-2xl border-2 transition cursor-pointer ${
+                      clearModalMode === 'all'
+                        ? 'border-rose-500 bg-rose-50/80 text-rose-950'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="clearModeSelection"
+                      checked={clearModalMode === 'all'}
+                      onChange={() => setClearModalMode('all')}
+                      className="mt-1 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="font-black text-xs uppercase tracking-tight flex items-center gap-1.5">
+                        <span>Alle diensten van deze week wissen</span>
+                        <span className="px-1.5 py-0.2 bg-rose-200 text-rose-900 rounded font-black text-[10px]">
+                          {activeWeekShifts.length} shiften
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                        Verwijdert het volledige rooster voor Week {selectedManagerWeek} (zowel concept als gepubliceerde diensten).
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : loggedDraftShiftsCount > 0 && publishedShiftsCount === 0 ? (
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 mb-6 text-xs text-amber-950 space-y-1.5">
+                <div className="font-black uppercase tracking-tight flex items-center gap-1.5 text-amber-900">
+                  <CircleAlert size={15} className="text-amber-700 shrink-0" />
+                  <span>Planning in Ontwerp Wissen</span>
+                </div>
+                <p className="leading-relaxed text-amber-900 text-[11.5px]">
+                  Weet je zeker dat je alle <strong>{loggedDraftShiftsCount} shiften in ontwerp (concept)</strong> voor <strong>Week {selectedManagerWeek}</strong> wilt verwijderen? Het volledige conceptrooster wordt hiermee leeggemaakt.
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                Weet je zeker dat je alle <strong>{activeWeekShifts.length} ingevulde diensten</strong> voor <strong>Week {selectedManagerWeek}</strong> wilt wissen? Deze actie verwijdert alle geplande uren voor deze week.
+              </p>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
               <button
@@ -8126,11 +8355,13 @@ export default function ManagerDashboard({
               </button>
               <button
                 type="button"
-                onClick={confirmClearWeekRoster}
+                onClick={() => confirmClearWeekRoster(clearModalMode)}
                 className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-black uppercase rounded-xl shadow-md shadow-rose-600/20 transition cursor-pointer flex items-center gap-2"
               >
                 <Trash2 className="w-4 h-4" />
-                Wis Alle {activeWeekShifts.length} Diensten
+                {clearModalMode === 'drafts_only' && loggedDraftShiftsCount > 0
+                  ? `Wis Alle ${loggedDraftShiftsCount} Ontwerp-shiften`
+                  : `Wis Alle ${activeWeekShifts.length} Diensten`}
               </button>
             </div>
           </div>

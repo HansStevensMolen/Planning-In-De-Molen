@@ -1,5 +1,6 @@
-import { Employee, EmployeeAvailability, Shift } from '../types';
+import { Employee, EmployeeAvailability, DayAvailability, Shift } from '../types';
 import { getEffectiveEmployeeAvailability } from './weekUtils';
+import { isMinorStudent, isShiftEndingAfter23 } from './employeeAgeUtils';
 
 /**
  * Normaliseert invoer voor een Facebook-profiel naar een volwaardige werkende Facebook URL.
@@ -301,12 +302,89 @@ export function sortEmployeesByFirstName(employees: Employee[]): Employee[] {
 }
 
 /**
- * Sorteert medewerkers per dag:
+/**
+ * Bepaalt of een medewerker op een specifieke dag beschikbaar is én tot 'Sluit' of 'Hulpsluit' kan werken.
+ * - Wettelijke bescherming: minderjarige studenten (<18) mogen nooit na 23u00 werken (dus géén sluit of hulpsluit).
+ * - Controleert:
+ *   1. endTime ('Sluit', 'Hulpsluit', '00:00', '01:00', '02:00', '24:00', '00u00', etc.)
+ *   2. notes (bevat 'sluit', 'hulpsluit', 'kan sluiten', 'helpen sluiten', etc.)
+ *   3. Of de shift-eindtijd na 23u00 valt via isShiftEndingAfter23.
+ */
+export function canEmployeeWorkSluitOrHulpsluit(
+  emp: Employee,
+  dayAvail?: DayAvailability
+): boolean {
+  if (!dayAvail) return false;
+  if (dayAvail.status !== 'available' && dayAvail.status !== 'preferred') return false;
+
+  // Wettelijke grens: minderjarige studenten mogen nooit tot sluit of hulpsluit werken
+  if (isMinorStudent(emp)) return false;
+
+  const end = (dayAvail.endTime || '').trim().toLowerCase();
+  const notes = (dayAvail.notes || '').trim().toLowerCase();
+
+  // 1. Expliciete vermelding van sluit of hulpsluit in eindtijd of opmerkingen
+  if (
+    end.includes('sluit') ||
+    end.includes('hulp') ||
+    notes.includes('sluit') ||
+    notes.includes('hulp')
+  ) {
+    return true;
+  }
+
+  // 2. Eindtijd die voorbij 23:00 reikt (00:00 middernacht hulpsluit, 01:00/02:00 sluitdienst)
+  if (isShiftEndingAfter23(dayAvail.endTime || '', dayAvail.day, dayAvail.notes)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Berekent de rangorde voor een medewerker bij dag-sortering:
+ * - Rang 0: Vaste medewerkers ('Vast') bovenaan
+ * - Rang 1: Medewerkers die tot sluit of hulpsluit kunnen werken (niet-vast)
+ * - Rang 2: Flexi's (die niet tot sluit/hulpsluit kunnen)
+ * - Rang 3: Studenten (die niet tot sluit/hulpsluit kunnen)
+ * - Rang 4: Overige (zoals Extra)
+ */
+export function getDayAvailabilitySortRank(
+  emp: Employee,
+  dayAvail?: DayAvailability
+): number {
+  if (emp.statuut === 'Vast') {
+    return 0; // Vaste medewerkers altijd bovenaan
+  }
+
+  if (canEmployeeWorkSluitOrHulpsluit(emp, dayAvail)) {
+    return 1; // Medewerkers die tot sluit of hulpsluit kunnen werken
+  }
+
+  if (emp.statuut === 'Flexi') {
+    return 2; // Flexi's
+  }
+
+  if (emp.statuut === 'Student') {
+    return 3; // Studenten
+  }
+
+  return 4; // Overige (zoals Extra)
+}
+
+/**
+ * Sorteert medewerkers per dag volgens de specifieke regels van de beheerder:
  * 1. Wie beschikbaar is ('available' of 'preferred') komt bovenaan.
- * 2. Binnen de beschikbaren: vaste werknemers ('Vast') eerst.
- * 3. Vervolgens andere statuten (Flexi, Student, Extra).
- * 4. Alfabetisch op naam.
- * 5. Medewerkers die niet-beschikbaar zijn of niets hebben ingevuld komen onderaan (ook vaste eerst).
+ * 2. Vaste medewerkers ('Vast') bovenaan (Rang 0).
+ * 3. Vervolgens de medewerkers die tot sluit of hulpsluit kunnen werken (Rang 1).
+ * 4. Vervolgens de flexi's (Rang 2).
+ * 5. Vervolgens de studenten (Rang 3).
+ * 6. Overige statuten (Extra) (Rang 4).
+ * 7. Binnen dezelfde rang:
+ *    - Bij Vast: wie tot sluit/hulpsluit kan eerst
+ *    - Bij sluit/hulpsluit: wie volwaardig Sluit kan vóór Hulpsluit
+ *    - Alfabetisch op voornaam en naam
+ * 8. Medewerkers die niet-beschikbaar zijn komen onderaan, gerangschikt volgens dezelfde statuut-prioriteit (Vast -> Flexi -> Student -> Extra) en alfabetisch.
  */
 export function sortEmployeesByDayAvailability(
   employees: Employee[],
@@ -328,23 +406,49 @@ export function sortEmployeesByDayAvailability(
     if (aIsAvail && !bIsAvail) return -1;
     if (!aIsAvail && bIsAvail) return 1;
 
-    // 2. Beginnen met de vaste werknemers
-    const aIsVast = a.statuut === 'Vast';
-    const bIsVast = b.statuut === 'Vast';
-    if (aIsVast && !bIsVast) return -1;
-    if (!aIsVast && bIsVast) return 1;
+    // Indien beide beschikbaar zijn: sorteer volgens gevraagde rangorde
+    if (aIsAvail && bIsAvail) {
+      const rankA = getDayAvailabilitySortRank(a, aDay);
+      const rankB = getDayAvailabilitySortRank(b, bDay);
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
 
-    // 3. Statuut rangorde: Vast (0), Flexi (1), Student (2), Extra (3)
-    const statuutRank = (s?: string) => {
-      if (s === 'Vast') return 0;
-      if (s === 'Flexi') return 1;
-      if (s === 'Student') return 2;
-      return 3;
-    };
-    const rankDiff = statuutRank(a.statuut) - statuutRank(b.statuut);
-    if (rankDiff !== 0) return rankDiff;
+      // Binnen Rang 0 (Vast): degenen die tot sluit/hulpsluit kunnen komen eerst
+      if (rankA === 0) {
+        const aCanClose = canEmployeeWorkSluitOrHulpsluit(a, aDay);
+        const bCanClose = canEmployeeWorkSluitOrHulpsluit(b, bDay);
+        if (aCanClose && !bCanClose) return -1;
+        if (!aCanClose && bCanClose) return 1;
+      }
 
-    // 4. Alfabetisch op naam
+      // Binnen Rang 1 (sluit/hulpsluit): wie volwaardig Sluit kan vóór Hulpsluit
+      if (rankA === 1) {
+        const aEnd = (aDay?.endTime || '').toLowerCase();
+        const bEnd = (bDay?.endTime || '').toLowerCase();
+        const aIsFullSluit = aEnd.includes('sluit') && !aEnd.includes('hulp');
+        const bIsFullSluit = bEnd.includes('sluit') && !bEnd.includes('hulp');
+        if (aIsFullSluit && !bIsFullSluit) return -1;
+        if (!aIsFullSluit && bIsFullSluit) return 1;
+
+        // Flexi voor Student binnen sluit
+        const statuutOrder = (s?: string) => (s === 'Flexi' ? 0 : s === 'Student' ? 1 : 2);
+        const statDiff = statuutOrder(a.statuut) - statuutOrder(b.statuut);
+        if (statDiff !== 0) return statDiff;
+      }
+    } else {
+      // Beide niet-beschikbaar: ook hier vaste eerst, dan flexi's, dan studenten
+      const fallbackRank = (s?: string) => {
+        if (s === 'Vast') return 0;
+        if (s === 'Flexi') return 1;
+        if (s === 'Student') return 2;
+        return 3;
+      };
+      const rankDiff = fallbackRank(a.statuut) - fallbackRank(b.statuut);
+      if (rankDiff !== 0) return rankDiff;
+    }
+
+    // Alfabetisch op voornaam en naam
     const aName = (a.name || '').trim();
     const bName = (b.name || '').trim();
     const aFirst = aName.split(/\s+/)[0] || '';

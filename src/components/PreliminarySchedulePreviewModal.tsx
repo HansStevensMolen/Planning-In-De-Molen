@@ -19,7 +19,8 @@ import {
   Megaphone,
   Briefcase,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Trash2
 } from 'lucide-react';
 import { Employee, Shift, Department } from '../types';
 import { getWeekMeta, CURRENT_WEEK_NUMBER } from '../utils/weekUtils';
@@ -34,6 +35,7 @@ interface PreliminarySchedulePreviewModalProps {
   employees: Employee[];
   onPublishWeek?: (targetWeek: number) => void;
   onOpenPrintModal?: () => void;
+  onClearDraftShifts?: (targetWeek: number) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -53,7 +55,8 @@ export default function PreliminarySchedulePreviewModal({
   shifts,
   employees: rawEmployees,
   onPublishWeek,
-  onOpenPrintModal
+  onOpenPrintModal,
+  onClearDraftShifts
 }: PreliminarySchedulePreviewModalProps) {
   const employees = useMemo(() => deduplicateEmployees(rawEmployees), [rawEmployees]);
   const [selectedWeek, setSelectedWeek] = useState<number>(weekNumber);
@@ -727,6 +730,23 @@ export default function PreliminarySchedulePreviewModal({
               >
                 <Printer size={15} className="text-slate-500" />
                 <span>Print / PDF Voorvertoning</span>
+              </button>
+            )}
+
+            {draftShifts.length > 0 && onClearDraftShifts && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Weet je zeker dat je alle ${draftShifts.length} ontwerp-shiften voor Week ${selectedWeek} wilt verwijderen?`)) {
+                    onClearDraftShifts(selectedWeek);
+                    onClose();
+                  }
+                }}
+                className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 border border-rose-300 font-black text-xs uppercase tracking-tight rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Verwijder alle ontwerp-shiften (concept-diensten) van deze week"
+              >
+                <Trash2 size={15} className="text-rose-600" />
+                <span>Ontwerp Wissen ({draftShifts.length})</span>
               </button>
             )}
 
