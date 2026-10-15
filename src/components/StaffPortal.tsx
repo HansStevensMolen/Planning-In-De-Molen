@@ -102,6 +102,8 @@ import StaffHoursTracker from './StaffHoursTracker';
 import { calculateShiftDurationHours, getShiftTimingDetails } from '../utils/employeeAgeUtils';
 import { buildMessengerUrl } from '../utils/whatsappNotificationUtils';
 
+import StaffHandbookModal from './StaffHandbookModal';
+
 interface StaffPortalProps {
   employees: Employee[];
   shifts: Shift[];
@@ -125,6 +127,9 @@ interface StaffPortalProps {
   ) => void;
   onToggleNoticeReaction?: (noticeId: string, emoji: string, employeeId: string) => void;
   appSettings?: AppSettings;
+  onMarkNoticeRead?: (noticeId: string, employeeId: string) => void;
+  onDismissNotice?: (noticeId: string, employeeId: string) => void;
+  onMarkAllNoticesRead?: (employeeId: string) => void;
 }
 
 const DAYS_OF_WEEK = [
@@ -275,11 +280,18 @@ export default function StaffPortal({
   onSelfAssignOpenShift,
   onAddNoticeComment,
   onToggleNoticeReaction,
-  appSettings
+  appSettings,
+  onMarkNoticeRead,
+  onDismissNotice,
+  onMarkAllNoticesRead
 }: StaffPortalProps) {
   // Staff notice replies & self-assign confirmation state
   const [staffNoticeReplyText, setStaffNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
   const [selfAssignConfirmShift, setSelfAssignConfirmShift] = useState<Shift | null>(null);
+
+  // Handbook & Richtlijnen modal state
+  const [showHandbookModal, setShowHandbookModal] = useState<boolean>(false);
+  const [handbookInitialSection, setHandbookInitialSection] = useState<string>('all');
 
   // Authenticated Staff Member ID (Personal Login with PIN)
   const [loggedInStaffId, setLoggedInStaffId] = useState<string | null>(() => {
@@ -306,6 +318,72 @@ export default function StaffPortal({
   }, [employees, loggedInStaffId]);
 
   const activeEmployeeId = loggedInStaffId || '';
+
+  // Track read/dismissed notice IDs in localStorage so a notice disappears permanently once viewed
+  const [viewedNoticeIds, setViewedNoticeIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(`cafe_viewed_notice_ids_${activeEmployeeId}`);
+      if (stored) {
+        return new Set(JSON.parse(stored));
+      }
+    } catch {}
+    return new Set();
+  });
+
+  // Re-sync viewedNoticeIds when activeEmployeeId changes
+  React.useEffect(() => {
+    if (!activeEmployeeId) return;
+    try {
+      const stored = localStorage.getItem(`cafe_viewed_notice_ids_${activeEmployeeId}`);
+      if (stored) {
+        setViewedNoticeIds(new Set(JSON.parse(stored)));
+      } else {
+        setViewedNoticeIds(new Set());
+      }
+    } catch {}
+  }, [activeEmployeeId]);
+
+  // Helper to check if a notice was viewed/dismissed
+  const isNoticeViewed = (notice: Notice): boolean => {
+    if (!activeEmployeeId) return false;
+    if (viewedNoticeIds.has(notice.id)) return true;
+    if (notice.readBy && notice.readBy.includes(activeEmployeeId)) return true;
+    if (notice.dismissedBy && notice.dismissedBy.includes(activeEmployeeId)) return true;
+    return false;
+  };
+
+  const handleMarkNoticeAsViewed = (noticeId: string) => {
+    setViewedNoticeIds(prev => {
+      const updated = new Set(prev);
+      updated.add(noticeId);
+      try {
+        localStorage.setItem(`cafe_viewed_notice_ids_${activeEmployeeId}`, JSON.stringify(Array.from(updated)));
+      } catch {}
+      return updated;
+    });
+
+    if (onMarkNoticeRead && activeEmployeeId) {
+      onMarkNoticeRead(noticeId, activeEmployeeId);
+    }
+    if (onDismissNotice && activeEmployeeId) {
+      onDismissNotice(noticeId, activeEmployeeId);
+    }
+  };
+
+  const handleMarkAllNoticesAsViewed = () => {
+    const allIds = notices.map(n => n.id);
+    setViewedNoticeIds(prev => {
+      const updated = new Set([...prev, ...allIds]);
+      try {
+        localStorage.setItem(`cafe_viewed_notice_ids_${activeEmployeeId}`, JSON.stringify(Array.from(updated)));
+      } catch {}
+      return updated;
+    });
+
+    if (onMarkAllNoticesRead && activeEmployeeId) {
+      onMarkAllNoticesRead(activeEmployeeId);
+    }
+  };
 
   const handleStaffLoginSuccess = (employee: Employee, rememberMe: boolean) => {
     setLoggedInStaffId(employee.id);
@@ -623,11 +701,18 @@ export default function StaffPortal({
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
   const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
 
-  // Berichten & meldingen over gewijzigde shiften door de beheerder gericht aan deze medewerker
+  // Berichten & meldingen over gewijzigde shiften gericht aan deze medewerker (verdwijnt direct zodra bekeken!)
   const shiftChangeNotices = notices.filter(n => 
     n.targetEmployeeId === activeEmployeeId && 
-    n.category === 'wijziging'
+    n.category === 'wijziging' &&
+    !isNoticeViewed(n)
   );
+
+  // Aantal ongelezen mededelingen voor deze medewerker
+  const unreadNoticesCount = notices.filter(n => {
+    if (n.targetEmployeeId && n.targetEmployeeId !== activeEmployeeId) return false;
+    return !isNoticeViewed(n);
+  }).length;
 
   // Push notification permission state & automated reminder dialog state
   const [pushStatus, setPushStatus] = useState<PushNotificationStatus>(() => getPushNotificationPermission());
@@ -957,6 +1042,19 @@ export default function StaffPortal({
 
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           <PWAInstallButton variant="header" />
+
+          <button
+            type="button"
+            onClick={() => {
+              setHandbookInitialSection('all');
+              setShowHandbookModal(true);
+            }}
+            className="flex-1 sm:flex-none px-3.5 py-2 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm cursor-pointer whitespace-nowrap border border-amber-400/40"
+            title="Praktische Richtlijnen, Huisregels, Werkafspraken en Sluitingsprocedure raadplegen"
+          >
+            <BookOpen size={13} className="stroke-[2.5]" />
+            <span>📖 Richtlijnen</span>
+          </button>
 
           <button
             type="button"
@@ -1642,12 +1740,17 @@ export default function StaffPortal({
         <button
           id="staff-tab-berichten-btn"
           onClick={() => { setActiveSubTab('berichten'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[100px] ${
+          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[105px] relative ${
             activeSubTab === 'berichten' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
           }`}
         >
           <Megaphone size={14} />
-          <span>Berichten ({notices.length})</span>
+          <span>Berichten</span>
+          {unreadNoticesCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+              {unreadNoticesCount}
+            </span>
+          )}
         </button>
 
         {/* 6. Collega's */}
@@ -1660,6 +1763,19 @@ export default function StaffPortal({
         >
           <Users size={14} />
           <span>Collega's</span>
+        </button>
+
+        {/* 7. Praktische Richtlijnen Handboek */}
+        <button
+          id="staff-tab-handboek-btn"
+          onClick={() => {
+            setHandbookInitialSection('all');
+            setShowHandbookModal(true);
+          }}
+          className="flex-1 py-2.5 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[125px] bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300"
+        >
+          <BookOpen size={14} className="text-orange-600" />
+          <span>Richtlijnen 📖</span>
         </button>
       </div>
 
@@ -2047,13 +2163,26 @@ export default function StaffPortal({
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setActiveSubTab('berichten')}
-                      className="px-3.5 py-1.5 bg-white text-orange-700 hover:bg-orange-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
-                    >
-                      Bekijk Bericht 💬
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleMarkNoticeAsViewed(shiftChangeNotices[0].id);
+                          setActiveSubTab('berichten');
+                        }}
+                        className="px-3.5 py-1.5 bg-white text-orange-700 hover:bg-orange-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+                      >
+                        Bekijk Bericht 💬
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMarkNoticeAsViewed(shiftChangeNotices[0].id)}
+                        className="p-1.5 bg-black/25 hover:bg-black/40 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
+                        title="Sluit melding (verdwijnt direct)"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -2716,9 +2845,22 @@ export default function StaffPortal({
               </h3>
               <p className="text-xs text-slate-500 font-medium">Updates, belangrijke berichten en reacties vanuit het team.</p>
             </div>
-            <span className="text-xs font-black text-orange-950 bg-orange-100 px-3 py-1 rounded-full border border-orange-200 self-start sm:self-auto">
-              💬 Reageer direct op berichten
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              {unreadNoticesCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMarkAllNoticesAsViewed}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-black text-xs uppercase tracking-tight flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-2xs"
+                  title="Markeer alle berichten als bekeken"
+                >
+                  <CheckCheck size={14} className="text-emerald-700" />
+                  <span>Markeer alles als gelezen ({unreadNoticesCount})</span>
+                </button>
+              )}
+              <span className="text-xs font-black text-orange-950 bg-orange-100 px-3 py-1 rounded-full border border-orange-200 self-start sm:self-auto">
+                💬 Reageer direct op berichten
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
@@ -2762,11 +2904,33 @@ export default function StaffPortal({
 
                     {/* Emoji Quick Reactions Bar */}
                     <div className="pt-2 border-t border-orange-50 space-y-2">
-                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase">
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase gap-2 flex-wrap">
                         <span>Auteur: <strong className="text-slate-700">{not.author}</strong></span>
-                        <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-250">
-                          <CheckCheck size={11} className="stroke-[3.5]" /> Gelezen
-                        </span>
+                        {isNoticeViewed(not) ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-emerald-800 font-black flex items-center gap-0.5 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-250">
+                              <CheckCheck size={11} className="stroke-[3.5]" /> Bekeken
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleMarkNoticeAsViewed(not.id)}
+                              className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition cursor-pointer"
+                              title="Sluit melding"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleMarkNoticeAsViewed(not.id)}
+                            className="text-amber-950 font-black flex items-center gap-1 bg-amber-100 hover:bg-amber-200 px-2.5 py-1 rounded-xl border border-amber-300 transition active:scale-95 cursor-pointer shadow-2xs"
+                            title="Markeer als gelezen (verdwijnt uit ongelezen meldingen)"
+                          >
+                            <Check size={12} className="stroke-[3]" />
+                            <span>Markeer als Gelezen</span>
+                          </button>
+                        )}
                       </div>
 
                       {/* Emoji reaction pills */}
@@ -4731,6 +4895,13 @@ export default function StaffPortal({
           }}
         />
       )}
+
+      {/* Praktische Richtlijnen & Werkafspraken Handboek Modal voor personeel */}
+      <StaffHandbookModal
+        isOpen={showHandbookModal}
+        onClose={() => setShowHandbookModal(false)}
+        initialSection={handbookInitialSection}
+      />
 
     </div>
   );

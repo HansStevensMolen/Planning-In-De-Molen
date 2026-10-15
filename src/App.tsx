@@ -675,7 +675,8 @@ export default function App() {
     );
 
     // Stuur personeel een direct bericht/notificatie als hun shift gewijzigd werd
-    if (dayChanged || timeChanged || deptChanged || notesChanged || empChanged) {
+    // BELANGRIJK: Alleen als de shift reeds GEPUBLICEERD was (concept/draft shiften waren immers nooit definitief voor personeel)
+    if (finalShift.status === 'published' && (dayChanged || timeChanged || deptChanged || notesChanged || empChanged)) {
       const weekNum = finalShift.weekNumber || CURRENT_WEEK_NUMBER;
       const deptLabel = finalShift.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
       
@@ -687,13 +688,15 @@ export default function App() {
         category: 'wijziging',
         author: 'Hans Stevens (Beheerder)',
         targetEmployeeId: finalShift.employeeId,
-        shiftId: finalShift.id
+        shiftId: finalShift.id,
+        readBy: [],
+        dismissedBy: []
       };
 
       let newNoticesList = [changeNotice, ...notices];
 
-      // Indien shift herverdeeld werd naar iemand anders: breng ook de vorige medewerker op de hoogte
-      if (empChanged && prevShift?.employeeId && prevShift.employeeId !== 'open_shift') {
+      // Indien shift herverdeeld werd naar iemand anders: breng ook de vorige medewerker op de hoogte indien zijn eerdere dienst gepubliceerd was
+      if (empChanged && prevShift?.status === 'published' && prevShift?.employeeId && prevShift.employeeId !== 'open_shift') {
         const prevEmpName = employees.find(e => e.id === prevShift.employeeId)?.name || 'Collega';
         const reassignedNotice: Notice = {
           id: `notice_shift_reassigned_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -702,7 +705,9 @@ export default function App() {
           date: new Date().toISOString().split('T')[0],
           category: 'wijziging',
           author: 'Hans Stevens (Beheerder)',
-          targetEmployeeId: prevShift.employeeId
+          targetEmployeeId: prevShift.employeeId,
+          readBy: [],
+          dismissedBy: []
         };
         newNoticesList = [reassignedNotice, ...newNoticesList];
       }
@@ -729,7 +734,8 @@ export default function App() {
     addLog('Dienst verwijderd', `Dienst van ${empName} op ${DAYS_OF_WEEK[target.day]} gecancelled [Week ${target.weekNumber || CURRENT_WEEK_NUMBER}]`);
 
     // Stuur personeel een direct bericht/notificatie als hun shift geannuleerd werd
-    if (target.employeeId && target.employeeId !== 'open_shift') {
+    // BELANGRIJK: Alleen als de shift officieel GEPUBLICEERD was! Concept/ontwerp shiften waren immers nooit zichtbaar voor personeel
+    if (target.status === 'published' && target.employeeId && target.employeeId !== 'open_shift') {
       const weekNum = target.weekNumber || CURRENT_WEEK_NUMBER;
       const deptLabel = target.department === 'keuken' ? 'Keuken 🍳' : 'Zaal 🍽️';
       const cancelNotice: Notice = {
@@ -739,7 +745,9 @@ export default function App() {
         date: new Date().toISOString().split('T')[0],
         category: 'wijziging',
         author: 'Hans Stevens (Beheerder)',
-        targetEmployeeId: target.employeeId
+        targetEmployeeId: target.employeeId,
+        readBy: [],
+        dismissedBy: []
       };
       const nextNotices = [cancelNotice, ...notices];
       setNotices(nextNotices);
@@ -1036,6 +1044,43 @@ export default function App() {
         ...n,
         comments: (n.comments || []).filter(c => c.id !== commentId)
       };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
+  // Action: Mark notice as read / viewed by employee (disappears once viewed)
+  const handleMarkNoticeRead = (noticeId: string, employeeId: string) => {
+    const nextNotices = notices.map(n => {
+      if (n.id !== noticeId) return n;
+      const readBy = Array.from(new Set([...(n.readBy || []), employeeId]));
+      return { ...n, readBy };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
+  // Action: Dismiss notice (so it permanently disappears for this employee once viewed)
+  const handleDismissNotice = (noticeId: string, employeeId: string) => {
+    const nextNotices = notices.map(n => {
+      if (n.id !== noticeId) return n;
+      const readBy = Array.from(new Set([...(n.readBy || []), employeeId]));
+      const dismissedBy = Array.from(new Set([...(n.dismissedBy || []), employeeId]));
+      return { ...n, readBy, dismissedBy };
+    });
+    setNotices(nextNotices);
+    saveNoticesToCloud(nextNotices);
+  };
+
+  // Action: Mark all notices as read for an employee
+  const handleMarkAllNoticesRead = (employeeId: string) => {
+    const nextNotices = notices.map(n => {
+      if (!n.targetEmployeeId || n.targetEmployeeId === employeeId) {
+        const readBy = Array.from(new Set([...(n.readBy || []), employeeId]));
+        const dismissedBy = Array.from(new Set([...(n.dismissedBy || []), employeeId]));
+        return { ...n, readBy, dismissedBy };
+      }
+      return n;
     });
     setNotices(nextNotices);
     saveNoticesToCloud(nextNotices);
@@ -1854,6 +1899,9 @@ export default function App() {
               onSelfAssignOpenShift={handleSelfAssignOpenShift}
               onAddNoticeComment={handleAddNoticeComment}
               onToggleNoticeReaction={handleToggleNoticeReaction}
+              onMarkNoticeRead={handleMarkNoticeRead}
+              onDismissNotice={handleDismissNotice}
+              onMarkAllNoticesRead={handleMarkAllNoticesRead}
             />
           </div>
         )}
@@ -1966,7 +2014,11 @@ export default function App() {
 
       {/* Floating In-App Real-time Notification Banner for updates & notices */}
       <InAppNotificationBanner
-        latestNotice={notices.length > 0 ? notices[0] : null}
+        latestNotice={(() => {
+          // Alleen algemene groepsmededelingen tonen in de zwevende banner, geen persoonlijke shift-wijzigingen
+          const generalNotices = notices.filter(n => !n.targetEmployeeId && n.category !== 'wijziging');
+          return generalNotices.length > 0 ? generalNotices[0] : null;
+        })()}
         onViewSchedule={() => {
           setActiveTab('personeel');
         }}

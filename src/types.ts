@@ -116,6 +116,8 @@ export interface Notice {
   shiftId?: string; // Gekoppelde shift voor directe context
   comments?: NoticeComment[];
   reactions?: { [emoji: string]: string[] }; // emoji -> array of employeeIds who reacted
+  readBy?: string[]; // Medewerkers die dit bericht hebben bekeken / gelezen
+  dismissedBy?: string[]; // Medewerkers die deze melding hebben weggeduwd / gesloten
 }
 
 export interface SwapCandidate {
@@ -186,4 +188,29 @@ export interface AppSettings {
   lastAutoReminderTimestamp?: number;
   updatedAt?: number;
   updatedBy?: string;
+}
+
+export interface TemplateShift {
+  id?: string;
+  day: number; // 0 = Maandag, ..., 6 = Zondag
+  department: Department;
+  startTime: string;
+  endTime: string;
+  role?: string;
+  notes?: string;
+  employeeId?: string; // Optioneel gekoppelde medewerker (bijv. 'emp2' voor Pat) of leeg/open
+  employeeName?: string;
+  preferredStatuut?: EmployeeStatuut;
+}
+
+export interface ScheduleTemplate {
+  id: string;
+  name: string; // bijv. 'Volle bezetting zaterdag'
+  description?: string;
+  category: 'day' | 'weekend' | 'week'; // Type sjabloon
+  targetDay?: number; // 0-6 bij dagsjabloon (bijv. 5 voor Zaterdag)
+  shifts: TemplateShift[];
+  createdAt: number;
+  updatedAt?: number;
+  isBuiltIn?: boolean; // Systeemsjabloon of door beheerder aangemaakt
 }

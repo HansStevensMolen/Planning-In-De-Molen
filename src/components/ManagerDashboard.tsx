@@ -55,7 +55,10 @@ import {
   Edit,
   PenLine,
   Repeat,
-  RefreshCw
+  RefreshCw,
+  BookmarkCheck,
+  BookOpen,
+  TrendingUp
 } from 'lucide-react';
 import { getContinuityInfo, getDayContinuityCandidates, getAllWeekContinuityMatches, ContinuityMatch } from '../utils/continuityUtils';
 import { 
@@ -75,6 +78,9 @@ import SchedulePrintModal from './SchedulePrintModal';
 import PreliminarySchedulePreviewModal from './PreliminarySchedulePreviewModal';
 import ScheduleGanttTimeline from './ScheduleGanttTimeline';
 import AvailabilityGanttTimeline from './AvailabilityGanttTimeline';
+import ScheduleTemplateModal from './ScheduleTemplateModal';
+import StaffHandbookModal from './StaffHandbookModal';
+import StaffWorkedHoursPast4WeeksChart from './StaffWorkedHoursPast4WeeksChart';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
@@ -236,7 +242,7 @@ export default function ManagerDashboard({
   const [managerNoticeReplyText, setManagerNoticeReplyText] = useState<{ [noticeId: string]: string }>({});
 
   // Tabs within manager dashboard: Zaal (IDM zaal), Keuken (IDM keuken), Beschikbaarheden (alleen beheerder!), etc.
-  const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team' | 'tijdlijn'>('zaal');
+  const [activeSubTab, setActiveSubTab] = useState<'zaal' | 'keuken' | 'beschikbaarheid' | 'notificaties' | 'verzoeken' | 'berichten' | 'team' | 'tijdlijn' | 'uren_analyse'>('zaal');
 
   // Availability overview state for managers
   const [selectedManagerWeek, setSelectedManagerWeek] = useState<number>(NEXT_WEEK_NUMBER);
@@ -282,6 +288,9 @@ export default function ManagerDashboard({
   const [showSendWeekScheduleModal, setShowSendWeekScheduleModal] = useState(false);
   const [sendTargetWeek, setSendTargetWeek] = useState<number>(selectedManagerWeek);
   const [showShiftReminderModal, setShowShiftReminderModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [showHandbookModal, setShowHandbookModal] = useState(false);
+  const [handbookInitialSection, setHandbookInitialSection] = useState('all');
   const [reminderToast, setReminderToast] = useState<{
     shiftId: string;
     employeeName: string;
@@ -509,6 +518,17 @@ export default function ManagerDashboard({
         ? `🗑️ Alle ${count} ontwerp/concept-shiften voor Week ${selectedManagerWeek} zijn succesvol gewist.`
         : `🗑️ Alle ${count} diensten voor Week ${selectedManagerWeek} zijn succesvol gewist.`
     );
+    setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
+  };
+
+  // Action: Apply Schedule Template / Preset (e.g. Volle bezetting zaterdag)
+  const handleApplyScheduleTemplate = (newShifts: Shift[], templateName: string, appliedCount: number) => {
+    if (onBatchUpdateShifts) {
+      onBatchUpdateShifts(newShifts, `Sjabloon "${templateName}" toegepast (${appliedCount} diensten ingeladen voor Week ${selectedManagerWeek})`);
+    } else {
+      newShifts.forEach(s => onAddShift(s));
+    }
+    setSixWeeksSuccessMsg(`✅ Sjabloon "${templateName}" succesvol toegepast! ${appliedCount} diensten ingeladen voor Week ${selectedManagerWeek}.`);
     setTimeout(() => setSixWeeksSuccessMsg(null), 6000);
   };
 
@@ -1574,7 +1594,7 @@ export default function ManagerDashboard({
         </div>
 
         {/* Action Buttons Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-10 gap-2.5">
           {/* 1. Publiceer alle diensten */}
           <button
             type="button"
@@ -1812,6 +1832,59 @@ export default function ManagerDashboard({
               </div>
             </div>
           </button>
+
+          {/* 9. Rooster Sjablonen & Presets */}
+          <button
+            type="button"
+            onClick={() => setShowTemplateModal(true)}
+            className="group p-3 bg-gradient-to-br from-amber-600 via-orange-600 to-rose-600 hover:from-amber-700 hover:to-rose-700 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-amber-400/40"
+            title="Sla veelvoorkomende roosterschema's (bijv. 'Volle bezetting zaterdag') op als preset of laad kant-en-klare sjablonen in"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <BookmarkCheck size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Presets
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Rooster Sjablonen
+              </div>
+              <div className="text-[10.5px] text-amber-100 font-medium leading-tight mt-0.5">
+                Volle bezetting zaterdag & presets
+              </div>
+            </div>
+          </button>
+
+          {/* 10. Praktische Richtlijnen & Handboek */}
+          <button
+            type="button"
+            onClick={() => {
+              setHandbookInitialSection('all');
+              setShowHandbookModal(true);
+            }}
+            className="group p-3 bg-gradient-to-br from-cyan-600 to-blue-700 hover:from-cyan-700 hover:to-blue-800 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-cyan-400/30"
+            title="Raadpleeg het personeelshandboek, huisregels, toogafspraken en sluitingschecklist"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <BookOpen size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Handboek
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Praktische Richtlijnen
+              </div>
+              <div className="text-[10.5px] text-cyan-100 font-medium leading-tight mt-0.5">
+                Werkafspraken & checklist
+              </div>
+            </div>
+          </button>
         </div>
       </section>
 
@@ -1981,6 +2054,22 @@ export default function ManagerDashboard({
         >
           <Users size={15} className={activeSubTab === 'team' ? 'text-indigo-600' : 'text-slate-400'} />
           <span>Personeel ({employees.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('uren_analyse')}
+          className={`flex-1 min-w-[135px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'uren_analyse' 
+              ? 'bg-white text-orange-950 shadow-xs ring-1 ring-orange-500/20' 
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <TrendingUp size={15} className={activeSubTab === 'uren_analyse' ? 'text-orange-600' : 'text-slate-400'} />
+          <span>Uren (4 Weken)</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase tracking-wider bg-orange-100 text-orange-950 border border-orange-200">
+            Grafiek
+          </span>
         </button>
 
         <button
@@ -2426,7 +2515,30 @@ export default function ManagerDashboard({
                       <ChevronDown size={13} className={`transition-transform duration-200 ${showAutoPlanPanel ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {/* Secondary actions: Copy & Clear */}
+                    {/* Secondary actions: Sjablonen, Richtlijnen, Copy & Clear */}
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplateModal(true)}
+                      className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl transition cursor-pointer text-xs font-black uppercase flex items-center gap-1.5 shadow-2xs"
+                      title="Sjablonen & Presets beheren en inladen (bijv. Volle bezetting zaterdag)"
+                    >
+                      <BookmarkCheck size={13} className="text-amber-700 stroke-[2.5]" />
+                      <span>Sjablonen</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHandbookInitialSection('all');
+                        setShowHandbookModal(true);
+                      }}
+                      className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-xl transition cursor-pointer text-xs font-black uppercase flex items-center gap-1.5 shadow-2xs"
+                      title="Praktische Richtlijnen, Werkafspraken en Sluitingsprocedure raadplegen"
+                    >
+                      <BookOpen size={13} className="text-blue-600 stroke-[2.5]" />
+                      <span>Richtlijnen</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={handleCopyPreviousWeekRoster}
@@ -2758,6 +2870,29 @@ export default function ManagerDashboard({
                     >
                       <Eye size={13} className="text-purple-600" />
                       <span>Voorlopige Planning</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplateModal(true)}
+                      className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      title="Rooster Sjablonen & Presets openen (bijv. Volle bezetting zaterdag)"
+                    >
+                      <BookmarkCheck size={13} className="text-amber-700 stroke-[2.5]" />
+                      <span>Sjablonen</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHandbookInitialSection('all');
+                        setShowHandbookModal(true);
+                      }}
+                      className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      title="Praktische Richtlijnen & Sluitingsprocedure raadplegen"
+                    >
+                      <BookOpen size={13} className="text-blue-600 stroke-[2.5]" />
+                      <span>Richtlijnen</span>
                     </button>
 
                     <button
@@ -8824,6 +8959,24 @@ export default function ManagerDashboard({
         weekNumber={selectedManagerWeek}
         onSendSingleReminder={handleSendSingleShiftReminder}
         onSendBatchReminders={handleSendBatchReminders}
+      />
+
+      {/* Rooster Sjablonen & Presets Modal */}
+      <ScheduleTemplateModal
+        isOpen={showTemplateModal}
+        onClose={() => setShowTemplateModal(false)}
+        currentWeek={selectedManagerWeek}
+        currentShifts={shifts}
+        employees={employees}
+        availabilities={availabilities}
+        onApplyTemplate={handleApplyScheduleTemplate}
+      />
+
+      {/* Praktische Richtlijnen, Werkafspraken & Sluitingsprocedure Handboek Modal */}
+      <StaffHandbookModal
+        isOpen={showHandbookModal}
+        onClose={() => setShowHandbookModal(false)}
+        initialSection={handbookInitialSection}
       />
 
     </div>
