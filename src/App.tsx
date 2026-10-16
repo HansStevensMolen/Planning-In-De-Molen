@@ -82,6 +82,10 @@ import {
   createAvailabilityReminderNotice, 
   createGroupAvailabilityReminderNotice 
 } from './utils/availabilityReminderUtils';
+import { 
+  findAvailableUnscheduledStaffForShift, 
+  generateFreedShiftNotices 
+} from './utils/freedShiftNotificationUtils';
 
 const DAYS_OF_WEEK = [
   'Maandag',
@@ -715,6 +719,21 @@ export default function App() {
       setNotices(newNoticesList);
       saveNoticesToCloud(newNoticesList);
     }
+
+    // Als de shift zojuist is opengesteld (isOpenShift of 'open_shift'), stuur direct een bericht naar beschikbare personeelsleden die nog niet zijn ingepland
+    const isNowOpen = finalShift.isOpenShift || finalShift.employeeId === 'open_shift';
+    const wasAlreadyOpen = prevShift?.isOpenShift || prevShift?.employeeId === 'open_shift';
+    if (finalShift.status === 'published' && isNowOpen && !wasAlreadyOpen) {
+      const availableStaff = findAvailableUnscheduledStaffForShift(finalShift, employees, nextShifts, availabilities);
+      if (availableStaff.length > 0) {
+        const freedNotices = generateFreedShiftNotices(finalShift, availableStaff);
+        setNotices(prev => {
+          const combined = [...freedNotices, ...prev];
+          saveNoticesToCloud(combined);
+          return combined;
+        });
+      }
+    }
   };
 
   // Action: Delete Shift
@@ -1269,6 +1288,17 @@ export default function App() {
       'Ruilverzoek Ingediend',
       `${requester} vraagt om zijn dienst op ${shift ? DAYS_OF_WEEK[shift.day] : '?' } te ruilen`
     );
+
+    // Stuur direct een bericht/notificatie naar beschikbare personen met niet-ingeplande beschikbaarheden
+    if (shift) {
+      const availableStaff = findAvailableUnscheduledStaffForShift(shift, employees, shifts, availabilities);
+      if (availableStaff.length > 0) {
+        const freedNotices = generateFreedShiftNotices(shift, availableStaff);
+        const nextNotices = [...freedNotices, ...notices];
+        setNotices(nextNotices);
+        saveNoticesToCloud(nextNotices);
+      }
+    }
   };
 
   // Action: Manager approves a shift trade request or assigns an open shift to a candidate
@@ -1373,11 +1403,16 @@ export default function App() {
       category: 'planning',
       author: 'Beheerder'
     };
-    const nextNotices = [notice, ...notices];
+
+    // 4. Stuur direct een persoonlijk bericht naar medewerkers met niet-ingeplande beschikbaarheden
+    const availableStaff = findAvailableUnscheduledStaffForShift(targetShift, employees, nextShifts, availabilities);
+    const personalNotices = generateFreedShiftNotices(targetShift, availableStaff);
+
+    const nextNotices = [...personalNotices, notice, ...notices];
     setNotices(nextNotices);
     saveNoticesToCloud(nextNotices);
 
-    addLog('Dienst Opengesteld', `Dienst op ${dayName} (${targetShift.startTime} - ${targetShift.endTime}) opengesteld voor intekening`);
+    addLog('Dienst Opengesteld', `Dienst op ${dayName} (${targetShift.startTime} - ${targetShift.endTime}) opengesteld voor intekening (${availableStaff.length} beschikbare medewerkers genotificeerd)`);
   };
 
   // Action: Manager creates an open shift directly on the schedule and publishes to swap board
@@ -1418,11 +1453,16 @@ export default function App() {
       category: 'planning',
       author: 'Beheerder'
     };
-    const nextNotices = [notice, ...notices];
+
+    // Stuur direct een persoonlijk bericht naar medewerkers met niet-ingeplande beschikbaarheden
+    const availableStaff = findAvailableUnscheduledStaffForShift(newShift, employees, nextShifts, availabilities);
+    const personalNotices = generateFreedShiftNotices(newShift, availableStaff);
+
+    const nextNotices = [...personalNotices, notice, ...notices];
     setNotices(nextNotices);
     saveNoticesToCloud(nextNotices);
 
-    addLog('Openstaande dienst aangemaakt', `Openstaande dienst op ${dayName} (${newShift.startTime} - ${newShift.endTime}) opengesteld voor intekening [Week ${newShift.weekNumber}]`);
+    addLog('Openstaande dienst aangemaakt', `Openstaande dienst op ${dayName} (${newShift.startTime} - ${newShift.endTime}) opengesteld voor intekening [Week ${newShift.weekNumber}] (${availableStaff.length} beschikbare medewerkers genotificeerd)`);
   };
 
   // Action: Employee signs up as candidate for an open shift

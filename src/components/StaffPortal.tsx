@@ -701,14 +701,15 @@ export default function StaffPortal({
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
   const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
 
-  // Berichten & meldingen over gewijzigde shiften gericht aan deze medewerker (verdwijnt direct zodra bekeken!)
+  // Berichten & meldingen gericht aan deze medewerker (gewijzigd, geannuleerd of vrijgekomen shift waarvoor men beschikbaar is)
+  // Verdwijnt direct zodra het 1 keer bekeken of gesloten is!
   const shiftChangeNotices = notices.filter(n => 
     n.targetEmployeeId === activeEmployeeId && 
-    n.category === 'wijziging' &&
+    (n.category === 'wijziging' || (n.category === 'planning' && n.title.includes('Vrijgekomen'))) &&
     !isNoticeViewed(n)
   );
 
-  // Aantal ongelezen mededelingen voor deze medewerker
+  // Aantal ongelezen mededelingen voor deze medewerker (ongelezen verdwijnen zodra bekeken)
   const unreadNoticesCount = notices.filter(n => {
     if (n.targetEmployeeId && n.targetEmployeeId !== activeEmployeeId) return false;
     return !isNoticeViewed(n);
@@ -719,11 +720,11 @@ export default function StaffPortal({
   const [showReminderModal, setShowReminderModal] = useState<boolean>(false);
   const [hasAutoTriggeredAlert, setHasAutoTriggeredAlert] = useState<boolean>(false);
 
-  // Notificatie wanneer de beheerder een shift heeft gewijzigd
+  // Notificatie wanneer de beheerder een shift heeft gewijzigd of een shift is vrijgekomen
   React.useEffect(() => {
     if (!currentEmployee || shiftChangeNotices.length === 0) return;
     const latestChange = shiftChangeNotices[0];
-    const key = `shift_change_notif_seen_${latestChange.id}`;
+    const key = `shift_alert_notif_seen_${latestChange.id}`;
     if (!sessionStorage.getItem(key)) {
       sessionStorage.setItem(key, 'true');
       playAlertChime();
@@ -2141,50 +2142,74 @@ export default function StaffPortal({
               )
             ) : (
               <div className="space-y-3">
-                {/* Notificatie als de beheerder een shift heeft gewijzigd */}
-                {shiftChangeNotices.length > 0 && (
-                  <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-3.5 sm:p-4 rounded-2xl shadow-md border-2 border-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-xl shrink-0">
-                        🔄
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-full">
-                            Shift Gewijzigd
-                          </span>
-                          <span className="text-xs font-bold text-amber-100">Melding van beheerder</span>
+                {/* Notificatie als de beheerder een shift heeft gewijzigd of er een shift is vrijgekomen */}
+                {shiftChangeNotices.length > 0 && (() => {
+                  const notice = shiftChangeNotices[0];
+                  const isFreedShift = notice.title.includes('Vrijgekomen');
+
+                  return (
+                    <div className={`p-3.5 sm:p-4 rounded-2xl shadow-md border-2 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in ${
+                      isFreedShift
+                        ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 border-emerald-300'
+                        : 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 border-amber-300'
+                    }`}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-xl shrink-0">
+                          {isFreedShift ? '🔔' : '🔄'}
                         </div>
-                        <p className="text-xs font-black text-white mt-0.5">
-                          {shiftChangeNotices[0].title}
-                        </p>
-                        <p className="text-[11px] text-amber-100 font-medium">
-                          {shiftChangeNotices[0].content}
-                        </p>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-full">
+                              {isFreedShift ? 'Shift Vrijgekomen' : 'Shift Gewijzigd'}
+                            </span>
+                            <span className="text-xs font-bold text-white/90">
+                              {isFreedShift ? 'Jij bent beschikbaar!' : 'Melding van beheerder'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-black text-white mt-0.5">
+                            {notice.title}
+                          </p>
+                          <p className="text-[11px] text-white/90 font-medium">
+                            {notice.content}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isFreedShift ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleMarkNoticeAsViewed(notice.id);
+                              setShowOpenShiftsModal(true);
+                            }}
+                            className="px-3.5 py-1.5 bg-white text-emerald-800 hover:bg-emerald-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+                          >
+                            Claim Dienst 🙋
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleMarkNoticeAsViewed(notice.id);
+                              setActiveSubTab('berichten');
+                            }}
+                            className="px-3.5 py-1.5 bg-white text-orange-700 hover:bg-orange-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
+                          >
+                            Bekijk Bericht 💬
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleMarkNoticeAsViewed(notice.id)}
+                          className="p-1.5 bg-black/25 hover:bg-black/40 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
+                          title="Sluit melding (verdwijnt direct zodra bekeken)"
+                        >
+                          <X size={16} />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleMarkNoticeAsViewed(shiftChangeNotices[0].id);
-                          setActiveSubTab('berichten');
-                        }}
-                        className="px-3.5 py-1.5 bg-white text-orange-700 hover:bg-orange-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition active:scale-95 cursor-pointer shrink-0"
-                      >
-                        Bekijk Bericht 💬
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleMarkNoticeAsViewed(shiftChangeNotices[0].id)}
-                        className="p-1.5 bg-black/25 hover:bg-black/40 text-white rounded-xl transition cursor-pointer flex items-center justify-center"
-                        title="Sluit melding (verdwijnt direct)"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Kleur-indicatoren Legende voor het personeelsrooster */}
                 <div className="bg-white p-3 rounded-2xl border-2 border-slate-200 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">

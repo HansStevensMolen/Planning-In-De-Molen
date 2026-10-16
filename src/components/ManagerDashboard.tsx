@@ -81,6 +81,7 @@ import AvailabilityGanttTimeline from './AvailabilityGanttTimeline';
 import ScheduleTemplateModal from './ScheduleTemplateModal';
 import StaffHandbookModal from './StaffHandbookModal';
 import StaffWorkedHoursPast4WeeksChart from './StaffWorkedHoursPast4WeeksChart';
+import { findAvailableUnscheduledStaffForShift } from '../utils/freedShiftNotificationUtils';
 import { downloadInDeMolenPdf } from '../utils/inDeMolenPdfGenerator';
 import { EmployeeAvatarModal } from './EmployeeAvatarModal';
 import ShiftReminderModal from './ShiftReminderModal';
@@ -1882,6 +1883,31 @@ export default function ManagerDashboard({
               </div>
               <div className="text-[10.5px] text-cyan-100 font-medium leading-tight mt-0.5">
                 Werkafspraken & checklist
+              </div>
+            </div>
+          </button>
+
+          {/* 11. Gewerkte Uren Analyse (Recharts Grafiek) */}
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('uren_analyse')}
+            className="group p-3 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700 hover:from-emerald-700 hover:to-cyan-800 active:scale-98 text-white rounded-2xl shadow-sm hover:shadow-md transition text-left flex flex-col justify-between cursor-pointer border border-emerald-400/30"
+            title="Bekijk de Recharts interactieve grafiek van alle gewerkte uren per medewerker over de afgelopen 4 weken"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                <TrendingUp size={17} className="stroke-[2.5]" />
+              </div>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/25 text-white">
+                Grafiek
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-black uppercase tracking-tight leading-tight group-hover:translate-x-0.5 transition-transform">
+                Gewerkte Uren (4w)
+              </div>
+              <div className="text-[10.5px] text-emerald-100 font-medium leading-tight mt-0.5">
+                Recharts analyse per persoon
               </div>
             </div>
           </button>
@@ -3932,6 +3958,37 @@ export default function ManagerDashboard({
               </span>
               <span>Vaste kracht onder norm (&lt;42u contract)</span>
             </span>
+          </div>
+
+          {/* Quick link banner naar 4-Weken Recharts Grafiek */}
+          <div className="mt-4 bg-gradient-to-r from-orange-50 via-amber-50 to-emerald-50 p-3.5 sm:p-4 rounded-2xl border-2 border-orange-200/90 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-orange-500 to-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-orange-500/20">
+                <TrendingUp size={18} className="stroke-[2.5]" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">
+                    Gewerkte Uren per Medewerker (Afgelopen 4 Weken)
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-orange-100 text-orange-950 border border-orange-200">
+                    Recharts
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                  Vergelijk urenverdeling, gemiddelden per week, normen en Zaal vs Keuken in een interactieve staafgrafiek.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('uren_analyse')}
+              className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+            >
+              <span>Bekijk 4-Weken Grafiek 📊</span>
+              <ChevronRight size={14} />
+            </button>
           </div>
         </div>
         );
@@ -6399,6 +6456,17 @@ export default function ManagerDashboard({
         </div>
       )}
 
+      {/* 5. UREN ANALYSE TAB (4 WEKEN RECHARTS GRAFIEK) */}
+      {activeSubTab === 'uren_analyse' && (
+        <div className="space-y-6 font-sans animate-in fade-in duration-200">
+          <StaffWorkedHoursPast4WeeksChart
+            employees={employees}
+            shifts={shifts}
+            defaultReferenceWeek={selectedManagerWeek}
+          />
+        </div>
+      )}
+
 
       {/* BEHEERDER BESCHIKBAARHEID INGEVEN / BEWERKEN MODAL */}
       {showEnterAvailabilityModal && (() => {
@@ -7310,6 +7378,56 @@ export default function ManagerDashboard({
                     {selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift' ? '✓ Opengezet' : '+ Openzetten'}
                   </button>
                 </div>
+
+                {/* Beschikbare & niet-ingeplande medewerkers live indicator */}
+                {Boolean(selectedShift.isOpenShift || selectedShift.employeeId === 'open_shift') && (() => {
+                  const candidateShift: Shift = {
+                    id: selectedShift.id || 'preview_id',
+                    employeeId: selectedShift.employeeId || 'open_shift',
+                    day: currentDayIndex,
+                    weekNumber: modalWeekNumber,
+                    startTime: selectedShift.startTime || '12:00',
+                    endTime: selectedShift.endTime || '20:00',
+                    department: selectedShift.department || 'zaal',
+                    acknowledged: false,
+                    status: 'published'
+                  };
+                  const eligibleStaff = findAvailableUnscheduledStaffForShift(candidateShift, employees, shifts, availabilities);
+
+                  return (
+                    <div className="bg-emerald-50/90 border border-emerald-300 rounded-2xl p-3 text-xs space-y-2 animate-in fade-in">
+                      <div className="flex items-center justify-between font-bold text-emerald-900">
+                        <span className="flex items-center gap-1.5 font-black uppercase text-[11px]">
+                          <span>🔔 Beschikbare personen voor deze dienst:</span>
+                          <span className="bg-emerald-200 text-emerald-950 px-2 py-0.5 rounded-full text-[10px]">
+                            {eligibleStaff.length} beschikbaar
+                          </span>
+                        </span>
+                        <span className="text-[10px] text-emerald-800 font-semibold">
+                          Niet ingepland op {DAYS_OF_WEEK[currentDayIndex]}
+                        </span>
+                      </div>
+                      {eligibleStaff.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {eligibleStaff.map(emp => (
+                            <span key={emp.id} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-emerald-250 text-emerald-950 text-[11px] font-bold shadow-2xs">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <span>{emp.name}</span>
+                              <span className="text-[10px] text-slate-500 font-normal">({emp.department})</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-emerald-800 italic">
+                          Er zijn momenteel geen medewerkers die beschikbaar hebben opgegeven en nog vrij zijn op {DAYS_OF_WEEK[currentDayIndex]}.
+                        </p>
+                      )}
+                      <p className="text-[10px] text-emerald-700 font-medium">
+                        💡 Deze beschikbare personen ontvangen automatisch een direct bericht in hun portaal zodra deze dienst wordt vrijgegeven!
+                      </p>
+                    </div>
+                  );
+                })()}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
