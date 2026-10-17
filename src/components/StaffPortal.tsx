@@ -26,6 +26,7 @@ import {
   Edit3,
   Shield,
   ChevronRight,
+  ChevronLeft,
   Info,
   Download,
   BookOpen,
@@ -95,7 +96,8 @@ import {
   getAutoArchivedWeeks,
   SPECIAL_DAYS_WEEK_NUMBER,
   SPECIAL_DAYS_LIST,
-  isSpecialDaysWeek
+  isSpecialDaysWeek,
+  isRecurringApplicableToWeek
 } from '../utils/weekUtils';
 import { sortEmployeesByFirstName, parseStartTimeToMinutes, deduplicateEmployees } from '../utils/employeeSortUtils';
 import StaffHoursTracker from './StaffHoursTracker';
@@ -519,7 +521,7 @@ export default function StaffPortal({
   const [recurringDays, setRecurringDays] = useState<RecurringShiftPreference[]>(() => {
     return Array.from({ length: 7 }, (_, i) => ({
       day: i,
-      status: 'available' as const,
+      status: 'unavailable' as const,
       startTime: 'Open',
       endTime: 'Sluit',
       notes: ''
@@ -540,9 +542,10 @@ export default function StaffPortal({
       setRecurringFrequency('every_week');
       setRecurringActive(true);
       setRecurringNotes('');
+      // Standaard beginnen met niet-beschikbaar zodat enkel de vaste werkdagen worden aangeduid
       setRecurringDays(Array.from({ length: 7 }, (_, i) => ({
         day: i,
-        status: 'available' as const,
+        status: 'unavailable' as const,
         startTime: 'Open',
         endTime: 'Sluit',
         notes: ''
@@ -566,23 +569,105 @@ export default function StaffPortal({
     };
 
     onUpdateEmployee(updatedEmp);
-    setSuccessMsg('🔁 Je vaste beschikbaarheid is succesvol opgeslagen! De beheerder kan dit direct meenemen in de planning.');
-    setTimeout(() => setSuccessMsg(null), 5000);
+
+    // Zorg dat in alle weken ENKEL de dag(en) van hun vaste beschikbaarheid aangeduid staan als beschikbaar!
+    // We synchroniseren dit direct naar alle actieve weken in de database.
+    if (recurringActive) {
+      staffActiveWeeks.forEach(w => {
+        if (w.weekNumber === SPECIAL_DAYS_WEEK_NUMBER) return;
+        const isApp = isRecurringApplicableToWeek(recurringFrequency, w.weekNumber);
+        
+        // Kijk of er al een bestaande opgave voor deze week was (bijv. een eerdere afmelding)
+        const existingForWeek = availabilities.find(a => a.employeeId === currentEmployee.id && a.weekNumber === w.weekNumber);
+        
+        const weekDays: DayAvailability[] = Array.from({ length: 7 }, (_, dIdx) => {
+          if (!isApp) {
+            return {
+              day: dIdx,
+              status: 'unavailable',
+              startTime: 'Open',
+              endTime: 'Sluit',
+              notes: 'Niet inzetbaar in deze week (vaste cyclus)'
+            };
+          }
+          const rd = recurringDays.find(x => x.day === dIdx);
+          const isFixed = Boolean(rd && (rd.status === 'available' || rd.status === 'preferred'));
+          const existingDay = existingForWeek?.days?.find(x => x.day === dIdx);
+
+          if (isFixed) {
+            // Als er reeds een specifieke afmelding was voor deze vaste dag, behoud die afmelding
+            if (existingDay && existingDay.status === 'unavailable') {
+              return {
+                day: dIdx,
+                status: 'unavailable',
+                startTime: 'Open',
+                endTime: 'Sluit',
+                notes: existingDay.notes || 'Afgemeld voor deze vaste dag'
+              };
+            }
+            return {
+              day: dIdx,
+              status: rd!.status,
+              startTime: normalizeAvailabilityTime(rd!.startTime) || 'Open',
+              endTime: normalizeAvailabilityTime(rd!.endTime) || 'Sluit',
+              notes: rd!.notes || ''
+            };
+          }
+
+          // Niet-vaste dagen zijn ALTIJD niet-beschikbaar in alle weken
+          return {
+            day: dIdx,
+            status: 'unavailable',
+            startTime: 'Open',
+            endTime: 'Sluit',
+            notes: ''
+          };
+        });
+
+        onUpdateAvailability(currentEmployee.id, w.weekNumber, weekDays);
+      });
+    }
+
+    setSuccessMsg('🔁 Je vaste beschikbaarheid is succesvol opgeslagen! In alle weken staan nu enkel jouw vaste werkdag(en) op beschikbaar.');
+    setTimeout(() => setSuccessMsg(null), 6000);
   };
 
   const handleApplyRecurringToSelectedWeek = () => {
-    if (!currentEmployee?.recurringAvailability?.days) return;
+    const rec = currentEmployee?.recurringAvailability;
+    if (!rec?.days) return;
+    const isApplicableWeek = isRecurringApplicableToWeek(rec.frequency, selectedWeek);
     const newTemp: Record<number, { status: DayAvailability['status'], notes: string, startTime?: string, endTime?: string }> = {};
-    currentEmployee.recurringAvailability.days.forEach(rd => {
-      newTemp[rd.day] = {
-        status: rd.status,
-        notes: rd.notes || '',
-        startTime: rd.startTime || 'Open',
-        endTime: rd.endTime || 'Sluit'
-      };
-    });
+
+    for (let d = 0; d < 7; d++) {
+      if (isApplicableWeek) {
+        const rd = rec.days.find(x => x.day === d);
+        if (rd && (rd.status === 'available' || rd.status === 'preferred')) {
+          newTemp[d] = {
+            status: rd.status,
+            notes: rd.notes || '',
+            startTime: normalizeAvailabilityTime(rd.startTime) || 'Open',
+            endTime: normalizeAvailabilityTime(rd.endTime) || 'Sluit'
+          };
+        } else {
+          newTemp[d] = {
+            status: 'unavailable',
+            notes: '',
+            startTime: 'Open',
+            endTime: 'Sluit'
+          };
+        }
+      } else {
+        newTemp[d] = {
+          status: 'unavailable',
+          notes: 'Niet inzetbaar in deze week (vaste cyclus)',
+          startTime: 'Open',
+          endTime: 'Sluit'
+        };
+      }
+    }
+
     setTempAvailability(newTemp);
-    setSuccessMsg(`⚡ Jouw vaste beschikbaarheid is overgenomen voor Week ${selectedWeek}! Klik hieronder op "Opslaan & Versturen" om te bevestigen.`);
+    setSuccessMsg(`⚡ Jouw vaste beschikbaarheid is overgenomen voor Week ${selectedWeek}! Enkel je vaste dag(en) staan op beschikbaar. Klik hieronder op "Opslaan & Versturen" om te bevestigen.`);
     setTimeout(() => setSuccessMsg(null), 5000);
   };
 
@@ -622,29 +707,91 @@ export default function StaffPortal({
   React.useEffect(() => {
     const existing = availabilities.find(a => a.employeeId === activeEmployeeId && a.weekNumber === selectedWeek);
     const initialTemp: Record<number, { status: DayAvailability['status'], notes: string, startTime?: string, endTime?: string }> = {};
-    
-    // Default 7 days to 'available'
+
+    const rec = currentEmployee?.recurringAvailability;
+    const hasRecurring = Boolean(rec?.active && rec.days && rec.days.length > 0);
+    const isApplicableWeek = hasRecurring && isRecurringApplicableToWeek(rec?.frequency, selectedWeek);
+
+    // Initialiseer de 7 dagen van de week:
+    // Als personeel vaste beschikbaarheid heeft ingesteld:
+    // Staan in ALLE weken ENKEL de dag(en) van hun vaste beschikbaarheid aangeduid als beschikbaar!
+    // Alle overige dagen zijn standaard 'unavailable' (Niet-beschikbaar).
     for (let d = 0; d < 7; d++) {
-      initialTemp[d] = {
-        status: 'available',
-        notes: '',
-        startTime: 'Open',
-        endTime: 'Sluit'
-      };
-    }
-    
-    if (existing) {
-      existing.days.forEach(dayAvail => {
-        initialTemp[dayAvail.day] = {
-          status: dayAvail.status,
-          notes: dayAvail.notes || '',
-          startTime: normalizeAvailabilityTime(dayAvail.startTime) || 'Open',
-          endTime: normalizeAvailabilityTime(dayAvail.endTime) || 'Sluit'
+      if (hasRecurring) {
+        if (isApplicableWeek) {
+          const recDay = rec!.days.find(rd => rd.day === d);
+          if (recDay && (recDay.status === 'available' || recDay.status === 'preferred')) {
+            initialTemp[d] = {
+              status: recDay.status,
+              notes: recDay.notes || '',
+              startTime: normalizeAvailabilityTime(recDay.startTime) || 'Open',
+              endTime: normalizeAvailabilityTime(recDay.endTime) || 'Sluit'
+            };
+          } else {
+            initialTemp[d] = {
+              status: 'unavailable',
+              notes: '',
+              startTime: 'Open',
+              endTime: 'Sluit'
+            };
+          }
+        } else {
+          initialTemp[d] = {
+            status: 'unavailable',
+            notes: 'Niet inzetbaar in deze week (vaste cyclus)',
+            startTime: 'Open',
+            endTime: 'Sluit'
+          };
+        }
+      } else {
+        // Medewerkers zonder vaste beschikbaarheid: standaard 7 dagen open
+        initialTemp[d] = {
+          status: 'available',
+          notes: '',
+          startTime: 'Open',
+          endTime: 'Sluit'
         };
+      }
+    }
+
+    // Als er al een expliciete opgave voor deze week is ingediend (bijv. een eerdere afmelding voor een vaste werkdag):
+    if (existing && existing.days) {
+      existing.days.forEach(dayAvail => {
+        if (hasRecurring) {
+          const recDay = rec!.days.find(rd => rd.day === dayAvail.day);
+          const isFixed = Boolean(recDay && (recDay.status === 'available' || recDay.status === 'preferred'));
+          if (isFixed) {
+            // Indien afgemeld voor deze vaste dag
+            if (dayAvail.status === 'unavailable') {
+              initialTemp[dayAvail.day] = {
+                status: 'unavailable',
+                notes: dayAvail.notes || 'Afgemeld voor deze vaste dag',
+                startTime: 'Open',
+                endTime: 'Sluit'
+              };
+            } else {
+              initialTemp[dayAvail.day] = {
+                status: dayAvail.status,
+                notes: dayAvail.notes || '',
+                startTime: normalizeAvailabilityTime(dayAvail.startTime) || normalizeAvailabilityTime(recDay?.startTime) || 'Open',
+                endTime: normalizeAvailabilityTime(dayAvail.endTime) || normalizeAvailabilityTime(recDay?.endTime) || 'Sluit'
+              };
+            }
+          }
+          // Niet-vaste dagen blijven ALTIJD 'unavailable' (enkel vaste dagen staan als beschikbaar aangeduid)
+        } else {
+          initialTemp[dayAvail.day] = {
+            status: dayAvail.status,
+            notes: dayAvail.notes || '',
+            startTime: normalizeAvailabilityTime(dayAvail.startTime) || 'Open',
+            endTime: normalizeAvailabilityTime(dayAvail.endTime) || 'Sluit'
+          };
+        }
       });
     }
+
     setTempAvailability(initialTemp);
-  }, [activeEmployeeId, selectedWeek, availabilities]);
+  }, [activeEmployeeId, selectedWeek, availabilities, currentEmployee?.recurringAvailability]);
 
   // Active weeks vs automatically archived previous weeks
   const staffActiveWeeks = getAutoActiveWeeks(CURRENT_WEEK_NUMBER, [], shifts);
@@ -700,6 +847,36 @@ export default function StaffPortal({
   // VISUEEL ALARM & PUSH NOTIFICATIE: Diensten binnen 24 uur die nog NIET zijn bevestigd ("Gezien")
   const unconfirmedShifts24h = upcomingShifts24h.filter(d => !d.shift.acknowledged);
   const hasUnconfirmedShifts24h = unconfirmedShifts24h.length > 0;
+
+  // Alle aankomende gepubliceerde diensten voor deze medewerker (chronologisch geordend vanaf nu)
+  const myUpcomingShifts = React.useMemo(() => {
+    return allPersonalPublishedShifts
+      .map(sh => {
+        const week = sh.weekNumber || CURRENT_WEEK_NUMBER;
+        const { startDate, endDate } = getShiftStartAndEndDates(sh, week);
+        const alert24 = getShift24HourDetails(sh, currentTime);
+        const durationHours = calculateShiftDurationHours(sh.startTime, sh.endTime, sh.day, sh.notes);
+        const isPast = endDate.getTime() < currentTime.getTime();
+        const isOngoing = startDate.getTime() <= currentTime.getTime() && endDate.getTime() > currentTime.getTime();
+        return {
+          shift: sh,
+          week,
+          startDate,
+          endDate,
+          alert24,
+          durationHours,
+          isPast,
+          isOngoing,
+          formattedDate: startDate.toLocaleDateString('nl-BE', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long'
+          })
+        };
+      })
+      .filter(item => !item.isPast)
+      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+  }, [allPersonalPublishedShifts, currentTime]);
 
   // Berichten & meldingen gericht aan deze medewerker (gewijzigd, geannuleerd of vrijgekomen shift waarvoor men beschikbaar is)
   // Verdwijnt direct zodra het 1 keer bekeken of gesloten is!
@@ -997,7 +1174,7 @@ export default function StaffPortal({
   return (
     <div className="space-y-6 font-sans">
       
-      {/* 1. Eenvoudige Header */}
+      {/* 1. Eenvoudige Header & Logo */}
       <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="bg-white p-1 rounded-xl border border-orange-200 shadow-xs shrink-0 flex items-center justify-center">
@@ -1010,158 +1187,122 @@ export default function StaffPortal({
         </div>
       </div>
 
-      {/* Persoonlijke sessie & account balk */}
-      <div className="bg-slate-900 text-white rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shadow-md border border-slate-800">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white font-black flex items-center justify-center text-sm shadow-sm overflow-hidden shrink-0">
-            {currentEmployee.avatarUrl ? (
-              <img src={currentEmployee.avatarUrl} alt={currentEmployee.name} className="w-full h-full object-cover" />
-            ) : (
-              currentEmployee.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
-            )}
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-extrabold text-sm text-white">{currentEmployee.name}</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                <ShieldCheck size={11} className="text-emerald-400" />
-                <span>Persoonlijk Ingelogd</span>
-              </span>
-            </div>
-            <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
-              <span>{currentEmployee.department === 'keuken' ? '👨‍🍳 Keuken' : '🍽️ Zaal'}</span>
-              <span>•</span>
-              <span className="text-slate-300 font-semibold">{currentEmployee.statuut}</span>
-              <span>•</span>
-              <span className="flex items-center gap-1 text-slate-400">
-                <KeyRound size={11} className="text-orange-400" />
-                <span>PIN: ••••</span>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <PWAInstallButton variant="header" />
-
-          <button
-            type="button"
-            onClick={() => {
-              setHandbookInitialSection('all');
-              setShowHandbookModal(true);
-            }}
-            className="flex-1 sm:flex-none px-3.5 py-2 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm cursor-pointer whitespace-nowrap border border-amber-400/40"
-            title="Praktische Richtlijnen, Huisregels, Werkafspraken en Sluitingsprocedure raadplegen"
-          >
-            <BookOpen size={13} className="stroke-[2.5]" />
-            <span>📖 Richtlijnen</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleOpenEditMyProfile}
-            className="flex-1 sm:flex-none px-3.5 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm cursor-pointer whitespace-nowrap"
-            title="Geef zelf je naam, GSM, Facebookprofiel en persoonlijke pincode in"
-          >
-            <Edit3 size={13} />
-            <span>Mijn Gegevens & PIN</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleStaffLogout}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-rose-950/60 hover:text-rose-200 text-slate-300 border border-slate-700 hover:border-rose-800/60 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer whitespace-nowrap"
-            title="Log uit van dit apparaat"
-          >
-            <LogOut size={13} />
-            <span>Uitloggen</span>
-          </button>
-        </div>
-      </div>
-
       {/* Success Notification Alert */}
       {successMsg && (
-        <div className="bg-emerald-100 text-emerald-950 font-bold rounded-2xl p-3.5 border border-emerald-300 flex items-center space-x-2.5 text-xs shadow-xs">
+        <div className="bg-emerald-100 text-emerald-950 font-bold rounded-2xl p-3.5 border border-emerald-300 flex items-center space-x-2.5 text-xs shadow-xs animate-in fade-in">
           <Check size={16} className="shrink-0 text-emerald-600 stroke-[3]" />
           <span>{successMsg}</span>
         </div>
       )}
 
-      {/* Automatische In-App Dienstherinnering (< 24 uur) */}
-      {upcomingShifts24h.length > 0 && currentEmployee && (
-        <div 
-          onClick={() => setShowReminderModal(true)}
-          className={`p-4 sm:p-5 rounded-3xl shadow-xl border-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:scale-[1.008] transition-all duration-200 animate-in slide-in-from-top-3 ${
-            hasUnconfirmedShifts24h
-              ? 'bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 border-red-300 text-white'
-              : 'bg-gradient-to-r from-amber-500 via-orange-500 to-teal-600 border-amber-300 text-white'
-          }`}
-        >
+      {/* 1 DUIDELIJKE RUBRIEK WAARIN PERSOONLIJKE GEGEVENS AANGEPAST KUNNEN WORDEN (GEEN DUBBELE NAAM OF FOTO) */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border-2 border-orange-100 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 shadow-inner border border-white/30">
-              <span className="relative flex h-7 w-7 items-center justify-center">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white/40 opacity-75" />
-                <BellRing size={26} className="relative inline-flex text-white" />
-              </span>
+            <div 
+              className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center font-black text-lg text-white shadow-md uppercase shrink-0 ring-4 ring-orange-100"
+              style={{ backgroundColor: currentEmployee.color || '#ea580c' }}
+            >
+              {currentEmployee.avatarUrl ? (
+                <img src={currentEmployee.avatarUrl} alt={currentEmployee.name} className="w-full h-full object-cover" />
+              ) : (
+                currentEmployee.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
+              )}
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] font-black uppercase tracking-widest bg-white/25 px-2.5 py-0.5 rounded-full">
-                  ⏰ Dienst Herinnering (&lt; 24 Uur)
+                <h2 className="text-lg font-black text-slate-900 tracking-tight">{currentEmployee.name}</h2>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  <ShieldCheck size={12} className="text-emerald-600" />
+                  <span>Persoonlijk Ingelogd</span>
                 </span>
-                <span className="bg-white text-slate-900 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-2xs">
-                  {nextUrgentShift?.timeRemainingText}
-                </span>
-                {hasUnconfirmedShifts24h ? (
-                  <span className="bg-red-950 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-red-400 animate-pulse">
-                    Nog niet bevestigd!
-                  </span>
-                ) : (
-                  <span className="bg-emerald-900 text-emerald-100 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-emerald-400">
-                    ✓ Al Akkoord
-                  </span>
-                )}
               </div>
-              <h3 className="text-sm sm:text-base font-black uppercase tracking-tight text-white mt-1">
-                {nextUrgentShift?.isOngoing ? 'Je dienst is NU bezig!' : `Je dienst begint op ${nextUrgentShift?.dayLabel} (${nextUrgentShift?.shift.startTime} - ${nextUrgentShift?.shift.endTime})!`}
-              </h3>
-              <p className="text-xs text-white/90 font-medium">
-                {hasUnconfirmedShifts24h
-                  ? `Hallo ${currentEmployee.name}, je dienst staat nog niet op 'Gezien'. Klik hier om direct te bevestigen!`
-                  : `Hallo ${currentEmployee.name}, je dienst is al bevestigd. Zorg dat je tijdig aanwezig bent in Café In De Molen!`}
-              </p>
+              <div className="text-xs text-slate-500 font-semibold flex items-center gap-2 mt-1 flex-wrap">
+                <span className="px-2 py-0.5 rounded-lg bg-orange-50 text-orange-800 border border-orange-200">
+                  {currentEmployee.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
+                </span>
+                <span>•</span>
+                <span className="text-slate-700 font-bold">{currentEmployee.statuut}</span>
+                <span>•</span>
+                <span className="flex items-center gap-1 text-slate-600 font-medium">
+                  <KeyRound size={12} className="text-orange-500" />
+                  <span>PIN: ••••</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
-            {hasUnconfirmedShifts24h && nextUrgentShift && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAcknowledgeClick(nextUrgentShift.shift.id);
-                  playAlertChime();
-                }}
-                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <Check size={15} className="stroke-[3]" />
-                <span>Nu Bevestigen</span>
-              </button>
-            )}
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto">
+            <PWAInstallButton variant="header" />
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowReminderModal(true);
-              }}
-              className="w-full sm:w-auto px-4.5 py-2.5 bg-white hover:bg-slate-100 text-slate-900 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+              onClick={handleOpenEditMyProfile}
+              className="flex-1 sm:flex-none px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 transition active:scale-95 shadow-sm cursor-pointer whitespace-nowrap"
+              title="Geef zelf je naam, GSM, Facebookprofiel en persoonlijke pincode in"
             >
-              <span>Bekijk Herinnering</span>
-              <ChevronRight size={14} />
+              <Edit3 size={14} className="stroke-[2.5]" />
+              <span>Persoonlijke gegevens &amp; PIN aanpassen</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleStaffLogout}
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-200 hover:border-rose-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer whitespace-nowrap"
+              title="Log uit van dit apparaat"
+            >
+              <LogOut size={14} />
+              <span>Uitloggen</span>
             </button>
           </div>
         </div>
-      )}
+
+        {/* Compacte contactgegevens & profiel koppelingen */}
+        <div className="pt-3 border-t border-slate-150 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider">Contact &amp; Profiel:</span>
+            {currentEmployee.phone ? (
+              <a
+                href={`tel:${currentEmployee.phone.replace(/\s+/g, '')}`}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-50 hover:bg-orange-50 text-slate-800 hover:text-orange-900 border border-slate-200 hover:border-orange-200 font-bold transition shadow-2xs"
+                title="Bellen"
+              >
+                <Phone size={12} className="text-orange-500" />
+                <span>{currentEmployee.phone}</span>
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenEditMyProfile}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs cursor-pointer shadow-2xs"
+              >
+                <Phone size={12} className="text-amber-600" />
+                <span>+ GSM toevoegen</span>
+              </button>
+            )}
+
+            {currentEmployee.facebookUrl ? (
+              <a
+                href={currentEmployee.facebookUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 font-bold transition shadow-2xs"
+              >
+                <Facebook size={12} className="text-blue-600" />
+                <span>Facebook profiel</span>
+                <ExternalLink size={10} className="text-blue-400" />
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenEditMyProfile}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-700 border border-slate-200 font-bold text-xs cursor-pointer shadow-2xs"
+              >
+                <Facebook size={12} className="text-blue-500" />
+                <span>+ Facebook toevoegen</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Push-Notificaties Inschakelen Prompt (indien nog niet geactiveerd) */}
       {isPushNotificationSupported() && pushStatus === 'default' && currentEmployee && (
@@ -1198,586 +1339,340 @@ export default function StaffPortal({
         </div>
       )}
 
-      {/* Openstaande Diensten Clickable Alert & Pop-up Trigger */}
-      {availableOpenShifts.length > 0 && currentEmployee && (
-        <div 
-          onClick={() => setShowOpenShiftsModal(true)}
-          className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-4 sm:p-4.5 rounded-3xl shadow-lg border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 cursor-pointer hover:shadow-xl hover:scale-[1.008] transition-all duration-200 animate-in fade-in"
-        >
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 shadow-inner">
-              📢
+      {/* 2. DAARONDER HUN AANKOMENDE DIENSTEN */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border-2 border-orange-100 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center shrink-0 shadow-xs">
+              <Clock size={20} className="stroke-[2.5]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase tracking-widest text-amber-100 bg-white/20 px-2.5 py-0.5 rounded-full">
-                  Oproep Open Diensten
+              <h3 className="font-black text-sm sm:text-base text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                <span>Jouw Aankomende Diensten</span>
+                <span className="text-[10px] font-black bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full border border-orange-200">
+                  {myUpcomingShifts.length} {myUpcomingShifts.length === 1 ? 'dienst' : 'diensten'}
                 </span>
-                <span className="bg-white text-orange-700 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full shadow-2xs">
-                  {availableOpenShifts.length} {availableOpenShifts.length === 1 ? 'Open Dienst' : 'Open Diensten'}
-                </span>
-              </div>
-              <h3 className="text-sm sm:text-base font-black uppercase tracking-tight text-white mt-1">
-                Er zijn openstaande diensten beschikbaar! Klik hier om in te vullen ⚡
               </h3>
-              <p className="text-xs text-amber-100 font-medium">
-                Hallo {currentEmployee.name}, klik op dit venster om direct een openstaande shift te kiezen en jezelf in te roosteren.
+              <p className="text-xs text-slate-500 font-medium">
+                Overzicht van je ingeplande shifts in Café In De Molen
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowOpenShiftsModal(true);
-            }}
-            className="w-full sm:w-auto px-4.5 py-2.5 bg-white hover:bg-orange-50 text-orange-700 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 shrink-0"
-          >
-            <Sparkles size={14} className="text-orange-500 animate-pulse" />
-            <span>Open Pop-up Venster</span>
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      )}
 
-      {currentEmployee && (
-        <>
-          {/* Welcome & Contact Quickbar */}
-          <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col gap-3">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center space-x-3">
-                <div 
-                  className="w-11 h-11 rounded-xl overflow-hidden flex items-center justify-center font-black text-sm text-white shadow-xs uppercase shrink-0"
-                  style={{ backgroundColor: currentEmployee.color }}
-                >
-                  {currentEmployee.avatarUrl ? (
-                    <img src={currentEmployee.avatarUrl} alt={currentEmployee.name} className="w-full h-full object-cover" />
-                  ) : (
-                    currentEmployee.name.split(' ').map(n => n[0]).join('')
-                  )}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-black text-slate-800">Hallo, {currentEmployee.name}!</h2>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">
-                      {currentEmployee.department === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 font-medium mt-0.5">
-                    {currentEmployee.statuut}
-                  </p>
-                </div>
-              </div>
-
-              {hasUnconfirmedShifts24h ? (
-                <div className="bg-gradient-to-r from-red-600 to-rose-600 text-white px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-md animate-pulse">
-                  <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
-                  <span>🚨 {unconfirmedShifts24h.length} dienst(en) &lt;24u niet bevestigd!</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowReminderModal(true)}
-                    className="ml-1 bg-white text-red-700 hover:bg-red-50 text-[10px] font-black uppercase px-2 py-0.5 rounded-md transition cursor-pointer shadow-xs active:scale-95"
-                  >
-                    Herinnering 📜
-                  </button>
-                </div>
-              ) : unconfirmedShifts.length > 0 ? (
-                <div className="bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5">
-                  <AlertTriangle size={14} className="text-amber-600 shrink-0" />
-                  <span>{unconfirmedShifts.length} dienst(en) te bevestigen</span>
-                </div>
-              ) : (
-                <div className="bg-emerald-50 text-emerald-900 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5">
-                  <CheckCheck size={14} className="text-emerald-600 shrink-0" />
-                  <span>Rooster bevestigd ✓</span>
-                </div>
-              )}
+          {unconfirmedShifts24h.length > 0 && (
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-red-100 border border-red-300 text-red-800 text-xs font-black uppercase tracking-tight animate-pulse shadow-xs">
+              <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+              <span>🚨 {unconfirmedShifts24h.length} dienst(en) &lt;24u nog te bevestigen!</span>
             </div>
-
-            {/* Compacte contactgegevens */}
-            <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                {currentEmployee.phone ? (
-                  <a
-                    href={`tel:${currentEmployee.phone.replace(/\s+/g, '')}`}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold transition"
-                    title="Bellen"
-                  >
-                    <Phone size={12} className="text-orange-500" />
-                    <span>{currentEmployee.phone}</span>
-                  </a>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleOpenEditMyProfile}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-[11px] cursor-pointer"
-                  >
-                    <Phone size={11} className="text-amber-600" />
-                    <span>+ GSM toevoegen</span>
-                  </button>
-                )}
-
-                {currentEmployee.facebookUrl ? (
-                  <a
-                    href={currentEmployee.facebookUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 font-semibold transition"
-                  >
-                    <Facebook size={12} className="text-blue-600" />
-                    <span>Facebook</span>
-                    <ExternalLink size={10} className="text-blue-400" />
-                  </a>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleOpenEditMyProfile}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 font-semibold text-[11px] cursor-pointer"
-                  >
-                    <Facebook size={11} className="text-blue-500" />
-                    <span>+ Facebook</span>
-                  </button>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleOpenEditMyProfile}
-                className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 cursor-pointer ml-auto"
-              >
-                <Edit3 size={12} />
-                <span>Gegevens wijzigen</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 🌟 PROMINENTE HOOFDACTIES BIJ INLOGGEN: PLANNING & BESCHIKBAARHEDEN */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Knop 1: Planning */}
-            <button
-              type="button"
-              id="staff-hero-btn-planning"
-              onClick={() => {
-                setActiveSubTab('rooster');
-                setSuccessMsg(null);
-              }}
-              className={`p-4 sm:p-5 rounded-3xl text-left transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 border-2 shadow-xs group ${
-                activeSubTab === 'rooster'
-                  ? 'bg-gradient-to-br from-orange-600 via-orange-500 to-amber-600 text-white border-orange-400 shadow-md ring-2 ring-orange-300'
-                  : 'bg-white hover:bg-orange-50/70 text-slate-800 border-slate-200 hover:border-orange-300'
-              }`}
-            >
-              <div className="flex items-center gap-3.5 min-w-0">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
-                  activeSubTab === 'rooster' ? 'bg-white/20 text-white' : 'bg-orange-100 text-orange-600'
-                }`}>
-                  <CalendarIcon size={24} className="stroke-[2.5]" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base sm:text-lg font-black tracking-tight uppercase">
-                      Planning
-                    </span>
-                    {activeSubTab === 'rooster' && (
-                      <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full border border-white/30 text-white">
-                        Actief
-                      </span>
-                    )}
-                  </div>
-                  <p className={`text-xs font-medium truncate mt-0.5 ${
-                    activeSubTab === 'rooster' ? 'text-white/90' : 'text-slate-500'
-                  }`}>
-                    Mijn diensten &amp; weekrooster bekijken
-                  </p>
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <span className={`inline-flex items-center px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight ${
-                  activeSubTab === 'rooster'
-                    ? 'bg-white text-orange-700 shadow-xs'
-                    : 'bg-orange-100 text-orange-950 border border-orange-200 group-hover:bg-orange-500 group-hover:text-white transition'
-                }`}>
-                  {personalShifts.length > 0 ? `${personalShifts.length} dienst${personalShifts.length > 1 ? 'en' : ''}` : 'Rooster 📅'}
-                </span>
-              </div>
-            </button>
-
-            {/* Knop 2: Beschikbaarheden */}
-            <button
-              type="button"
-              id="staff-hero-btn-beschikbaarheden"
-              onClick={() => {
-                setActiveSubTab('beschikbaarheid');
-                setSuccessMsg(null);
-              }}
-              className={`p-4 sm:p-5 rounded-3xl text-left transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 border-2 shadow-xs group ${
-                activeSubTab === 'beschikbaarheid'
-                  ? 'bg-gradient-to-br from-amber-600 via-amber-500 to-orange-600 text-white border-amber-400 shadow-md ring-2 ring-amber-300'
-                  : 'bg-white hover:bg-amber-50/70 text-slate-800 border-slate-200 hover:border-amber-300'
-              }`}
-            >
-              <div className="flex items-center gap-3.5 min-w-0">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
-                  activeSubTab === 'beschikbaarheid' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-700'
-                }`}>
-                  <Sparkles size={24} className="stroke-[2.5]" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base sm:text-lg font-black tracking-tight uppercase">
-                      Beschikbaarheden
-                    </span>
-                    {activeSubTab === 'beschikbaarheid' && (
-                      <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full border border-white/30 text-white">
-                        Actief
-                      </span>
-                    )}
-                  </div>
-                  <p className={`text-xs font-medium truncate mt-0.5 ${
-                    activeSubTab === 'beschikbaarheid' ? 'text-white/90' : 'text-slate-500'
-                  }`}>
-                    Vrije dagen &amp; uren doorgeven aan Hans
-                  </p>
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <span className={`inline-flex items-center px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight ${
-                  activeSubTab === 'beschikbaarheid'
-                    ? 'bg-white text-amber-900 shadow-xs'
-                    : 'bg-amber-100 text-amber-950 border border-amber-200 group-hover:bg-amber-500 group-hover:text-white transition'
-                }`}>
-                  Invullen ✍️
-                </span>
-              </div>
-            </button>
-          </div>
-
-          {/* ONBEVESTIGDE DIENST BINNEN 24 UUR */}
-          {hasUnconfirmedShifts24h ? (
-            <div 
-              id="shift-24h-visual-alarm-banner"
-              className="bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-3xl p-4 sm:p-5 shadow-lg border-2 border-red-300 relative overflow-hidden transition-all animate-in fade-in duration-200"
-            >
-              <div className="relative z-10 flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                      <BellRing size={20} className="stroke-[2.5]" />
-                    </span>
-                    <div>
-                      <h3 className="text-sm sm:text-base font-black tracking-tight">
-                        ⚠️ Bevestig je dienst van vandaag/morgen ("Gezien")
-                      </h3>
-                      <p className="text-[11px] text-white/90 font-medium">
-                        Laat weten dat je aanwezig zult zijn door hieronder op bevestigen te klikken.
-                      </p>
-                    </div>
-                  </div>
-
-                  {unconfirmedShifts24h.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => handleAcknowledgeAllUnconfirmed()}
-                      className="px-3.5 py-1.5 bg-white text-red-700 hover:bg-red-50 font-black text-xs uppercase tracking-tight rounded-xl shadow-md transition cursor-pointer active:scale-95 flex items-center gap-1.5"
-                    >
-                      <CheckCheck size={14} className="stroke-[3]" />
-                      <span>Alles Bevestigen ({unconfirmedShifts24h.length})</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Shift Cards within the alarm banner */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  {unconfirmedShifts24h.map((alert) => {
-                    const { shift, dayLabel, formattedDate, timeRemainingText, isOngoing, totalHours } = alert;
-                    const dept = (shift.department || currentEmployee.department) === 'keuken' ? 'Keuken' : 'Zaal';
-                    return (
-                      <div 
-                        key={shift.id}
-                        className="bg-white text-slate-900 rounded-2xl p-3 shadow-md flex items-center justify-between gap-3 border border-red-200"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-black text-xs text-slate-900 truncate">
-                              {dayLabel} • {formattedDate}
-                            </span>
-                            <span className="bg-red-100 text-red-800 text-[9px] font-black px-1.5 py-0.2 rounded-full shrink-0">
-                              {isOngoing ? 'Nu bezig' : timeRemainingText}
-                            </span>
-                          </div>
-                          <div className="text-xs font-bold text-slate-600 mt-0.5">
-                            <span>{shift.startTime} – {shift.endTime} ({totalHours}u)</span>
-                            <span className="ml-1.5 text-[10px] text-slate-400">• {dept}</span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleAcknowledgeClick(shift.id)}
-                          className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-sm transition cursor-pointer flex items-center gap-1 shrink-0"
-                        >
-                          <Check size={14} className="stroke-[3]" />
-                          <span>Bevestigen</span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          ) : nextUrgentShift ? (
-            /* Standard 24h Upcoming Shift (Already Confirmed) */
-            <div 
-              id="shift-24h-reminder-banner"
-              className="bg-gradient-to-br from-emerald-600 via-teal-600 to-slate-800 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-emerald-400/50 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2 duration-300"
-            >
-              {/* Decorative subtle background elements */}
-              <div className="absolute -top-10 -right-10 w-36 h-36 bg-white/10 rounded-full blur-xl pointer-events-none" />
-              <div className="absolute -bottom-10 -left-10 w-36 h-36 bg-black/10 rounded-full blur-xl pointer-events-none" />
-
-              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 relative z-10">
-                <div className="flex items-start gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-white shrink-0 border border-white/30 shadow-inner">
-                    <AlarmClock size={24} className="stroke-[2.5]" />
-                  </div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="bg-emerald-200 text-emerald-950 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1.5">
-                        <CheckCheck size={12} className="stroke-[3] text-emerald-700" />
-                        <span>Volgende Dienst Binnen 24 Uur</span>
-                      </span>
-                      <span className="bg-black/25 text-white font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-white/20 shadow-xs">
-                        {nextUrgentShift.timeRemainingText}
-                      </span>
-                    </div>
-
-                    <h3 className="text-base sm:text-lg font-black tracking-tight text-white mt-1">
-                      {nextUrgentShift.dayLabel}: {nextUrgentShift.shift.startTime} – {nextUrgentShift.shift.endTime} ({nextUrgentShift.totalHours} uur)
-                    </h3>
-
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-white/95 mt-1">
-                      <span className="bg-white/20 px-2 py-0.5 rounded-lg border border-white/15">
-                        {(nextUrgentShift.shift.department || currentEmployee.department) === 'keuken' ? '🍳 Keuken' : '🍽️ Zaal'}
-                      </span>
-                      <span className="text-white/85">
-                        {nextUrgentShift.formattedDate}
-                      </span>
-                      {nextUrgentShift.shift.notes && (
-                        <span className="italic bg-white/15 px-2 py-0.5 rounded-lg border border-white/15 max-w-xs truncate" title={nextUrgentShift.shift.notes}>
-                          "{nextUrgentShift.shift.notes}"
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick interactive action buttons */}
-                <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-start lg:justify-end pt-2 lg:pt-0 border-t border-white/20 lg:border-t-0">
-                  <div className="bg-white/20 border border-white/30 text-white font-black text-xs uppercase tracking-tight px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-xs">
-                    <CheckCheck size={14} className="text-emerald-300 stroke-[3]" />
-                    <span>Gezien & Bevestigd ✓</span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveSubTab('rooster');
-                      setSuccessMsg(null);
-                    }}
-                    className="px-3 py-2 bg-black/20 hover:bg-black/30 active:scale-95 border border-white/20 text-white font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer flex items-center gap-1.5"
-                  >
-                    <CalendarIcon size={13} />
-                    <span>Bekijk in Rooster</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCalendarTargetShift(nextUrgentShift.shift);
-                      setCalendarTypeTab('google');
-                      setShowCalendarModal(true);
-                    }}
-                    className="px-3 py-2 bg-black/20 hover:bg-black/30 active:scale-95 border border-white/20 text-white font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer flex items-center gap-1.5"
-                    title="Toevoegen aan je smartphone of Google/Apple agenda"
-                  >
-                    <Clock size={13} />
-                    <span>In Agenda 📅</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedShiftForSwap(nextUrgentShift.shift.id);
-                      setActiveSubTab('ruilen');
-                      setSuccessMsg(null);
-                    }}
-                    className="px-3 py-2 bg-black/20 hover:bg-black/30 active:scale-95 border border-white/20 text-white font-bold text-xs uppercase tracking-tight rounded-xl transition cursor-pointer flex items-center gap-1.5"
-                    title="Dienst ruilen met een collega"
-                  >
-                    <ArrowLeftRight size={13} />
-                    <span>Ruilen 🔄</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Beschikbaarheid herinnering (compact voor volgende week én doelweek 2 weken vooraf) */}
-          {(() => {
-            const hasNextWeek = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === NEXT_WEEK_NUMBER);
-            const TWO_WEEKS_AHEAD = CURRENT_WEEK_NUMBER + 2;
-            const hasTwoWeeksAhead = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === TWO_WEEKS_AHEAD);
-
-            if (hasNextWeek && hasTwoWeeksAhead) return null;
-
-            const targetWeekToRemind = !hasNextWeek ? NEXT_WEEK_NUMBER : TWO_WEEKS_AHEAD;
-            const isTwoWeeksAhead = targetWeekToRemind === TWO_WEEKS_AHEAD;
-
-            return (
-              <div className={`p-3.5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs ${
-                isTwoWeeksAhead
-                  ? 'bg-gradient-to-r from-amber-50 to-orange-50 border-orange-300 text-orange-950 shadow-xs'
-                  : 'bg-amber-50 border-amber-200 text-amber-950'
-              }`}>
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xl">⏰</span>
-                  <div>
-                    <div className="font-extrabold flex items-center gap-1.5 flex-wrap">
-                      <span>Beschikbaarheid voor <strong>Week {targetWeekToRemind}</strong> nog niet doorgegeven!</span>
-                      {isTwoWeeksAhead && (
-                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-orange-200 text-orange-900 border border-orange-300">
-                          Woensdag planningsdag (2 weken vooraf)
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-600 font-medium mt-0.5">
-                      {isTwoWeeksAhead
-                        ? 'De planning voor deze week wordt 2 weken vooraf op woensdag opgesteld. Geef tijdig je vrije dagen en uren door!'
-                        : 'Geef je uren en voorkeuren door via het personeelsportaal zodat de beheerder je correct kan inplannen.'}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setSelectedWeek(targetWeekToRemind);
-                    setActiveSubTab('beschikbaarheid');
-                  }}
-                  className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 active:scale-95 text-white font-black uppercase tracking-tight rounded-xl transition cursor-pointer text-xs shrink-0 self-end sm:self-auto shadow-xs"
-                >
-                  Nu invullen →
-                </button>
-              </div>
-            );
-          })()}
-
-      {/* Staff Tab menu - Vereenvoudigd: Eerst Planning en Beschikbaarheden */}
-      <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-1 flex flex-wrap gap-1">
-        {/* 1. Planning */}
-        <button
-          id="staff-tab-planning-btn"
-          onClick={() => { setActiveSubTab('rooster'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[100px] relative ${
-            activeSubTab === 'rooster' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <CalendarIcon size={14} />
-          <span>Planning</span>
-          {hasUnconfirmedShifts24h ? (
-            <span 
-              className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight animate-bounce shadow-md ml-1 ring-2 ring-white"
-              title="🚨 Visueel Alarm: Onbevestigde dienst binnen 24 uur!"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" />
-              <span>🚨 {unconfirmedShifts24h.length} &lt;24u</span>
-            </span>
-          ) : nextUrgentShift ? (
-            <span 
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-600 text-white rounded-full text-[9px] font-black uppercase tracking-tight shadow-xs ml-1"
-              title="Volgende dienst binnen 24 uur (reeds bevestigd)"
-            >
-              <CheckCheck size={10} className="stroke-[3]" />
-              <span>&lt;24u</span>
-            </span>
-          ) : null}
-        </button>
-
-        {/* 2. Beschikbaarheden */}
-        <button
-          id="staff-tab-beschikbaarheid-btn"
-          onClick={() => { setActiveSubTab('beschikbaarheid'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
-            activeSubTab === 'beschikbaarheid' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Sparkles size={14} className={activeSubTab === 'beschikbaarheid' ? 'text-amber-200 fill-amber-200' : 'text-amber-500 fill-amber-300'} />
-          <span>Beschikbaarheden</span>
-        </button>
-
-        {/* 3. Uren-tracker */}
-        <button
-          id="staff-tab-uren-btn"
-          onClick={() => { setActiveSubTab('uren'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[110px] ${
-            activeSubTab === 'uren' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Clock size={14} />
-          <span>Uren-tracker ⏱️</span>
-        </button>
-
-        {/* 4. Ruilen */}
-        <button
-          id="staff-tab-ruilen-btn"
-          onClick={() => { setActiveSubTab('ruilen'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[90px] ${
-            activeSubTab === 'ruilen' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <ArrowLeftRight size={14} />
-          <span>Ruilen</span>
-        </button>
-
-        {/* 5. Berichten */}
-        <button
-          id="staff-tab-berichten-btn"
-          onClick={() => { setActiveSubTab('berichten'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[105px] relative ${
-            activeSubTab === 'berichten' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
-          }`}
-        >
-          <Megaphone size={14} />
-          <span>Berichten</span>
-          {unreadNoticesCount > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
-              {unreadNoticesCount}
-            </span>
           )}
-        </button>
+        </div>
 
-        {/* 6. Collega's */}
+        {myUpcomingShifts.length === 0 ? (
+          <div className="p-6 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-200 text-center space-y-1.5">
+            <p className="text-xs font-bold text-slate-600">
+              📅 Je hebt momenteel geen aankomende diensten ingepland.
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Zodra de beheerder (Hans Stevens) nieuwe shiften voor jou inplant, verschijnen ze hier meteen.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {myUpcomingShifts.slice(0, 6).map((item) => {
+              const { shift, week, durationHours, formattedDate, alert24, isOngoing } = item;
+              const isUrgent = Boolean(alert24?.isWithin24Hours);
+              const isConfirmed = shift.acknowledged;
+              const dept = (shift.department || currentEmployee.department) === 'keuken' ? 'Keuken' : 'Zaal';
+
+              return (
+                <div
+                  key={shift.id}
+                  className={`p-4 rounded-2xl border-2 transition shadow-xs flex flex-col justify-between space-y-3 ${
+                    isUrgent && !isConfirmed
+                      ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-orange-300 ring-2 ring-orange-200'
+                      : isConfirmed
+                        ? 'bg-emerald-50/60 border-emerald-200'
+                        : 'bg-white border-slate-200'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-1 flex-wrap">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-orange-700 bg-orange-100 px-2 py-0.5 rounded-md">
+                        Week {week} • {DAYS_OF_WEEK[shift.day]}
+                      </span>
+                      <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                        dept === 'Keuken' ? 'bg-amber-100 text-amber-900 border border-amber-200' : 'bg-blue-100 text-blue-900 border border-blue-200'
+                      }`}>
+                        {dept === 'Keuken' ? '👨‍🍳 Keuken' : '🍽️ Zaal'}
+                      </span>
+                    </div>
+
+                    <div className="text-xs font-bold text-slate-600">
+                      {formattedDate}
+                    </div>
+
+                    <div className="text-sm font-black text-slate-900 flex items-center gap-1.5 mt-0.5">
+                      <Clock size={14} className="text-orange-500" />
+                      <span>{shift.startTime} – {shift.endTime}</span>
+                      <span className="text-xs font-bold text-slate-500">({durationHours}u)</span>
+                    </div>
+
+                    {isOngoing ? (
+                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-emerald-600 text-white animate-pulse">
+                        Nu bezig (tot {shift.endTime})
+                      </span>
+                    ) : alert24?.timeRemainingText ? (
+                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-orange-100 text-orange-900 border border-orange-300">
+                        ⏰ {alert24.timeRemainingText}
+                      </span>
+                    ) : null}
+
+                    {shift.notes && (
+                      <p className="text-[11px] text-slate-500 italic bg-white/70 p-1.5 rounded-lg border border-slate-150">
+                        "{shift.notes}"
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-150 flex items-center justify-between gap-1.5 flex-wrap">
+                    {isConfirmed ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-xl border border-emerald-300">
+                        <CheckCheck size={12} className="stroke-[3]" />
+                        <span>Gezien &amp; Bevestigd ✓</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleAcknowledgeClick(shift.id);
+                          playAlertChime();
+                        }}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs uppercase tracking-tight rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1"
+                      >
+                        <Check size={13} className="stroke-[3]" />
+                        <span>Bevestigen</span>
+                      </button>
+                    )}
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCalendarTargetShift(shift);
+                          setCalendarTypeTab('google');
+                          setShowCalendarModal(true);
+                        }}
+                        className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs transition cursor-pointer"
+                        title="Zet in agenda"
+                      >
+                        <CalendarIcon size={13} className="text-indigo-600" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedShiftForSwap(shift.id);
+                          setActiveSubTab('ruilen');
+                          setSuccessMsg(null);
+                        }}
+                        className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs transition cursor-pointer"
+                        title="Dienst ruilen"
+                      >
+                        <ArrowLeftRight size={13} className="text-orange-600" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 3. DE 4 KNOPPEN: PLANNING, BESCHIKBAARHEDEN, BERICHTEN EN RICHTLIJNEN */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Knop 1: Planning */}
         <button
-          id="staff-tab-collegas-btn"
-          onClick={() => { setActiveSubTab('collegas'); setSuccessMsg(null); }}
-          className={`flex-1 py-2.5 text-center rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[90px] ${
-            activeSubTab === 'collegas' ? 'bg-orange-500 text-white shadow-xs' : 'text-slate-600 hover:bg-orange-50/50'
+          type="button"
+          id="staff-btn-planning"
+          onClick={() => {
+            setActiveSubTab('rooster');
+            setSuccessMsg(null);
+          }}
+          className={`p-4 rounded-3xl text-left transition-all duration-150 cursor-pointer flex flex-col justify-between gap-3 border-2 shadow-xs group ${
+            activeSubTab === 'rooster'
+              ? 'bg-gradient-to-br from-orange-600 via-orange-500 to-amber-600 text-white border-orange-400 shadow-md ring-2 ring-orange-300'
+              : 'bg-white hover:bg-orange-50/70 text-slate-800 border-slate-200 hover:border-orange-300'
           }`}
         >
-          <Users size={14} />
-          <span>Collega's</span>
+          <div className="flex items-center justify-between w-full">
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
+              activeSubTab === 'rooster' ? 'bg-white/20 text-white' : 'bg-orange-100 text-orange-600'
+            }`}>
+              <CalendarIcon size={22} className="stroke-[2.5]" />
+            </div>
+            {activeSubTab === 'rooster' && (
+              <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full text-white">
+                Actief
+              </span>
+            )}
+          </div>
+          <div>
+            <h4 className="text-base font-black tracking-tight uppercase">
+              Planning
+            </h4>
+            <p className={`text-xs font-medium mt-0.5 line-clamp-1 ${
+              activeSubTab === 'rooster' ? 'text-white/90' : 'text-slate-500'
+            }`}>
+              Rooster bekijken
+            </p>
+          </div>
         </button>
 
-        {/* 7. Praktische Richtlijnen Handboek */}
+        {/* Knop 2: Beschikbaarheden */}
         <button
-          id="staff-tab-handboek-btn"
+          type="button"
+          id="staff-btn-beschikbaarheden"
+          onClick={() => {
+            setActiveSubTab('beschikbaarheid');
+            setSuccessMsg(null);
+          }}
+          className={`p-4 rounded-3xl text-left transition-all duration-150 cursor-pointer flex flex-col justify-between gap-3 border-2 shadow-xs group ${
+            activeSubTab === 'beschikbaarheid'
+              ? 'bg-gradient-to-br from-amber-600 via-amber-500 to-orange-600 text-white border-amber-400 shadow-md ring-2 ring-amber-300'
+              : 'bg-white hover:bg-amber-50/70 text-slate-800 border-slate-200 hover:border-amber-300'
+          }`}
+        >
+          <div className="flex items-center justify-between w-full">
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
+              activeSubTab === 'beschikbaarheid' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-700'
+            }`}>
+              <Sparkles size={22} className="stroke-[2.5]" />
+            </div>
+            {activeSubTab === 'beschikbaarheid' && (
+              <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full text-white">
+                Actief
+              </span>
+            )}
+          </div>
+          <div>
+            <h4 className="text-base font-black tracking-tight uppercase">
+              Beschikbaarheden
+            </h4>
+            <p className={`text-xs font-medium mt-0.5 line-clamp-1 ${
+              activeSubTab === 'beschikbaarheid' ? 'text-white/90' : 'text-slate-500'
+            }`}>
+              Vrije dagen doorgeven
+            </p>
+          </div>
+        </button>
+
+        {/* Knop 3: Berichten */}
+        <button
+          type="button"
+          id="staff-btn-berichten"
+          onClick={() => {
+            setActiveSubTab('berichten');
+            setSuccessMsg(null);
+          }}
+          className={`p-4 rounded-3xl text-left transition-all duration-150 cursor-pointer flex flex-col justify-between gap-3 border-2 shadow-xs group ${
+            activeSubTab === 'berichten'
+              ? 'bg-gradient-to-br from-rose-600 via-orange-600 to-amber-600 text-white border-rose-400 shadow-md ring-2 ring-rose-300'
+              : 'bg-white hover:bg-rose-50/50 text-slate-800 border-slate-200 hover:border-rose-300'
+          }`}
+        >
+          <div className="flex items-center justify-between w-full">
+            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 ${
+              activeSubTab === 'berichten' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-600'
+            }`}>
+              <Megaphone size={22} className="stroke-[2.5]" />
+            </div>
+            {unreadNoticesCount > 0 ? (
+              <span className="text-[10px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse shadow-xs">
+                {unreadNoticesCount} nieuw
+              </span>
+            ) : activeSubTab === 'berichten' ? (
+              <span className="text-[9px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full text-white">
+                Actief
+              </span>
+            ) : null}
+          </div>
+          <div>
+            <h4 className="text-base font-black tracking-tight uppercase">
+              Berichten
+            </h4>
+            <p className={`text-xs font-medium mt-0.5 line-clamp-1 ${
+              activeSubTab === 'berichten' ? 'text-white/90' : 'text-slate-500'
+            }`}>
+              Mededelingen &amp; updates
+            </p>
+          </div>
+        </button>
+
+        {/* Knop 4: Richtlijnen */}
+        <button
+          type="button"
+          id="staff-btn-richtlijnen"
           onClick={() => {
             setHandbookInitialSection('all');
             setShowHandbookModal(true);
           }}
-          className="flex-1 py-2.5 text-center rounded-xl text-xs font-black uppercase tracking-tight flex items-center justify-center space-x-1.5 transition active:scale-95 duration-100 min-w-[125px] bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300"
+          className="p-4 rounded-3xl text-left transition-all duration-150 cursor-pointer flex flex-col justify-between gap-3 border-2 shadow-xs group bg-white hover:bg-amber-50/70 text-slate-800 border-slate-200 hover:border-amber-300"
         >
-          <BookOpen size={14} className="text-orange-600" />
-          <span>Richtlijnen 📖</span>
+          <div className="flex items-center justify-between w-full">
+            <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition group-hover:scale-105 bg-amber-100 text-amber-700">
+              <BookOpen size={22} className="stroke-[2.5]" />
+            </div>
+            <span className="text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-200 px-2 py-0.5 rounded-md">
+              Handboek 📖
+            </span>
+          </div>
+          <div>
+            <h4 className="text-base font-black tracking-tight uppercase">
+              Richtlijnen
+            </h4>
+            <p className="text-xs font-medium mt-0.5 text-slate-500 line-clamp-1">
+              Huisregels &amp; afspraken
+            </p>
+          </div>
         </button>
+      </div>
+
+      {/* 4. DROPDOWNMENU VOOR VOLLEDIGE NAVIGATIE */}
+      {/* (planning, beschikbaarheden, uren-tracker, ruilen, collega's en richtlijnen) */}
+      <div className="bg-white rounded-2xl p-3 sm:p-3.5 border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-black uppercase text-slate-700 tracking-tight flex items-center gap-1.5">
+            <span>📋 Navigatiemenu:</span>
+          </span>
+          <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
+            (Kies direct een onderdeel uit het menu)
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <select
+            value={activeSubTab}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === 'richtlijnen') {
+                setHandbookInitialSection('all');
+                setShowHandbookModal(true);
+              } else {
+                setActiveSubTab(val as any);
+                setSuccessMsg(null);
+              }
+            }}
+            className="w-full sm:w-64 bg-slate-50 hover:bg-orange-50/50 border-2 border-slate-200 focus:border-orange-500 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-900 focus:outline-none cursor-pointer shadow-2xs"
+          >
+            <option value="rooster">📅 Planning</option>
+            <option value="beschikbaarheid">✨ Beschikbaarheden</option>
+            <option value="uren">⏱️ Uren-tracker</option>
+            <option value="ruilen">🔄 Ruilen</option>
+            <option value="berichten">📢 Berichten {unreadNoticesCount > 0 ? `(${unreadNoticesCount} nieuw)` : ''}</option>
+            <option value="collegas">👥 Collega's</option>
+            <option value="richtlijnen">📖 Richtlijnen</option>
+          </select>
+        </div>
       </div>
 
       {/* SUBPAGE CONTENT */}
@@ -1816,123 +1711,90 @@ export default function StaffPortal({
             </div>
           )}
 
-          {/* Week Selector Bar for Schedule */}
-          <div className="bg-white p-4 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
-              <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider mr-1">Rooster Week:</span>
-              {staffActiveWeeks.map(w => {
-                const wk = w.weekNumber;
-                const isSpecial = wk === SPECIAL_DAYS_WEEK_NUMBER;
-                const isSelected = selectedRosterWeek === wk;
-                const weekHasPublishedShifts = shifts.some(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === wk && s.status === 'published');
-                return (
-                  <button
-                    key={wk}
-                    type="button"
-                    onClick={() => setSelectedRosterWeek(wk)}
-                    title={`${w.label}: ${w.dateRange}`}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 cursor-pointer ${
-                      isSelected
-                        ? 'bg-orange-500 text-white shadow-md shadow-orange-100'
-                        : isSpecial
-                          ? 'bg-amber-50 text-amber-950 hover:bg-amber-100 border border-amber-300'
-                          : 'bg-slate-50 text-slate-700 hover:bg-orange-50 hover:text-orange-700 border border-slate-200'
-                    }`}
-                  >
-                    {isSpecial ? (
-                      <>
-                        <Sparkles size={11} className={isSelected ? 'text-amber-200' : 'text-amber-600'} />
-                        <span>Speciale dagen</span>
-                      </>
-                    ) : (
-                      <span>Week {wk}</span>
-                    )}
-                    {wk === CURRENT_WEEK_NUMBER && (
-                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
-                        isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
-                      }`}>
-                        Huidig
-                      </span>
-                    )}
-                    {wk === NEXT_WEEK_NUMBER && (
-                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
-                        isSelected ? 'bg-slate-200 text-slate-900' : 'bg-slate-200 text-slate-700 border border-slate-300'
-                      }`}>
-                        Volgende
-                      </span>
-                    )}
-                    {!isSpecial && (
-                      <span className={`text-[8px] px-1 py-0.2 rounded font-black ${
-                        weekHasPublishedShifts
-                          ? isSelected ? 'bg-emerald-300 text-emerald-950' : 'bg-emerald-50 text-emerald-800 border border-emerald-250'
-                          : isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
-                      }`}>
-                        {weekHasPublishedShifts ? '✓ Live' : '🔒 In opmaak'}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-
-              {/* Archive Dropdown */}
-              {staffArchivedWeeks.length > 0 && (
-                <div className="relative inline-block">
-                  <button
-                    type="button"
-                    onClick={() => setShowRosterArchiveMenu(prev => !prev)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-tight transition duration-100 active:scale-95 flex items-center gap-1.5 border cursor-pointer ${
-                      isSelectedRosterWeekArchived
-                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
-                    }`}
-                    title="Vorige weken worden automatisch gearchiveerd"
-                  >
-                    <Archive size={12} />
-                    <span>Archief ({staffArchivedWeeks.length})</span>
-                    <ChevronDown size={11} className={`transition-transform duration-200 ${showRosterArchiveMenu ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  {showRosterArchiveMenu && (
-                    <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border-2 border-slate-200 py-1.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
-                      <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-500">
-                        📦 Vorige Weken (Automatisch Gearchiveerd)
-                      </div>
-                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
-                        {staffArchivedWeeks.map(aw => {
-                          const isSel = selectedRosterWeek === aw.weekNumber;
-                          const countShifts = shifts.filter(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === aw.weekNumber && s.status === 'published').length;
-                          return (
-                            <button
-                              key={aw.weekNumber}
-                              type="button"
-                              onClick={() => {
-                                setSelectedRosterWeek(aw.weekNumber);
-                                setShowRosterArchiveMenu(false);
-                              }}
-                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between transition hover:bg-orange-50 cursor-pointer ${
-                                isSel ? 'bg-amber-50 font-black text-amber-900' : 'text-slate-700'
-                              }`}
-                            >
-                              <div>
-                                <div className="font-black text-xs">Week {aw.weekNumber}</div>
-                                <div className="text-[10px] text-slate-500 font-semibold">{aw.dateRange}</div>
-                              </div>
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
-                                {countShifts} diensten
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+          {/* Week Selector Dropdown for Schedule (Speciale dagen bovenaan) */}
+          <div className="bg-white p-4 sm:p-5 rounded-3xl border-2 border-orange-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3.5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center shrink-0 shadow-xs">
+                <CalendarIcon size={20} className="stroke-[2.5]" />
+              </div>
+              <div>
+                <span className="text-[11px] font-black uppercase text-slate-500 tracking-wider block">
+                  Rooster Week Kiezen:
+                </span>
+                <span className="text-sm font-black text-slate-900">
+                  {selectedRosterWeek === SPECIAL_DAYS_WEEK_NUMBER
+                    ? '⭐ Speciale dagen (Feestdagen & Evenementen)'
+                    : `Week ${selectedRosterWeek}: ${getWeekMeta(selectedRosterWeek).dateRange}`}
+                </span>
+              </div>
             </div>
 
-            <div className="text-xs font-bold text-slate-600 bg-orange-50/60 border border-orange-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
-              <span>📅 {getWeekMeta(selectedRosterWeek).label}:</span>
-              <span className="text-orange-950 font-black">{getWeekMeta(selectedRosterWeek).dateRange}</span>
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              {/* Vorige week knop */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedRosterWeek > CURRENT_WEEK_NUMBER) {
+                    setSelectedRosterWeek(prev => prev - 1);
+                  }
+                }}
+                disabled={selectedRosterWeek === SPECIAL_DAYS_WEEK_NUMBER || selectedRosterWeek <= CURRENT_WEEK_NUMBER}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 transition"
+                title="Vorige week"
+              >
+                <ChevronLeft size={16} />
+              </button>
+
+              {/* HET DROPDOWNMENU MET SPECIALE DAGEN BOVENAAN */}
+              <select
+                id="roster-week-dropdown"
+                value={selectedRosterWeek}
+                onChange={(e) => setSelectedRosterWeek(Number(e.target.value))}
+                className="w-full sm:w-auto bg-slate-50 hover:bg-orange-50/50 border-2 border-orange-200 focus:border-orange-500 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-900 shadow-2xs focus:outline-none cursor-pointer"
+              >
+                {/* 1. SPECIALE DAGEN BOVENAAN VOLGENS WENS GEBRUIKER */}
+                <option value={SPECIAL_DAYS_WEEK_NUMBER}>
+                  ⭐ Speciale dagen (Feestdagen &amp; Evenementen)
+                </option>
+
+                {/* 2. HUIDIGE EN ACTIEVE KOMENDE WEKEN */}
+                {staffActiveWeeks
+                  .filter(w => w.weekNumber !== SPECIAL_DAYS_WEEK_NUMBER)
+                  .map(w => {
+                    const isCurrent = w.weekNumber === CURRENT_WEEK_NUMBER;
+                    const isNext = w.weekNumber === NEXT_WEEK_NUMBER;
+                    const weekHasPublishedShifts = shifts.some(s => (s.weekNumber || CURRENT_WEEK_NUMBER) === w.weekNumber && s.status === 'published');
+                    return (
+                      <option key={w.weekNumber} value={w.weekNumber}>
+                        Week {w.weekNumber} ({w.dateRange}) {isCurrent ? '• Huidige week' : isNext ? '• Volgende week' : ''} {weekHasPublishedShifts ? '✓ Live' : '🔒 In opmaak'}
+                      </option>
+                    );
+                  })}
+
+                {/* 3. GEARCHIVEERDE WEKEN */}
+                {staffArchivedWeeks.length > 0 && (
+                  <optgroup label="📦 Gearchiveerde weken (verleden)">
+                    {staffArchivedWeeks.map(aw => (
+                      <option key={aw.weekNumber} value={aw.weekNumber}>
+                        Week {aw.weekNumber} ({aw.dateRange})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+
+              {/* Volgende week knop */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRosterWeek(prev => prev + 1);
+                }}
+                disabled={selectedRosterWeek === SPECIAL_DAYS_WEEK_NUMBER}
+                className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 transition"
+                title="Volgende week"
+              >
+                <ChevronRight size={16} />
+              </button>
             </div>
           </div>
 
@@ -1962,7 +1824,7 @@ export default function StaffPortal({
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1">
                 <Clock size={16} className="text-orange-500" />
-                <span>Jouw aankomende diensten</span>
+                <span>Jouw diensten in Week {selectedRosterWeek}</span>
               </h3>
               {personalShifts.length > 0 && (
                 <button
@@ -1998,7 +1860,7 @@ export default function StaffPortal({
 
                   <button
                     type="button"
-                    onClick={() => openWhatsAppForEmployee(currentEmployee, personalShifts, selectedWeek)}
+                    onClick={() => openWhatsAppForEmployee(currentEmployee, personalShifts, selectedRosterWeek)}
                     className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                     title="Verstuur overzicht via WhatsApp"
                   >
@@ -2007,7 +1869,7 @@ export default function StaffPortal({
 
                   <button
                     type="button"
-                    onClick={() => openEmailForEmployee(currentEmployee, personalShifts, selectedWeek)}
+                    onClick={() => openEmailForEmployee(currentEmployee, personalShifts, selectedRosterWeek)}
                     className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                     title="Verstuur naar e-mail"
                   >
@@ -2021,7 +1883,7 @@ export default function StaffPortal({
             {(() => {
               const weekOpenShifts = shifts.filter(s =>
                 (s.isOpenShift || s.employeeId === 'open_shift') &&
-                (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedWeek &&
+                (s.weekNumber || CURRENT_WEEK_NUMBER) === selectedRosterWeek &&
                 s.status === 'published'
               );
 
@@ -2036,7 +1898,7 @@ export default function StaffPortal({
                       </span>
                       <div>
                         <h4 className="text-xs font-black uppercase tracking-tight text-amber-950 flex items-center gap-1.5">
-                          <span>Openstaande Diensten in Week {selectedWeek}</span>
+                          <span>Openstaande Diensten in Week {selectedRosterWeek}</span>
                           <span className="bg-amber-300 text-amber-950 px-2 py-0.5 rounded-full text-[10px] font-black uppercase">
                             {weekOpenShifts.length} {weekOpenShifts.length === 1 ? 'dienst' : 'diensten'}
                           </span>
@@ -3268,13 +3130,81 @@ export default function StaffPortal({
                       Vaste shiften per weekdag
                     </h4>
                     <p className="text-[11px] text-slate-500 font-medium">
-                      Duid per dag aan of je vast beschikbaar bent en tussen welke uren.
+                      Duid per dag aan of je vast beschikbaar bent. In alle weken zullen <strong>enkel deze gekozen vaste dagen</strong> als beschikbaar aangeduid staan!
                     </p>
                   </div>
                   <div className="flex gap-2 text-[10px] font-black uppercase">
                     <span className="flex items-center gap-1 text-emerald-600"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Ja</span>
                     <span className="flex items-center gap-1 text-amber-600"><span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Voorkeur</span>
                     <span className="flex items-center gap-1 text-rose-600"><span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Nee</span>
+                  </div>
+                </div>
+
+                {/* Snelkeuze voor vaste werkdagen */}
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-black uppercase text-slate-600 flex items-center gap-1">
+                    <span>⚡ Snelkeuze vaste werkdagen:</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecurringDays(prev => prev.map(d => {
+                          const isFriSat = d.day === 4 || d.day === 5;
+                          return {
+                            ...d,
+                            status: isFriSat ? 'available' : 'unavailable',
+                            startTime: isFriSat ? '18u00' : 'Open',
+                            endTime: isFriSat ? '23u00' : 'Sluit'
+                          };
+                        }));
+                      }}
+                      className="px-2.5 py-1 bg-white hover:bg-orange-50 border border-slate-200 hover:border-orange-300 rounded-lg text-[10px] font-black text-slate-700 transition cursor-pointer"
+                    >
+                      Enkel Vrijdag & Zaterdag 🍻
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecurringDays(prev => prev.map(d => ({
+                          ...d,
+                          status: (d.day === 4 || d.day === 5 || d.day === 6) ? 'available' : 'unavailable',
+                          startTime: 'Open',
+                          endTime: 'Sluit'
+                        })));
+                      }}
+                      className="px-2.5 py-1 bg-white hover:bg-orange-50 border border-slate-200 hover:border-orange-300 rounded-lg text-[10px] font-black text-slate-700 transition cursor-pointer"
+                    >
+                      Weekend (Vrij, Za & Zo) ☕
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecurringDays(prev => prev.map(d => ({
+                          ...d,
+                          status: 'available',
+                          startTime: 'Open',
+                          endTime: 'Sluit'
+                        })));
+                      }}
+                      className="px-2.5 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-lg text-[10px] font-black text-slate-700 transition cursor-pointer"
+                    >
+                      Hele Week (Ma t/m Zo)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecurringDays(prev => prev.map(d => ({
+                          ...d,
+                          status: 'unavailable',
+                          startTime: 'Open',
+                          endTime: 'Sluit'
+                        })));
+                      }}
+                      className="px-2.5 py-1 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 rounded-lg text-[10px] font-black text-rose-700 transition cursor-pointer"
+                    >
+                      Alles Wissen ✕
+                    </button>
                   </div>
                 </div>
 
@@ -3500,35 +3430,52 @@ export default function StaffPortal({
             </div>
           ) : (
             <>
-              {/* Quick-Apply Banner for staff with active recurring availability */}
-              {currentEmployee?.recurringAvailability?.active && (
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-2xl border-2 border-blue-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-blue-500 text-white flex items-center justify-center font-bold text-sm shrink-0">
-                      🔁
+              {/* Banner for staff with active recurring availability */}
+              {currentEmployee?.recurringAvailability?.active && (() => {
+                const rec = currentEmployee.recurringAvailability;
+                const isApplicableWeek = isRecurringApplicableToWeek(rec.frequency, selectedWeek);
+                const fixedDays = (rec.days || []).filter(d => d.status === 'available' || d.status === 'preferred');
+                const fixedDayNames = fixedDays.map(d => DAYS_OF_WEEK[d.day]);
+
+                return (
+                  <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-orange-50 p-4 rounded-2xl border-2 border-blue-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs">
+                        🔁
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-extrabold text-xs text-blue-950 uppercase tracking-tight">
+                            Vaste Wekelijkse Beschikbaarheid Actief ({
+                              rec.frequency === 'every_week' ? 'Elke week' :
+                              rec.frequency === 'even_weeks' ? 'Om de 2 weken (Even)' : 'Om de 2 weken (Oneven)'
+                            })
+                          </h4>
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-blue-200 text-blue-900 border border-blue-300">
+                            Vaste werkdag(en): {fixedDayNames.join(', ') || 'Geen'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-blue-900 font-medium mt-0.5 leading-relaxed">
+                          {isApplicableWeek
+                            ? `In Week ${selectedWeek} staan enkel jouw vaste dagen (${fixedDayNames.join(', ') || 'geen'}) aangeduid als beschikbaar. Ben je op een van deze dagen toch verhinderd? Klik bij die dag op 'Afmelden' en sla op!`
+                            : `In Week ${selectedWeek} ben je niet inzetbaar volgens je vaste cyclus (${rec.frequency === 'even_weeks' ? 'enkel even weken' : 'enkel oneven weken'}). Alle dagen staan op niet-beschikbaar.`
+                          }
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="font-extrabold text-xs text-blue-950 uppercase tracking-tight">
-                        Vaste Wekelijkse Beschikbaarheid Actief ({
-                          currentEmployee.recurringAvailability.frequency === 'every_week' ? 'Elke week' :
-                          currentEmployee.recurringAvailability.frequency === 'even_weeks' ? 'Om de 2 weken (Even)' : 'Om de 2 weken (Oneven)'
-                        })
-                      </h4>
-                      <p className="text-[11px] text-blue-800 font-medium">
-                        Wil je jouw vaste wekelijkse shiften overnemen voor geselecteerde <strong>Week {selectedWeek}</strong>?
-                      </p>
+
+                    <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setAvailViewMode('recurring')}
+                        className="px-3.5 py-2 bg-white hover:bg-blue-50 text-blue-900 border border-blue-300 text-xs font-black uppercase tracking-tight rounded-xl transition shadow-2xs active:scale-95 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <span>Vaste Dagen Wijzigen ⚙️</span>
+                      </button>
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={handleApplyRecurringToSelectedWeek}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black uppercase tracking-tight rounded-xl transition shadow-xs active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
-                  >
-                    <span>⚡ Vaste shiften toepassen op Week {selectedWeek}</span>
-                  </button>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Prompt to set fixed recurring availability if not set yet */}
               {!currentEmployee?.recurringAvailability?.active && (
@@ -3569,7 +3516,16 @@ export default function StaffPortal({
                 const weekNum = w.weekNumber;
                 const isSpecial = weekNum === SPECIAL_DAYS_WEEK_NUMBER;
                 const isLockedWeek = isWeekAvailabilityLocked(weekNum, CURRENT_WEEK_NUMBER, appSettings);
-                const hasFilled = availabilities.some(a => a.employeeId === activeEmployeeId && a.weekNumber === weekNum);
+                const rec = currentEmployee?.recurringAvailability;
+                const isRecActive = Boolean(rec?.active && rec.days && rec.days.length > 0);
+                const isApplicableWeek = isRecActive && isRecurringApplicableToWeek(rec?.frequency, weekNum);
+                const explicitForWeek = availabilities.find(a => a.employeeId === activeEmployeeId && a.weekNumber === weekNum);
+                const hasFilled = Boolean(explicitForWeek) || (!isSpecial && isRecActive && isApplicableWeek);
+                const hasAfmeldingInWeek = isRecActive && isApplicableWeek && explicitForWeek?.days?.some(d => {
+                  const rd = rec!.days.find(x => x.day === d.day);
+                  const isFixed = Boolean(rd && (rd.status === 'available' || rd.status === 'preferred'));
+                  return isFixed && d.status === 'unavailable';
+                });
                 const isSelected = selectedWeek === weekNum;
 
                 if (isSpecial) {
@@ -3628,11 +3584,23 @@ export default function StaffPortal({
                         <Lock size={8} />
                         <span>Vast</span>
                       </span>
-                    ) : hasFilled ? (
+                    ) : hasAfmeldingInWeek ? (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-0.5 ${
+                        isSelected ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-200'
+                      }`}>
+                        <span>✓ Afgemeld</span>
+                      </span>
+                    ) : explicitForWeek ? (
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
                         isSelected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-800'
                       }`}>
                         ✓ Ingevuld
+                      </span>
+                    ) : (isRecActive && isApplicableWeek) ? (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                        isSelected ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-900 border border-blue-200'
+                      }`}>
+                        ✓ Vaste shiften
                       </span>
                     ) : (
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
@@ -3893,76 +3861,221 @@ export default function StaffPortal({
                             'bg-rose-50/40 border-rose-200'
                           }`}
                         >
-                          <div>
-                            <div className="flex items-start justify-between mb-1.5">
-                              <div>
-                                <div className="flex items-center gap-1">
-                                  <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{displayName}</span>
-                                </div>
-                                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                                  <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md shadow-2xs">
-                                    {dateBadge}
-                                  </span>
-                                  {specialDayInfo?.closingNote && (
-                                    <span className="inline-block text-[9px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-1.5 py-0.2 rounded-md">
-                                      ⚠️ {specialDayInfo.closingNote}
-                                    </span>
+                            {(() => {
+                              const rec = currentEmployee?.recurringAvailability;
+                              const isRecActive = Boolean(rec?.active && rec.days && rec.days.length > 0);
+                              const isApplicableWeek = isRecActive && isRecurringApplicableToWeek(rec?.frequency, selectedWeek);
+                              const recDay = (isRecActive && isApplicableWeek) ? rec!.days.find(rd => rd.day === dayIdx) : null;
+                              const isFixedDay = Boolean(recDay && (recDay.status === 'available' || recDay.status === 'preferred'));
+
+                              return (
+                                <div>
+                                  <div className="flex items-start justify-between mb-1.5">
+                                    <div>
+                                      <div className="flex items-center gap-1">
+                                        <span className="font-black text-xs text-slate-800 uppercase tracking-tight">{displayName}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                        <span className="inline-block text-[11px] font-black text-orange-950 bg-orange-100/90 border border-orange-200 px-2 py-0.5 rounded-md shadow-2xs">
+                                          {dateBadge}
+                                        </span>
+                                        {isFixedDay && (
+                                          <span className="inline-block text-[9px] font-black text-blue-900 bg-blue-100 border border-blue-300 px-1.5 py-0.5 rounded-md shadow-2xs">
+                                            🔁 Vaste werkdag
+                                          </span>
+                                        )}
+                                        {isRecActive && !isFixedDay && (
+                                          <span className="inline-block text-[8.5px] font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded-md">
+                                            Geen vaste dag
+                                          </span>
+                                        )}
+                                        {specialDayInfo?.closingNote && (
+                                          <span className="inline-block text-[9px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-1.5 py-0.2 rounded-md">
+                                            ⚠️ {specialDayInfo.closingNote}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {isSelectedLocked && (
+                                        <span className="text-[8px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-slate-200">
+                                          <Lock size={8} /> Vast
+                                        </span>
+                                      )}
+                                      <span className={`w-2.5 h-2.5 rounded-full ${
+                                        currentVal.status === 'preferred' ? 'bg-amber-400' :
+                                        currentVal.status === 'available' ? 'bg-emerald-500' :
+                                        'bg-rose-500'
+                                      }`} />
+                                    </div>
+                                  </div>
+
+                                  {/* Custom buttons for Fixed Day vs Standard Day */}
+                                  {isFixedDay ? (
+                                    <div className="space-y-1.5 mt-2">
+                                      {currentVal.status === 'available' || currentVal.status === 'preferred' ? (
+                                        <div className="space-y-1">
+                                          <div className="py-1 px-2 rounded-lg text-[10px] font-black uppercase text-center bg-emerald-500 text-white shadow-2xs">
+                                            ✓ Beschikbaar (Vaste shift)
+                                          </div>
+                                          <button
+                                            type="button"
+                                            disabled={isSelectedLocked}
+                                            onClick={() => {
+                                              if (isSelectedLocked) return;
+                                              setTempAvailability(prev => ({
+                                                ...prev,
+                                                [dayIdx]: { ...prev[dayIdx], status: 'unavailable', notes: prev[dayIdx]?.notes || 'Afgemeld' }
+                                              }));
+                                              setSuccessMsg(`🚫 Je hebt je afgemeld voor ${dayName} (Week ${selectedWeek}). Klik onderaan op 'Opslaan & Versturen' om te bevestigen.`);
+                                            }}
+                                            className={`w-full py-1.5 px-2 rounded-lg text-[10px] font-black uppercase transition-all tracking-tight ${
+                                              isSelectedLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer active:scale-95'
+                                            } bg-rose-50 hover:bg-rose-100 text-rose-800 border-2 border-rose-300 shadow-2xs flex items-center justify-center gap-1`}
+                                            title={`Meld je gemakkelijk af als je deze week niet kunt op je vaste ${dayName}`}
+                                          >
+                                            <span>🚫 Afmelden voor deze vaste dag</span>
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-1.5 bg-rose-100/90 border border-rose-300 p-2 rounded-xl text-center">
+                                          <div className="text-[10px] font-black uppercase text-rose-950">
+                                            ✕ Afgemeld voor {dayName}
+                                          </div>
+                                          {/* Snelkeuze reden */}
+                                          <div className="flex flex-wrap gap-1 justify-center">
+                                            {['Examen 📚', 'Ziek 🤒', 'Vakantie 🌴', 'Andere 📝'].map(reason => (
+                                              <button
+                                                key={reason}
+                                                type="button"
+                                                disabled={isSelectedLocked}
+                                                onClick={() => {
+                                                  if (isSelectedLocked) return;
+                                                  setTempAvailability(prev => ({
+                                                    ...prev,
+                                                    [dayIdx]: { ...prev[dayIdx], notes: `Afmelding: ${reason}` }
+                                                  }));
+                                                }}
+                                                className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition cursor-pointer ${
+                                                  currentVal.notes?.includes(reason.split(' ')[0])
+                                                    ? 'bg-rose-700 text-white border-rose-800'
+                                                    : 'bg-white text-rose-900 hover:bg-rose-50 border-rose-300'
+                                                }`}
+                                              >
+                                                {reason}
+                                              </button>
+                                            ))}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            disabled={isSelectedLocked}
+                                            onClick={() => {
+                                              if (isSelectedLocked) return;
+                                              setTempAvailability(prev => ({
+                                                ...prev,
+                                                [dayIdx]: {
+                                                  ...prev[dayIdx],
+                                                  status: recDay.status,
+                                                  startTime: normalizeAvailabilityTime(recDay.startTime) || 'Open',
+                                                  endTime: normalizeAvailabilityTime(recDay.endTime) || 'Sluit',
+                                                  notes: ''
+                                                }
+                                              }));
+                                            }}
+                                            className="w-full py-1 rounded-md text-[9px] font-black uppercase text-emerald-800 bg-white hover:bg-emerald-50 border border-emerald-300 transition active:scale-95 cursor-pointer flex items-center justify-center gap-1 shadow-2xs"
+                                          >
+                                            ↩️ Toch beschikbaar zetten
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : isRecActive ? (
+                                    <div className="space-y-1 mt-2">
+                                      {currentVal.status === 'unavailable' ? (
+                                        <>
+                                          <div className="py-1 px-2 rounded-lg text-[9.5px] font-bold text-slate-500 bg-slate-100 border border-slate-200 text-center">
+                                            ✕ Niet-beschikbaar
+                                          </div>
+                                          <button
+                                            type="button"
+                                            disabled={isSelectedLocked}
+                                            onClick={() => {
+                                              if (isSelectedLocked) return;
+                                              setTempAvailability(prev => ({
+                                                ...prev,
+                                                [dayIdx]: { ...prev[dayIdx], status: 'available', startTime: 'Open', endTime: 'Sluit' }
+                                              }));
+                                            }}
+                                            className="w-full py-1 px-1.5 rounded-lg text-[9px] font-bold text-slate-600 hover:text-emerald-800 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 transition cursor-pointer"
+                                          >
+                                            + Extra beschikbaar zetten
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <div className="space-y-1">
+                                          <div className="py-1 px-2 rounded-lg text-[9.5px] font-black uppercase text-center bg-emerald-500 text-white shadow-2xs">
+                                            ✓ Extra Beschikbaar
+                                          </div>
+                                          <button
+                                            type="button"
+                                            disabled={isSelectedLocked}
+                                            onClick={() => {
+                                              if (isSelectedLocked) return;
+                                              setTempAvailability(prev => ({
+                                                ...prev,
+                                                [dayIdx]: { ...prev[dayIdx], status: 'unavailable' }
+                                              }));
+                                            }}
+                                            className="w-full py-1 rounded-lg text-[9px] font-bold text-rose-700 hover:bg-rose-50 border border-rose-200 transition cursor-pointer"
+                                          >
+                                            ✕ Terug naar niet-beschikbaar
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    /* Button toggles for non-recurring staff */
+                                    <div className="grid grid-cols-1 gap-1 text-center font-sans mt-2">
+                                      <button
+                                        type="button"
+                                        disabled={isSelectedLocked}
+                                        onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
+                                          ...prev,
+                                          [dayIdx]: { ...prev[dayIdx], status: 'available' }
+                                        }))}
+                                        className={`py-1 rounded-lg text-[10px] font-black uppercase transition-all tracking-tight ${
+                                          isSelectedLocked ? 'cursor-not-allowed opacity-75 ' : 'cursor-pointer '
+                                        }${
+                                          currentVal.status === 'available'
+                                            ? 'bg-emerald-500 text-white font-black border border-emerald-500'
+                                            : 'bg-white text-emerald-800 hover:bg-emerald-50 border border-emerald-200'
+                                        }`}
+                                      >
+                                        ✓ Beschikbaar
+                                      </button>
+                                      
+                                      <button
+                                        type="button"
+                                        disabled={isSelectedLocked}
+                                        onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
+                                          ...prev,
+                                          [dayIdx]: { ...prev[dayIdx], status: 'unavailable' }
+                                        }))}
+                                        className={`py-1 rounded-lg text-[10px] font-black uppercase transition-all tracking-tight ${
+                                          isSelectedLocked ? 'cursor-not-allowed opacity-75 ' : 'cursor-pointer '
+                                        }${
+                                          currentVal.status === 'unavailable'
+                                            ? 'bg-rose-500 text-white font-black border border-rose-500'
+                                            : 'bg-white text-rose-800 hover:bg-rose-50 border border-rose-200'
+                                        }`}
+                                      >
+                                        ✕ Niet-beschikbaar
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                {isSelectedLocked && (
-                                  <span className="text-[8px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-slate-200">
-                                    <Lock size={8} /> Vast
-                                  </span>
-                                )}
-                                <span className={`w-2.5 h-2.5 rounded-full ${
-                                  currentVal.status === 'preferred' ? 'bg-amber-400' :
-                                  currentVal.status === 'available' ? 'bg-emerald-500' :
-                                  'bg-rose-500'
-                                }`} />
-                              </div>
-                            </div>
-                            
-                            {/* Button toggles */}
-                            <div className="grid grid-cols-1 gap-1 text-center font-sans mt-2">
-                              <button
-                                type="button"
-                                disabled={isSelectedLocked}
-                                onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
-                                  ...prev,
-                                  [dayIdx]: { ...prev[dayIdx], status: 'available' }
-                                }))}
-                                className={`py-1 rounded-lg text-[10px] font-black uppercase transition-all tracking-tight ${
-                                  isSelectedLocked ? 'cursor-not-allowed opacity-75 ' : 'cursor-pointer '
-                                }${
-                                  currentVal.status === 'available'
-                                    ? 'bg-emerald-500 text-white font-black border border-emerald-500'
-                                    : 'bg-white text-emerald-800 hover:bg-emerald-50 border border-emerald-200'
-                                }`}
-                              >
-                                ✓ Beschikbaar
-                              </button>
-                              
-                              <button
-                                type="button"
-                                disabled={isSelectedLocked}
-                                onClick={() => !isSelectedLocked && setTempAvailability(prev => ({
-                                  ...prev,
-                                  [dayIdx]: { ...prev[dayIdx], status: 'unavailable' }
-                                }))}
-                                className={`py-1 rounded-lg text-[10px] font-black uppercase transition-all tracking-tight ${
-                                  isSelectedLocked ? 'cursor-not-allowed opacity-75 ' : 'cursor-pointer '
-                                }${
-                                  currentVal.status === 'unavailable'
-                                    ? 'bg-rose-500 text-white font-black border border-rose-500'
-                                    : 'bg-white text-rose-800 hover:bg-rose-50 border border-rose-200'
-                                }`}
-                              >
-                                ✕ Niet-beschikbaar
-                              </button>
-                            </div>
-                          </div>
+                              );
+                            })()}
 
                           {/* Start- and end-time selection */}
                           {currentVal.status !== 'unavailable' && (
@@ -4332,8 +4445,6 @@ export default function StaffPortal({
             </div>
           )}
         </div>
-      )}
-      </>
       )}
 
       {/* MODAL: COLLEAGUE CONTACT DETAILS ("BIJ DOORKLIKKEN TELEFOONNUMMER OF LINK NAAR FACEBOOK") */}

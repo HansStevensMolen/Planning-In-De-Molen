@@ -592,18 +592,16 @@ export function getEffectiveEmployeeAvailability(
   weekNumber: number,
   availabilities: EmployeeAvailability[]
 ): EffectiveAvailabilityResult {
-  // 1. Explicit weekly submission
-  const explicit = availabilities.find(a => a.employeeId === employee.id && a.weekNumber === weekNumber);
-  if (explicit && explicit.days && explicit.days.length > 0) {
-    return {
-      availability: explicit,
-      source: 'weekly',
-      label: weekNumber === SPECIAL_DAYS_WEEK_NUMBER ? 'Speciale dagen specifiek ingediend' : `Week ${weekNumber} specifiek ingediend`
-    };
-  }
-
   // Voor Speciale dagen (feestdagen) geldt uitsluitend een expliciete opgave, geen automatische wekelijkse herhaling
   if (weekNumber === SPECIAL_DAYS_WEEK_NUMBER) {
+    const explicitSpecial = availabilities.find(a => a.employeeId === employee.id && a.weekNumber === weekNumber);
+    if (explicitSpecial && explicitSpecial.days && explicitSpecial.days.length > 0) {
+      return {
+        availability: explicitSpecial,
+        source: 'weekly',
+        label: 'Speciale dagen specifiek ingediend'
+      };
+    }
     return {
       availability: null,
       source: 'none',
@@ -611,37 +609,100 @@ export function getEffectiveEmployeeAvailability(
     };
   }
 
-  // 2. Active recurring availability (Flexi, Student, Extra)
   const rec = employee.recurringAvailability;
-  if (rec && rec.active && rec.days && rec.days.length > 0) {
-    if (isRecurringApplicableToWeek(rec.frequency, weekNumber)) {
-      const days: DayAvailability[] = rec.days.map(rd => ({
-        day: rd.day,
-        status: rd.status || 'available',
-        startTime: rd.startTime || 'Open',
-        endTime: rd.endTime || 'Sluit',
-        notes: rd.notes || ''
-      }));
+  const hasRecurring = Boolean(rec && rec.active && rec.days && rec.days.length > 0);
+  const explicit = availabilities.find(a => a.employeeId === employee.id && a.weekNumber === weekNumber);
 
-      const synthetic: EmployeeAvailability = {
-        id: `rec_${employee.id}_wk${weekNumber}`,
+  // 1. Personeel met actieve vaste beschikbaarheid (Flexi, Student, Extra, Vast)
+  // In ALLE weken staan ENKEL de dag(en) van hun vaste beschikbaarheid aangeduid als beschikbaar!
+  // Alle overige dagen zijn strikt 'unavailable'.
+  // Indien een medewerker zich voor een specifieke week heeft afgemeld op een vaste dag (explicit status === 'unavailable'),
+  // dan respecteren we deze afmelding.
+  if (hasRecurring) {
+    const isApplicable = isRecurringApplicableToWeek(rec!.frequency, weekNumber);
+
+    const days: DayAvailability[] = Array.from({ length: 7 }, (_, dayIdx) => {
+      if (!isApplicable) {
+        return {
+          day: dayIdx,
+          status: 'unavailable',
+          startTime: 'Open',
+          endTime: 'Sluit',
+          notes: 'Niet inzetbaar in deze week (vaste cyclus)'
+        };
+      }
+
+      const rd = rec!.days.find(x => x.day === dayIdx);
+      const isFixedDay = Boolean(rd && (rd.status === 'available' || rd.status === 'preferred'));
+      const explicitDay = explicit?.days?.find(x => x.day === dayIdx);
+
+      // Als dit een vaste beschikbare dag is:
+      if (isFixedDay) {
+        // Indien de medewerker zich expliciet heeft afgemeld voor deze dag in deze week:
+        if (explicitDay && explicitDay.status === 'unavailable') {
+          return {
+            day: dayIdx,
+            status: 'unavailable',
+            startTime: 'Open',
+            endTime: 'Sluit',
+            notes: explicitDay.notes || 'Afgemeld voor deze vaste dag'
+          };
+        }
+        // Anders beschikbaar volgens vaste beschikbaarheid (of eventueel aangepaste uren van medewerker)
+        return {
+          day: dayIdx,
+          status: (explicitDay?.status === 'preferred' || rd!.status === 'preferred') ? 'preferred' : 'available',
+          startTime: explicitDay?.startTime || rd!.startTime || 'Open',
+          endTime: explicitDay?.endTime || rd!.endTime || 'Sluit',
+          notes: explicitDay?.notes || rd!.notes || ''
+        };
+      }
+
+      // Indien GEEN vaste dag:
+      // In alle weken staan ENKEL de dag(en) van hun vaste beschikbaarheid als beschikbaar aangeduid.
+      // Alle overige dagen zijn ALTIJD niet-beschikbaar.
+      return {
+        day: dayIdx,
+        status: 'unavailable',
+        startTime: 'Open',
+        endTime: 'Sluit',
+        notes: explicitDay?.notes || ''
+      };
+    });
+
+    const freqLabel = rec!.frequency === 'every_week'
+      ? 'Wekelijks herhaald'
+      : rec!.frequency === 'even_weeks'
+        ? '2-wekelijks (Even week)'
+        : '2-wekelijks (Oneven week)';
+
+    const hasAnyAfmelding = days.some((d, idx) => {
+      const rd = rec!.days.find(x => x.day === idx);
+      const isFixed = Boolean(rd && (rd.status === 'available' || rd.status === 'preferred'));
+      return isFixed && d.status === 'unavailable';
+    });
+
+    return {
+      availability: {
+        id: explicit?.id || `rec_${employee.id}_wk${weekNumber}`,
         employeeId: employee.id,
         weekNumber: weekNumber,
         days
-      };
+      },
+      source: explicit ? 'weekly' : 'recurring',
+      label: hasAnyAfmelding
+        ? `Vaste beschikbaarheid (met afmelding)`
+        : `Vaste beschikbaarheid (${freqLabel})`
+    };
+  }
 
-      const freqLabel = rec.frequency === 'every_week'
-        ? 'Wekelijks herhaald'
-        : rec.frequency === 'even_weeks'
-          ? '2-wekelijks (Even week)'
-          : '2-wekelijks (Oneven week)';
-
-      return {
-        availability: synthetic,
-        source: 'recurring',
-        label: `Vaste beschikbaarheid (${freqLabel})`
-      };
-    }
+  // 2. Expliciete wekelijkse indiening voor personeel zonder vaste beschikbaarheid
+  if (explicit && explicit.days && explicit.days.length > 0) {
+    return {
+      availability: explicit,
+      source: 'weekly',
+      label: `Week ${weekNumber} specifiek ingediend`
+    };
   }
 
   return {

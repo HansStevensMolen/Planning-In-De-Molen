@@ -749,9 +749,10 @@ export default function ManagerDashboard({
       if (emp.recurringAvailability?.days && emp.recurringAvailability.days.length === 7) {
         setManagerAvailDays(emp.recurringAvailability.days);
       } else {
+        // Standaard 'unavailable' zodat enkel de vaste werkdagen worden aangeduid
         setManagerAvailDays(Array.from({ length: 7 }, (_, i) => ({
           day: i,
-          status: 'available' as const,
+          status: 'unavailable' as const,
           startTime: 'Open',
           endTime: 'Sluit',
           notes: ''
@@ -760,15 +761,14 @@ export default function ManagerDashboard({
       setManagerAvailNotes(emp.recurringAvailability?.notes || '');
       setManagerAvailFrequency(emp.recurringAvailability?.frequency || 'every_week');
     } else {
-      const existing = availabilities.find(a => a.employeeId === emp.id && a.weekNumber === weekNum);
-      if (existing && existing.days.length === 7) {
-        setManagerAvailDays(existing.days);
-      } else if (emp.recurringAvailability?.days && emp.recurringAvailability.days.length === 7) {
-        setManagerAvailDays(emp.recurringAvailability.days);
+      // Gebruik getEffectiveEmployeeAvailability zodat enkel vaste dagen op beschikbaar staan
+      const eff = getEffectiveEmployeeAvailability(emp, weekNum, availabilities);
+      if (eff.availability?.days && eff.availability.days.length === 7) {
+        setManagerAvailDays(eff.availability.days);
       } else {
         setManagerAvailDays(Array.from({ length: 7 }, (_, i) => ({
           day: i,
-          status: 'available' as const,
+          status: 'unavailable' as const,
           startTime: 'Open',
           endTime: 'Sluit',
           notes: ''
@@ -809,7 +809,67 @@ export default function ManagerDashboard({
         }
       };
       onUpdateEmployee(updatedEmp);
-      setSixWeeksSuccessMsg(`✅ Vaste wekelijkse beschikbaarheid voor ${target.name} succesvol opgeslagen! Deze keert elke week automatisch terug.`);
+
+      // Zorg dat in alle weken ENKEL de dag(en) van hun vaste beschikbaarheid aangeduid staan als beschikbaar:
+      if (onUpdateAvailability) {
+        activeWeeks.forEach(w => {
+          if (w.weekNumber === SPECIAL_DAYS_WEEK_NUMBER) return;
+          const isApp = isRecurringApplicableToWeek(managerAvailFrequency, w.weekNumber);
+          const existingForWk = availabilities.find(a => a.employeeId === target.id && a.weekNumber === w.weekNumber);
+
+          const weekDays: DayAvailability[] = Array.from({ length: 7 }, (_, dIdx) => {
+            if (!isApp) {
+              return {
+                day: dIdx,
+                status: 'unavailable',
+                startTime: 'Open',
+                endTime: 'Sluit',
+                notes: 'Niet inzetbaar in deze week (vaste cyclus)'
+              };
+            }
+            const rd = managerAvailDays.find(x => x.day === dIdx);
+            const isFixed = Boolean(rd && (rd.status === 'available' || rd.status === 'preferred'));
+            const existingDay = existingForWk?.days?.find(x => x.day === dIdx);
+
+            if (isFixed) {
+              if (existingDay && existingDay.status === 'unavailable') {
+                return {
+                  day: dIdx,
+                  status: 'unavailable',
+                  startTime: 'Open',
+                  endTime: 'Sluit',
+                  notes: existingDay.notes || 'Afgemeld voor deze vaste dag'
+                };
+              }
+              return {
+                day: dIdx,
+                status: rd!.status,
+                startTime: rd!.startTime || 'Open',
+                endTime: rd!.endTime || 'Sluit',
+                notes: rd!.notes || ''
+              };
+            }
+
+            return {
+              day: dIdx,
+              status: 'unavailable',
+              startTime: 'Open',
+              endTime: 'Sluit',
+              notes: ''
+            };
+          });
+
+          const newAvail: EmployeeAvailability = {
+            id: existingForWk?.id || `av_${Date.now()}_${target.id}_w${w.weekNumber}`,
+            employeeId: target.id,
+            weekNumber: w.weekNumber,
+            days: weekDays
+          };
+          onUpdateAvailability(newAvail, managerAvailNotes.trim() || undefined);
+        });
+      }
+
+      setSixWeeksSuccessMsg(`✅ Vaste wekelijkse beschikbaarheid voor ${target.name} succesvol opgeslagen! In alle weken staan enkel de vaste werkdagen op beschikbaar.`);
     } else {
       // Beschikbaarheid voor een specifieke week opslaan
       const existing = availabilities.find(a => a.employeeId === target.id && a.weekNumber === managerAvailTargetWeek);
@@ -6645,6 +6705,30 @@ export default function ManagerDashboard({
                   <span className="text-[10px] font-black uppercase text-slate-500">Snel-knoppen:</span>
                   <button
                     type="button"
+                    onClick={() => {
+                      setManagerAvailDays(prev => prev.map(d => {
+                        const isFriSat = d.day === 4 || d.day === 5;
+                        return {
+                          ...d,
+                          status: isFriSat ? 'available' : 'unavailable',
+                          startTime: isFriSat ? '18:00' : undefined,
+                          endTime: isFriSat ? 'Sluit' : undefined
+                        };
+                      }));
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    🍻 Enkel Vrijdag & Zaterdag
+                  </button>
+                  <button
+                    type="button"
+                    onClick={setWeekendAvailable}
+                    className="px-2.5 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-300 text-[10.5px] font-black uppercase transition cursor-pointer"
+                  >
+                    📅 Enkel Weekend (Vr-Zo)
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setAllDaysStatus('available', 'Open', 'Sluit')}
                     className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10.5px] font-black uppercase transition cursor-pointer"
                   >
@@ -6659,17 +6743,10 @@ export default function ManagerDashboard({
                   </button>
                   <button
                     type="button"
-                    onClick={setWeekendAvailable}
-                    className="px-2.5 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-300 text-[10.5px] font-black uppercase transition cursor-pointer"
-                  >
-                    📅 Enkel Weekend (Vr-Zo)
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setAllDaysStatus('unavailable')}
                     className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-[10.5px] font-black uppercase transition cursor-pointer"
                   >
-                    ✕ Alles Niet-Beschikbaar (Verlof)
+                    ✕ Alles Niet-Beschikbaar (Geen vaste dagen)
                   </button>
                 </div>
 

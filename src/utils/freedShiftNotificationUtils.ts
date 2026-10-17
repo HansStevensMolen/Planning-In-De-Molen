@@ -1,5 +1,5 @@
 import { Shift, Employee, EmployeeAvailability, Notice } from '../types';
-import { CURRENT_WEEK_NUMBER } from './weekUtils';
+import { CURRENT_WEEK_NUMBER, getEffectiveEmployeeAvailability } from './weekUtils';
 
 export const DAYS_OF_WEEK = [
   'Maandag',
@@ -56,27 +56,11 @@ export function findAvailableUnscheduledStaffForShift(
       return false; // Not "niet-ingepland"
     }
 
-    // 5. Check if employee submitted availability for this week and is available/preferred
-    const empAvail = allAvailabilities.find(a => 
-      a.employeeId === emp.id && 
-      a.weekNumber === shiftWeek
-    );
-
-    if (empAvail && empAvail.days && empAvail.days.length > 0) {
-      const dayAvail = empAvail.days.find(d => d.day === shiftDay);
+    // 5. Check effective employee availability for this week (respecting fixed availability & afmeldingen)
+    const eff = getEffectiveEmployeeAvailability(emp, shiftWeek, allAvailabilities);
+    if (eff.availability && eff.availability.days && eff.availability.days.length > 0) {
+      const dayAvail = eff.availability.days.find(d => d.day === shiftDay);
       if (dayAvail && (dayAvail.status === 'available' || dayAvail.status === 'preferred')) {
-        return true;
-      }
-      // If explicit submission marked unavailable for this day, respect that
-      if (dayAvail && dayAvail.status === 'unavailable') {
-        return false;
-      }
-    }
-
-    // 6. Fallback to recurring availability preferences if no specific week submission
-    if (emp.recurringAvailability?.active && emp.recurringAvailability.days) {
-      const recDay = emp.recurringAvailability.days.find(d => d.day === shiftDay);
-      if (recDay && (recDay.status === 'available' || recDay.status === 'preferred')) {
         return true;
       }
     }
